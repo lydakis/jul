@@ -81,3 +81,30 @@ func TestWorkspacesEndpoint(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
+
+func TestWorkspacePromoteNameRouting(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	_, err := store.RecordSync(httptest.NewRequest(http.MethodGet, "/", nil).Context(), storage.SyncPayload{
+		WorkspaceID: "alice/promote",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "abc999",
+		ChangeID:    "I2222222222222222222222222222222222222222",
+		Message:     "chore: test",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordSync failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/alice/promote", nil)
+	w := httptest.NewRecorder()
+	srv.handleWorkspaceRoutes(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}

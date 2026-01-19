@@ -137,8 +137,9 @@ func (s *Server) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.HasSuffix(path, "/promote") {
-		id := strings.TrimSuffix(path, "/promote")
+	parts := strings.Split(path, "/")
+	if len(parts) >= 3 && parts[len(parts)-1] == "promote" {
+		id := strings.Join(parts[:len(parts)-1], "/")
 		s.handlePromote(w, r, id)
 		return
 	}

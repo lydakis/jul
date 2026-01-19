@@ -51,10 +51,6 @@ func (s *Store) RecordSync(ctx context.Context, payload SyncPayload) (SyncResult
 		return SyncResult{}, fmt.Errorf("workspace_id and commit_sha are required")
 	}
 
-	if payload.ChangeID == "" {
-		payload.ChangeID = generateChangeID(payload.CommitSHA)
-	}
-
 	user, name := splitWorkspace(payload.WorkspaceID)
 	if user == "" || name == "" {
 		return SyncResult{}, fmt.Errorf("workspace_id must be in the form user/name")
@@ -88,6 +84,28 @@ func (s *Store) RecordSync(ctx context.Context, payload SyncPayload) (SyncResult
 		_ = tx.Rollback()
 	}()
 
+	var (
+		existingChangeID string
+		existingRevIndex int
+		commitExists     bool
+	)
+	if err := tx.QueryRowContext(ctx, `SELECT change_id, rev_index FROM revisions WHERE commit_sha = ?`, payload.CommitSHA).
+		Scan(&existingChangeID, &existingRevIndex); err == nil {
+		commitExists = true
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return SyncResult{}, err
+	}
+
+	if payload.ChangeID == "" {
+		if commitExists {
+			payload.ChangeID = existingChangeID
+		} else {
+			payload.ChangeID = generateChangeID(payload.CommitSHA)
+		}
+	} else if commitExists && payload.ChangeID != existingChangeID {
+		payload.ChangeID = existingChangeID
+	}
+
 	var changeExists bool
 	row := tx.QueryRowContext(ctx, `SELECT change_id FROM changes WHERE change_id = ?`, payload.ChangeID)
 	var existingID string
@@ -106,12 +124,13 @@ func (s *Store) RecordSync(ctx context.Context, payload SyncPayload) (SyncResult
 		}
 	}
 
-	var revIndex int
-	var existingRev int
-	err = tx.QueryRowContext(ctx, `SELECT rev_index FROM revisions WHERE commit_sha = ?`, payload.CommitSHA).Scan(&existingRev)
-	if err == nil {
-		revIndex = existingRev
-	} else if errors.Is(err, sql.ErrNoRows) {
+	var (
+		revIndex    int
+		newRevision bool
+	)
+	if commitExists {
+		revIndex = existingRevIndex
+	} else {
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(rev_index), 0) FROM revisions WHERE change_id = ?`, payload.ChangeID).Scan(&revIndex); err != nil {
 			return SyncResult{}, err
 		}
@@ -123,14 +142,37 @@ func (s *Store) RecordSync(ctx context.Context, payload SyncPayload) (SyncResult
 		if err != nil {
 			return SyncResult{}, err
 		}
-	} else {
+		newRevision = true
+	}
+
+	var (
+		currentTitle     string
+		currentAuthor    string
+		currentStatus    string
+		currentCreatedAt string
+		currentLatestRev int
+		currentLatestSHA string
+	)
+	if err := tx.QueryRowContext(ctx, `SELECT title, author, status, created_at, latest_rev_index, latest_commit_sha FROM changes WHERE change_id = ?`, payload.ChangeID).
+		Scan(&currentTitle, &currentAuthor, &currentStatus, &currentCreatedAt, &currentLatestRev, &currentLatestSHA); err != nil {
 		return SyncResult{}, err
 	}
 
-	_, err = tx.ExecContext(ctx, `UPDATE changes SET title = ?, author = ?, latest_rev_index = ?, latest_commit_sha = ? WHERE change_id = ?`,
-		title, author, revIndex, payload.CommitSHA, payload.ChangeID)
-	if err != nil {
-		return SyncResult{}, err
+	shouldUpdateLatest := revIndex >= currentLatestRev
+	if newRevision && !shouldUpdateLatest {
+		shouldUpdateLatest = true
+	}
+
+	if shouldUpdateLatest {
+		_, err = tx.ExecContext(ctx, `UPDATE changes SET title = ?, author = ?, latest_rev_index = ?, latest_commit_sha = ? WHERE change_id = ?`,
+			title, author, revIndex, payload.CommitSHA, payload.ChangeID)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		currentTitle = title
+		currentAuthor = author
+		currentLatestRev = revIndex
+		currentLatestSHA = payload.CommitSHA
 	}
 
 	updatedAt := time.Now().UTC().Format(timeFormat)
@@ -166,15 +208,15 @@ func (s *Store) RecordSync(ctx context.Context, payload SyncPayload) (SyncResult
 
 	change := Change{
 		ChangeID:        payload.ChangeID,
-		Title:           title,
-		Author:          author,
-		CreatedAt:       committedAt,
-		Status:          "draft",
-		LatestRevIndex:  revIndex,
-		LatestCommitSHA: payload.CommitSHA,
+		Title:           currentTitle,
+		Author:          currentAuthor,
+		CreatedAt:       parseTime(currentCreatedAt),
+		Status:          currentStatus,
+		LatestRevIndex:  currentLatestRev,
+		LatestCommitSHA: currentLatestSHA,
 		LatestRevision: Revision{
-			RevIndex:  revIndex,
-			CommitSHA: payload.CommitSHA,
+			RevIndex:  currentLatestRev,
+			CommitSHA: currentLatestSHA,
 		},
 	}
 
@@ -425,7 +467,7 @@ func parseTime(value string) time.Time {
 }
 
 func generateChangeID(seed string) string {
-	h := sha1.Sum([]byte(fmt.Sprintf("%s-%d", seed, time.Now().UnixNano())))
+	h := sha1.Sum([]byte(seed))
 	return "I" + hex.EncodeToString(h[:])
 }
 
