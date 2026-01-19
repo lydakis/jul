@@ -70,5 +70,38 @@ func runMigrations(db *sql.DB) error {
 			return err
 		}
 	}
+
+	if err := ensureColumn(db, "revisions", "repo", "TEXT"); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureColumn(db *sql.DB, table, column, columnType string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `);`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dfltValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + columnType + `;`)
+	return err
 }

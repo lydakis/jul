@@ -136,9 +136,9 @@ func (s *Store) RecordSync(ctx context.Context, payload SyncPayload) (SyncResult
 		}
 		revIndex++
 
-		_, err = tx.ExecContext(ctx, `INSERT INTO revisions (commit_sha, change_id, rev_index, author, message, created_at)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			payload.CommitSHA, payload.ChangeID, revIndex, author, commitMessage, committedAt.Format(timeFormat))
+		_, err = tx.ExecContext(ctx, `INSERT INTO revisions (commit_sha, change_id, rev_index, author, message, created_at, repo)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			payload.CommitSHA, payload.ChangeID, revIndex, author, commitMessage, committedAt.Format(timeFormat), payload.Repo)
 		if err != nil {
 			return SyncResult{}, err
 		}
@@ -556,8 +556,15 @@ func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]Query
 }
 
 func (s *Store) FindRepoForCommit(ctx context.Context, commitSHA string) (string, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT repo FROM workspaces WHERE last_commit_sha = ? ORDER BY updated_at DESC LIMIT 1`, commitSHA)
+	row := s.db.QueryRowContext(ctx, `SELECT repo FROM revisions WHERE commit_sha = ? AND repo != '' LIMIT 1`, commitSHA)
 	var repo string
+	if err := row.Scan(&repo); err == nil {
+		return repo, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+
+	row = s.db.QueryRowContext(ctx, `SELECT repo FROM workspaces WHERE last_commit_sha = ? ORDER BY updated_at DESC LIMIT 1`, commitSHA)
 	if err := row.Scan(&repo); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNotFound

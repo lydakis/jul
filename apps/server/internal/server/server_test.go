@@ -161,3 +161,78 @@ func TestWorkspaceReflogEndpoint(t *testing.T) {
 		t.Fatalf("expected current commit %s, got %s (%s)", second.CommitSHA, entries[0].CommitSHA, entries[0].Source)
 	}
 }
+
+func TestQueryRejectsUnsupportedFilters(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/query?coverage_min=80", nil)
+	w := httptest.NewRecorder()
+	srv.handleQuery(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestCITriggerInvalidRepo(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	payload := storage.SyncPayload{
+		WorkspaceID: "bob/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "abc123",
+		ChangeID:    "I7777777777777777777777777777777777777777",
+		Message:     "feat: add",
+		Author:      "bob",
+		CommittedAt: time.Now().UTC(),
+	}
+	if _, err := store.RecordSync(httptest.NewRequest(http.MethodGet, "/", nil).Context(), payload); err != nil {
+		t.Fatalf("RecordSync failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ci/trigger", bytes.NewReader([]byte(`{"commit_sha":"abc123","profile":"unit","repo":"../bad"}`)))
+	w := httptest.NewRecorder()
+	srv.handleCITrigger(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestCITriggerMissingRepo(t *testing.T) {
+	tempRepos := t.TempDir()
+	storePath := t.TempDir() + "/jul.db"
+	store, err := storage.Open(storePath)
+	if err != nil {
+		t.Fatalf("failed to open store: %v", err)
+	}
+	defer store.Close()
+
+	broker := events.NewBroker()
+	srv := New(Config{ReposDir: tempRepos}, store, broker)
+
+	payload := storage.SyncPayload{
+		WorkspaceID: "bob/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "abc999",
+		ChangeID:    "I8888888888888888888888888888888888888888",
+		Message:     "feat: add",
+		Author:      "bob",
+		CommittedAt: time.Now().UTC(),
+	}
+	if _, err := store.RecordSync(httptest.NewRequest(http.MethodGet, "/", nil).Context(), payload); err != nil {
+		t.Fatalf("RecordSync failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ci/trigger", bytes.NewReader([]byte(`{"commit_sha":"abc999","profile":"unit"}`)))
+	w := httptest.NewRecorder()
+	srv.handleCITrigger(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}

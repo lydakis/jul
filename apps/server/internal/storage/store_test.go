@@ -273,3 +273,41 @@ func TestQueryCommitsByStatus(t *testing.T) {
 		t.Fatalf("expected commit %s, got %s", first.CommitSHA, results[0].CommitSHA)
 	}
 }
+
+func TestFindRepoForHistoricalCommit(t *testing.T) {
+	store := newTestStore(t)
+	payload := SyncPayload{
+		WorkspaceID: "alice/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-a",
+		ChangeID:    "I6666666666666666666666666666666666666666",
+		Message:     "feat: first",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC(),
+	}
+	if _, err := store.RecordSync(context.Background(), payload); err != nil {
+		t.Fatalf("RecordSync failed: %v", err)
+	}
+
+	if _, err := store.RecordSync(context.Background(), SyncPayload{
+		WorkspaceID: "alice/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-b",
+		ChangeID:    payload.ChangeID,
+		Message:     "feat: second",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC().Add(1 * time.Minute),
+	}); err != nil {
+		t.Fatalf("RecordSync second failed: %v", err)
+	}
+
+	repo, err := store.FindRepoForCommit(context.Background(), payload.CommitSHA)
+	if err != nil {
+		t.Fatalf("FindRepoForCommit failed: %v", err)
+	}
+	if repo != "demo" {
+		t.Fatalf("expected repo demo, got %s", repo)
+	}
+}

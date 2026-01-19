@@ -46,6 +46,8 @@ type ReflogEntry struct {
 }
 
 var ErrNonFastForward = errors.New("non-fast-forward update")
+var ErrInvalidRepoName = errors.New("invalid repo name")
+var ErrRepoNotFound = errors.New("repo not found")
 
 func New(cfg Config, store *storage.Store, broker *events.Broker) *Server {
 	if cfg.Address == "" {
@@ -358,7 +360,7 @@ func (s *Server) repoPath(repo string) (string, error) {
 		return "", fmt.Errorf("workspace repo not set")
 	}
 	if strings.Contains(name, "..") || filepath.IsAbs(name) {
-		return "", fmt.Errorf("invalid repo name")
+		return "", ErrInvalidRepoName
 	}
 	if !strings.HasSuffix(name, ".git") {
 		name += ".git"
@@ -623,8 +625,12 @@ func (s *Server) handleCITrigger(w http.ResponseWriter, r *http.Request) {
 
 	repoPath, err := s.resolveRepoPath(r.Context(), body.Repo, body.CommitSHA)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "repo not found for commit")
+		if errors.Is(err, ErrInvalidRepoName) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, ErrRepoNotFound) || errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -690,6 +696,19 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	allowed := map[string]struct{}{
+		"tests":     {},
+		"change_id": {},
+		"author":    {},
+		"limit":     {},
+	}
+	for key := range r.URL.Query() {
+		if _, ok := allowed[key]; !ok {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported query parameter: %s", key))
+			return
+		}
+	}
+
 	tests := strings.TrimSpace(r.URL.Query().Get("tests"))
 	if tests != "" && tests != "pass" && tests != "fail" {
 		writeError(w, http.StatusBadRequest, "tests must be pass or fail")
@@ -723,6 +742,9 @@ func (s *Server) resolveRepoPath(ctx context.Context, repoName, commitSHA string
 	if name == "" {
 		repo, err := s.store.FindRepoForCommit(ctx, commitSHA)
 		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return "", ErrRepoNotFound
+			}
 			return "", err
 		}
 		name = repo
@@ -733,6 +755,9 @@ func (s *Server) resolveRepoPath(ctx context.Context, repoName, commitSHA string
 		return "", err
 	}
 	if _, err := os.Stat(repoPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", ErrRepoNotFound
+		}
 		return "", err
 	}
 	return repoPath, nil
