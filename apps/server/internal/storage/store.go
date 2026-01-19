@@ -175,6 +175,30 @@ func (s *Store) RecordSync(ctx context.Context, payload SyncPayload) (SyncResult
 		currentLatestSHA = payload.CommitSHA
 	}
 
+	var prevCommit string
+	var prevChange string
+	if err := tx.QueryRowContext(ctx, `SELECT last_commit_sha, last_change_id FROM workspaces WHERE workspace_id = ?`, payload.WorkspaceID).
+		Scan(&prevCommit, &prevChange); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return SyncResult{}, err
+	}
+
+	if prevCommit != "" && prevCommit != payload.CommitSHA {
+		if prevChange == "" {
+			if err := tx.QueryRowContext(ctx, `SELECT change_id FROM revisions WHERE commit_sha = ?`, prevCommit).Scan(&prevChange); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return SyncResult{}, err
+			}
+		}
+		if prevChange == "" {
+			prevChange = payload.ChangeID
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO keep_refs (keep_id, workspace_id, commit_sha, change_id, created_at)
+			VALUES (?, ?, ?, ?, ?)`,
+			ulid.Make().String(), payload.WorkspaceID, prevCommit, prevChange, time.Now().UTC().Format(timeFormat))
+		if err != nil {
+			return SyncResult{}, err
+		}
+	}
+
 	updatedAt := time.Now().UTC().Format(timeFormat)
 	_, err = tx.ExecContext(ctx, `INSERT INTO workspaces (workspace_id, user, name, repo, branch, last_commit_sha, last_change_id, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -454,6 +478,33 @@ func (s *Store) ListEventsSince(ctx context.Context, since time.Time, limit int)
 		}
 		evt.CreatedAt = parseTime(createdAt)
 		out = append(out, evt)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListKeepRefs(ctx context.Context, workspaceID string, limit int) ([]KeepRef, error) {
+	query := `SELECT keep_id, workspace_id, commit_sha, change_id, created_at FROM keep_refs WHERE workspace_id = ? ORDER BY created_at DESC`
+	args := []any{workspaceID}
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []KeepRef
+	for rows.Next() {
+		var ref KeepRef
+		var createdAt string
+		if err := rows.Scan(&ref.KeepID, &ref.WorkspaceID, &ref.CommitSHA, &ref.ChangeID, &createdAt); err != nil {
+			return nil, err
+		}
+		ref.CreatedAt = parseTime(createdAt)
+		out = append(out, ref)
 	}
 	return out, rows.Err()
 }

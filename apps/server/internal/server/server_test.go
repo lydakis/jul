@@ -108,3 +108,56 @@ func TestWorkspacePromoteNameRouting(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
+
+func TestWorkspaceReflogEndpoint(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	workspaceID := "alice/laptop"
+	first := storage.SyncPayload{
+		WorkspaceID: workspaceID,
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-a",
+		ChangeID:    "I3333333333333333333333333333333333333333",
+		Message:     "feat: first",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC(),
+	}
+	second := storage.SyncPayload{
+		WorkspaceID: workspaceID,
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-b",
+		ChangeID:    "I3333333333333333333333333333333333333333",
+		Message:     "feat: second",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC().Add(1 * time.Minute),
+	}
+
+	if _, err := store.RecordSync(httptest.NewRequest(http.MethodGet, "/", nil).Context(), first); err != nil {
+		t.Fatalf("RecordSync first failed: %v", err)
+	}
+	if _, err := store.RecordSync(httptest.NewRequest(http.MethodGet, "/", nil).Context(), second); err != nil {
+		t.Fatalf("RecordSync second failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/alice/laptop/reflog", nil)
+	w := httptest.NewRecorder()
+	srv.handleWorkspaceRoutes(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var entries []ReflogEntry
+	if err := json.NewDecoder(w.Body).Decode(&entries); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(entries) < 2 {
+		t.Fatalf("expected at least 2 entries, got %d", len(entries))
+	}
+	if entries[0].CommitSHA != second.CommitSHA || entries[0].Source != "current" {
+		t.Fatalf("expected current commit %s, got %s (%s)", second.CommitSHA, entries[0].CommitSHA, entries[0].Source)
+	}
+}

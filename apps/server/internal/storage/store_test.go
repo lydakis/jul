@@ -162,3 +162,47 @@ func TestRecordSyncDoesNotDowngradeLatest(t *testing.T) {
 		t.Fatalf("expected latest rev 2, got %d", resync.Change.LatestRevIndex)
 	}
 }
+
+func TestKeepRefsInsertedOnWorkspaceMove(t *testing.T) {
+	store := newTestStore(t)
+	workspaceID := "alice/laptop"
+
+	first := SyncPayload{
+		WorkspaceID: workspaceID,
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-a",
+		ChangeID:    "I4444444444444444444444444444444444444444",
+		Message:     "feat: first",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC(),
+	}
+	second := SyncPayload{
+		WorkspaceID: workspaceID,
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-b",
+		ChangeID:    "I4444444444444444444444444444444444444444",
+		Message:     "feat: second",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC().Add(1 * time.Minute),
+	}
+
+	if _, err := store.RecordSync(context.Background(), first); err != nil {
+		t.Fatalf("RecordSync first failed: %v", err)
+	}
+	if _, err := store.RecordSync(context.Background(), second); err != nil {
+		t.Fatalf("RecordSync second failed: %v", err)
+	}
+
+	refs, err := store.ListKeepRefs(context.Background(), workspaceID, 10)
+	if err != nil {
+		t.Fatalf("ListKeepRefs failed: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 keep ref, got %d", len(refs))
+	}
+	if refs[0].CommitSHA != first.CommitSHA {
+		t.Fatalf("expected keep ref for %s, got %s", first.CommitSHA, refs[0].CommitSHA)
+	}
+}

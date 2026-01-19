@@ -52,6 +52,10 @@ func CurrentCommit() (CommitInfo, error) {
 	}, nil
 }
 
+func RepoTopLevel() (string, error) {
+	return git("rev-parse", "--show-toplevel")
+}
+
 func ExtractChangeID(message string) string {
 	lines := strings.Split(message, "\n")
 	for _, line := range lines {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,14 @@ type Capabilities struct {
 	Version       string   `json:"version"`
 	Features      []string `json:"features"`
 	RefNamespaces []string `json:"ref_namespaces"`
+}
+
+type ReflogEntry struct {
+	WorkspaceID string    `json:"workspace_id"`
+	CommitSHA   string    `json:"commit_sha"`
+	ChangeID    string    `json:"change_id"`
+	CreatedAt   time.Time `json:"created_at"`
+	Source      string    `json:"source"`
 }
 
 func New(cfg Config, store *storage.Store, broker *events.Broker) *Server {
@@ -143,6 +152,11 @@ func (s *Server) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handlePromote(w, r, id)
 		return
 	}
+	if len(parts) >= 3 && parts[len(parts)-1] == "reflog" {
+		id := strings.Join(parts[:len(parts)-1], "/")
+		s.handleReflog(w, r, id)
+		return
+	}
 
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -187,6 +201,58 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request, workspace
 	s.emitEvent(r.Context(), "promote.requested", data)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+}
+
+func (s *Server) handleReflog(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	workspace, err := s.store.GetWorkspace(r.Context(), workspaceID)
+	if err != nil {
+		if err == storage.ErrNotFound {
+			writeError(w, http.StatusNotFound, "workspace not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+
+	keepRefs, err := s.store.ListKeepRefs(r.Context(), workspaceID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	entries := []ReflogEntry{
+		{
+			WorkspaceID: workspace.WorkspaceID,
+			CommitSHA:   workspace.LastCommitSHA,
+			ChangeID:    workspace.LastChangeID,
+			CreatedAt:   workspace.UpdatedAt,
+			Source:      "current",
+		},
+	}
+
+	for _, ref := range keepRefs {
+		entries = append(entries, ReflogEntry{
+			WorkspaceID: ref.WorkspaceID,
+			CommitSHA:   ref.CommitSHA,
+			ChangeID:    ref.ChangeID,
+			CreatedAt:   ref.CreatedAt,
+			Source:      "keep",
+		})
+	}
+
+	writeJSON(w, http.StatusOK, entries)
 }
 
 func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {

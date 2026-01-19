@@ -1,5 +1,8 @@
 # Jul Server
 
+## Requirements
+- Go 1.24+
+
 ## Run
 
 ```bash
@@ -16,6 +19,7 @@ go run ./cmd/jul-server --addr :8000 --db ./data/jul.db
 - `GET /api/v1/workspaces` — list workspaces
 - `GET /api/v1/workspaces/{id}` — workspace details
 - `POST /api/v1/workspaces/{id}/promote` — promote request (stub)
+- `GET /api/v1/workspaces/{id}/reflog` — workspace history (keep refs)
 - `GET /api/v1/changes` — list changes
 - `GET /api/v1/changes/{id}` — change details
 - `GET /api/v1/changes/{id}/revisions` — list revisions

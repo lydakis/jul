@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/hooks"
 	"github.com/lydakis/jul/cli/internal/output"
 )
 
@@ -16,8 +18,10 @@ func Commands(version string) []Command {
 	return []Command{
 		newSyncCommand(),
 		newStatusCommand(),
+		newReflogCommand(),
 		newPromoteCommand(),
 		newChangesCommand(),
+		newHooksCommand(),
 		newVersionCommand(version),
 	}
 }
@@ -106,6 +110,42 @@ func newStatusCommand() Command {
 	}
 }
 
+func newReflogCommand() Command {
+	return Command{
+		Name:    "reflog",
+		Summary: "Show recent workspace history",
+		Run: func(args []string) int {
+			fs := flag.NewFlagSet("reflog", flag.ContinueOnError)
+			fs.SetOutput(os.Stdout)
+			limit := fs.Int("limit", 20, "Max entries to show")
+			_ = fs.Parse(args)
+
+			wsID := config.WorkspaceID()
+			cli := client.New(config.BaseURL())
+			entries, err := cli.Reflog(wsID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to fetch reflog: %v\n", err)
+				return 1
+			}
+
+			if len(entries) == 0 {
+				fmt.Fprintln(os.Stdout, "No reflog entries.")
+				return 0
+			}
+
+			shown := 0
+			for _, entry := range entries {
+				fmt.Fprintf(os.Stdout, "%s %s (%s)\n", entry.CommitSHA, entry.ChangeID, entry.Source)
+				shown++
+				if *limit > 0 && shown >= *limit {
+					break
+				}
+			}
+			return 0
+		},
+	}
+}
+
 func newPromoteCommand() Command {
 	return Command{
 		Name:    "promote",
@@ -167,6 +207,67 @@ func newChangesCommand() Command {
 			return 0
 		},
 	}
+}
+
+func newHooksCommand() Command {
+	return Command{
+		Name:    "hooks",
+		Summary: "Manage git hooks",
+		Run: func(args []string) int {
+			if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
+				printHooksUsage()
+				return 0
+			}
+
+			sub := strings.ToLower(args[0])
+			repoRoot, err := gitutil.RepoTopLevel()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to locate git repo: %v\n", err)
+				return 1
+			}
+
+			switch sub {
+			case "install":
+				cliCmd := os.Getenv("JUL_HOOK_CMD")
+				if cliCmd == "" {
+					cliCmd = "jul"
+				}
+				path, err := hooks.InstallPostCommit(repoRoot, cliCmd)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+					return 1
+				}
+				fmt.Fprintf(os.Stdout, "installed post-commit hook: %s\n", path)
+				return 0
+			case "uninstall":
+				if err := hooks.UninstallPostCommit(repoRoot); err != nil {
+					fmt.Fprintf(os.Stderr, "uninstall failed: %v\n", err)
+					return 1
+				}
+				fmt.Fprintln(os.Stdout, "removed post-commit hook")
+				return 0
+			case "status":
+				installed, path, err := hooks.StatusPostCommit(repoRoot)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "status failed: %v\n", err)
+					return 1
+				}
+				if installed {
+					fmt.Fprintf(os.Stdout, "post-commit hook installed: %s\n", path)
+					return 0
+				}
+				fmt.Fprintf(os.Stdout, "post-commit hook not installed (%s)\n", path)
+				return 1
+			default:
+				printHooksUsage()
+				return 1
+			}
+		},
+	}
+}
+
+func printHooksUsage() {
+	fmt.Fprintln(os.Stdout, "Usage: jul hooks <install|uninstall|status>")
 }
 
 func newVersionCommand(version string) Command {

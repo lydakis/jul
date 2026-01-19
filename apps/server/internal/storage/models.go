@@ -46,6 +46,14 @@ type Attestation struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+type KeepRef struct {
+	KeepID      string    `json:"keep_id"`
+	WorkspaceID string    `json:"workspace_id"`
+	CommitSHA   string    `json:"commit_sha"`
+	ChangeID    string    `json:"change_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type Event struct {
 	EventID   string    `json:"event_id"`
 	Type      string    `json:"type"`

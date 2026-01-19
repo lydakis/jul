@@ -72,6 +72,14 @@ type Attestation struct {
 	SignalsJSON   string    `json:"signals_json"`
 }
 
+type ReflogEntry struct {
+	WorkspaceID string    `json:"workspace_id"`
+	CommitSHA   string    `json:"commit_sha"`
+	ChangeID    string    `json:"change_id"`
+	CreatedAt   time.Time `json:"created_at"`
+	Source      string    `json:"source"`
+}
+
 type SyncPayload struct {
 	WorkspaceID string    `json:"workspace_id"`
 	Repo        string    `json:"repo"`
@@ -133,6 +141,14 @@ func (c *Client) Promote(workspaceID, targetBranch, commitSHA string) error {
 		"commit_sha":    commitSHA,
 	}
 	return c.doJSON(http.MethodPost, "/api/v1/workspaces/"+workspaceID+"/promote", payload, nil)
+}
+
+func (c *Client) Reflog(workspaceID string) ([]ReflogEntry, error) {
+	var entries []ReflogEntry
+	if err := c.doJSON(http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/reflog", nil, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 func (c *Client) doJSON(method, path string, body any, out any) error {

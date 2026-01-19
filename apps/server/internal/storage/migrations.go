@@ -53,6 +53,15 @@ func runMigrations(db *sql.DB) error {
 			data_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS keep_refs (
+			keep_id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			commit_sha TEXT NOT NULL,
+			change_id TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_keep_refs_workspace ON keep_refs(workspace_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_keep_refs_created ON keep_refs(created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);`,
 	}
 

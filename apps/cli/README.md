@@ -1,7 +1,7 @@
 # Jul CLI
 
 ## Requirements
-- Go 1.22+
+- Go 1.24+
 - Git installed (used to read repository state)
 
 ## Usage
@@ -16,9 +16,18 @@ JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul status
 
 # Promote
 JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul promote --to main
+
+# Install auto-sync hook
+go run ./cmd/jul hooks install
+
+# Reflog (workspace history)
+go run ./cmd/jul reflog
 ```
 
 ## Environment
 
 - `JUL_BASE_URL`: Sidecar API base URL (default: `http://localhost:8000`)
 - `JUL_WORKSPACE`: Override workspace id (default: `<user>/<hostname>`)
+- `JUL_HOOK_CMD`: Command used by git hook (default: `jul`)
+- `JUL_NO_SYNC`: Set to disable auto-sync in the hook
+- `JUL_HOOK_VERBOSE`: Set to show hook warnings
