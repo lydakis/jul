@@ -97,5 +97,9 @@ func hooksPath(repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	path := strings.TrimSpace(string(output))
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	return filepath.Join(repo, path), nil
 }

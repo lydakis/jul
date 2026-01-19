@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -63,7 +64,14 @@ func GitPath(repoRoot, path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("git path required")
 	}
-	return gitWithDir(repoRoot, "rev-parse", "--git-path", path)
+	resolved, err := gitWithDir(repoRoot, "rev-parse", "--git-path", path)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(resolved) {
+		return resolved, nil
+	}
+	return filepath.Join(repoRoot, resolved), nil
 }
 
 func ExtractChangeID(message string) string {

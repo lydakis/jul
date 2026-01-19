@@ -24,4 +24,8 @@ docs/                  # Design docs (specs, notes)
 
 - Tracker: `docs/tracker.md`
 
+## Testing
+
+- Smoke tests: `docs/smoke-tests.md`
+
 Note: Module paths in `go.mod` may need to be updated once the repo remote is set.

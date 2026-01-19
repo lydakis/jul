@@ -63,6 +63,10 @@ func (s *Server) Start() error {
 	return http.ListenAndServe(s.cfg.Address, s.mux)
 }
 
+func (s *Server) Handler() http.Handler {
+	return s.mux
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/api/v1/capabilities", s.handleCapabilities)
