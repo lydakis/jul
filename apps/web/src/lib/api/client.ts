@@ -16,6 +16,20 @@ import type {
   QueryParams,
   ApiError,
 } from "./types";
+import {
+  mapArray,
+  mapAttestation,
+  mapChange,
+  mapCommit,
+  mapFileHistoryEntry,
+  mapJobResponse,
+  mapJulEvent,
+  mapPromoteResponse,
+  mapRepo,
+  mapSuggestion,
+  mapWorkspace,
+  normalizePaginated,
+} from "./mappers";
 
 // Configuration
 const DEFAULT_BASE_URL = process.env.NEXT_PUBLIC_JUL_API_URL || "http://localhost:8000";
@@ -24,6 +38,12 @@ export interface JulClientConfig {
   baseUrl?: string;
   token?: string;
 }
+
+type ResponseType = "auto" | "json" | "text";
+
+type JulRequestOptions = RequestInit & {
+  responseType?: ResponseType;
+};
 
 export class JulApiError extends Error {
   constructor(
@@ -50,12 +70,13 @@ export class JulClient {
 
   private async request<T>(
     path: string,
-    options: RequestInit = {}
+    options: JulRequestOptions = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    const { responseType = "auto", ...fetchOptions } = options;
     const headers: HeadersInit = {
       "Content-Type": "application/json",
-      ...options.headers,
+      ...fetchOptions.headers,
     };
 
     if (this.token) {
@@ -63,7 +84,7 @@ export class JulClient {
     }
 
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       headers,
     });
 
@@ -77,19 +98,36 @@ export class JulClient {
 
     // Handle empty responses
     const text = await response.text();
-    if (!text) return {} as T;
+    if (!text) {
+      return (responseType === "text" ? "" : {}) as T;
+    }
 
-    return JSON.parse(text);
+    if (responseType === "text") {
+      return text as T;
+    }
+
+    if (responseType === "json") {
+      return JSON.parse(text) as T;
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return JSON.parse(text) as T;
+    }
+
+    return text as T;
   }
 
   // === Repositories ===
 
   async listRepos(): Promise<Repo[]> {
-    return this.request<Repo[]>("/api/v1/repos");
+    const data = await this.request<unknown>("/api/v1/repos");
+    return mapArray(data, mapRepo);
   }
 
   async getRepo(name: string): Promise<Repo> {
-    return this.request<Repo>(`/api/v1/repos/${name}`);
+    const data = await this.request<unknown>(`/api/v1/repos/${name}`);
+    return mapRepo(data);
   }
 
   async createRepo(data: {
@@ -97,10 +135,11 @@ export class JulClient {
     description?: string;
     visibility?: "public" | "private";
   }): Promise<Repo> {
-    return this.request<Repo>("/api/v1/repos", {
+    const response = await this.request<unknown>("/api/v1/repos", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return mapRepo(response);
   }
 
   async deleteRepo(name: string): Promise<void> {
@@ -112,13 +151,15 @@ export class JulClient {
   // === Workspaces ===
 
   async listWorkspaces(repoName: string): Promise<Workspace[]> {
-    return this.request<Workspace[]>(`/${repoName}.jul/api/v1/workspaces`);
+    const data = await this.request<unknown>(`/${repoName}.jul/api/v1/workspaces`);
+    return mapArray(data, mapWorkspace);
   }
 
   async getWorkspace(repoName: string, workspaceId: string): Promise<Workspace> {
-    return this.request<Workspace>(
+    const data = await this.request<unknown>(
       `/${repoName}.jul/api/v1/workspaces/${workspaceId}`
     );
+    return mapWorkspace(data);
   }
 
   async promote(
@@ -126,7 +167,7 @@ export class JulClient {
     workspaceId: string,
     data: { targetBranch: string; commitSha?: string }
   ): Promise<PromoteResponse> {
-    return this.request<PromoteResponse>(
+    const response = await this.request<unknown>(
       `/${repoName}.jul/api/v1/workspaces/${workspaceId}/promote`,
       {
         method: "POST",
@@ -136,6 +177,7 @@ export class JulClient {
         }),
       }
     );
+    return mapPromoteResponse(response);
   }
 
   // === Changes ===
@@ -152,11 +194,15 @@ export class JulClient {
 
     const queryString = params.toString();
     const path = `/${repoName}.jul/api/v1/changes${queryString ? `?${queryString}` : ""}`;
-    return this.request<PaginatedResponse<Change>>(path);
+    const data = await this.request<unknown>(path);
+    return normalizePaginated(data, mapChange);
   }
 
   async getChange(repoName: string, changeId: string): Promise<Change> {
-    return this.request<Change>(`/${repoName}.jul/api/v1/changes/${changeId}`);
+    const data = await this.request<unknown>(
+      `/${repoName}.jul/api/v1/changes/${changeId}`
+    );
+    return mapChange(data);
   }
 
   async getInterdiff(
@@ -166,20 +212,25 @@ export class JulClient {
     toRev: number
   ): Promise<string> {
     return this.request<string>(
-      `/${repoName}.jul/api/v1/changes/${changeId}/interdiff?from_rev=${fromRev}&to_rev=${toRev}`
+      `/${repoName}.jul/api/v1/changes/${changeId}/interdiff?from_rev=${fromRev}&to_rev=${toRev}`,
+      {
+        responseType: "text",
+      }
     );
   }
 
   // === Commits & Attestations ===
 
   async getCommit(repoName: string, sha: string): Promise<Commit> {
-    return this.request<Commit>(`/${repoName}.jul/api/v1/commits/${sha}`);
+    const data = await this.request<unknown>(`/${repoName}.jul/api/v1/commits/${sha}`);
+    return mapCommit(data);
   }
 
   async getAttestation(repoName: string, sha: string): Promise<Attestation> {
-    return this.request<Attestation>(
+    const data = await this.request<unknown>(
       `/${repoName}.jul/api/v1/commits/${sha}/attestation`
     );
+    return mapAttestation(data);
   }
 
   async listAttestations(
@@ -195,20 +246,25 @@ export class JulClient {
 
     const queryString = params.toString();
     const path = `/${repoName}.jul/api/v1/attestations${queryString ? `?${queryString}` : ""}`;
-    return this.request<PaginatedResponse<Attestation>>(path);
+    const data = await this.request<unknown>(path);
+    return normalizePaginated(data, mapAttestation);
   }
 
   async triggerCI(
     repoName: string,
     data: { commitSha: string; profile?: "unit" | "full" | "lint" }
   ): Promise<{ jobId: string }> {
-    return this.request<{ jobId: string }>(`/${repoName}.jul/api/v1/ci/trigger`, {
-      method: "POST",
-      body: JSON.stringify({
-        commit_sha: data.commitSha,
-        profile: data.profile,
-      }),
-    });
+    const response = await this.request<unknown>(
+      `/${repoName}.jul/api/v1/ci/trigger`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          commit_sha: data.commitSha,
+          profile: data.profile,
+        }),
+      }
+    );
+    return mapJobResponse(response);
   }
 
   // === Suggestions ===
@@ -223,26 +279,32 @@ export class JulClient {
 
     const queryString = params.toString();
     const path = `/${repoName}.jul/api/v1/suggestions${queryString ? `?${queryString}` : ""}`;
-    return this.request<Suggestion[]>(path);
+    const data = await this.request<unknown>(path);
+    return mapArray(data, mapSuggestion);
   }
 
   async getSuggestion(repoName: string, suggestionId: string): Promise<Suggestion> {
-    return this.request<Suggestion>(
+    const data = await this.request<unknown>(
       `/${repoName}.jul/api/v1/suggestions/${suggestionId}`
     );
+    return mapSuggestion(data);
   }
 
   async requestSuggestion(
     repoName: string,
     data: { changeId: string; reason: string }
   ): Promise<Suggestion> {
-    return this.request<Suggestion>(`/${repoName}.jul/api/v1/suggestions`, {
-      method: "POST",
-      body: JSON.stringify({
-        change_id: data.changeId,
-        reason: data.reason,
-      }),
-    });
+    const response = await this.request<unknown>(
+      `/${repoName}.jul/api/v1/suggestions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          change_id: data.changeId,
+          reason: data.reason,
+        }),
+      }
+    );
+    return mapSuggestion(response);
   }
 
   async acceptSuggestion(repoName: string, suggestionId: string): Promise<void> {
@@ -288,9 +350,10 @@ export class JulClient {
     if (options?.limit) params.set("limit", String(options.limit));
 
     const queryString = params.toString();
-    return this.request<FileHistoryEntry[]>(
+    const data = await this.request<unknown>(
       `/${repoName}.jul/api/v1/files/${encodeURIComponent(path)}/history${queryString ? `?${queryString}` : ""}`
     );
+    return mapArray(data, mapFileHistoryEntry);
   }
 
   // === Query ===
@@ -308,9 +371,10 @@ export class JulClient {
     if (params.limit) searchParams.set("limit", String(params.limit));
 
     const queryString = searchParams.toString();
-    return this.request<Commit[]>(
+    const data = await this.request<unknown>(
       `/${repoName}.jul/api/v1/query${queryString ? `?${queryString}` : ""}`
     );
+    return mapArray(data, mapCommit);
   }
 
   // === Events (SSE) ===
@@ -330,7 +394,7 @@ export class JulClient {
 
     eventSource.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data) as JulEvent;
+        const data = mapJulEvent(JSON.parse(event.data) as JulEvent);
         onEvent(data);
       } catch (e) {
         console.error("Failed to parse event:", e);
