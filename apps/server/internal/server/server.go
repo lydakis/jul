@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -42,6 +43,8 @@ type ReflogEntry struct {
 	CreatedAt   time.Time `json:"created_at"`
 	Source      string    `json:"source"`
 }
+
+var ErrNonFastForward = errors.New("non-fast-forward update")
 
 func New(cfg Config, store *storage.Store, broker *events.Broker) *Server {
 	if cfg.Address == "" {
@@ -253,7 +256,14 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request, workspace
 		return
 	}
 
-	if err := updateRef(repoPath, body.TargetBranch, commitSHA); err != nil {
+	if err := updateRef(repoPath, body.TargetBranch, commitSHA, body.Force); err != nil {
+		if errors.Is(err, ErrNonFastForward) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":    "promotion blocked",
+				"blockers": []string{"branch requires fast-forward"},
+			})
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -353,7 +363,7 @@ func (s *Server) repoPath(repo string) (string, error) {
 	return filepath.Join(s.cfg.ReposDir, name), nil
 }
 
-func updateRef(repoPath, branch, commitSHA string) error {
+func updateRef(repoPath, branch, commitSHA string, force bool) error {
 	if strings.TrimSpace(branch) == "" {
 		return fmt.Errorf("branch required")
 	}
@@ -361,12 +371,61 @@ func updateRef(repoPath, branch, commitSHA string) error {
 		return fmt.Errorf("commit sha required")
 	}
 	ref := fmt.Sprintf("refs/heads/%s", branch)
-	cmd := exec.Command("git", "--git-dir", repoPath, "update-ref", ref, commitSHA)
+
+	current, exists, err := readRef(repoPath, ref)
+	if err != nil {
+		return err
+	}
+
+	if exists && !force {
+		ok, err := isAncestor(repoPath, current, commitSHA)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrNonFastForward
+		}
+	}
+
+	var cmd *exec.Cmd
+	if exists && !force {
+		cmd = exec.Command("git", "--git-dir", repoPath, "update-ref", ref, commitSHA, current)
+	} else {
+		cmd = exec.Command("git", "--git-dir", repoPath, "update-ref", ref, commitSHA)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git update-ref failed: %s", strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func readRef(repoPath, ref string) (string, bool, error) {
+	cmd := exec.Command("git", "--git-dir", repoPath, "rev-parse", "--verify", "--quiet", ref)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("git rev-parse failed: %s", strings.TrimSpace(string(output)))
+	}
+	value := strings.TrimSpace(string(output))
+	if value == "" {
+		return "", false, nil
+	}
+	return value, true, nil
+}
+
+func isAncestor(repoPath, ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "--git-dir", repoPath, "merge-base", "--is-ancestor", ancestor, descendant)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("git merge-base failed: %s", strings.TrimSpace(string(output)))
+	}
+	return true, nil
 }
 
 func (s *Server) handleChangeRoutes(w http.ResponseWriter, r *http.Request) {

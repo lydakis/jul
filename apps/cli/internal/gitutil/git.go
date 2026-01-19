@@ -28,7 +28,10 @@ func CurrentCommit() (CommitInfo, error) {
 	branch, _ := git("rev-parse", "--abbrev-ref", "HEAD")
 	message, _ := git("log", "-1", "--format=%B")
 	author, _ := git("log", "-1", "--format=%an")
-	committedISO, _ := git("log", "-1", "--format=%cI")
+	committedISO, err := git("log", "-1", "--format=%cI")
+	if err != nil {
+		return CommitInfo{}, err
+	}
 	top, _ := git("rev-parse", "--show-toplevel")
 
 	committed := time.Now().UTC()
