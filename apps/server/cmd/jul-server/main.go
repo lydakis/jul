@@ -16,6 +16,7 @@ func main() {
 	addr := flag.String("addr", ":8000", "HTTP listen address")
 	dbPath := flag.String("db", "var/jul/data/jul.db", "SQLite database path")
 	baseURL := flag.String("base-url", "", "Public base URL (optional)")
+	reposDir := flag.String("repos", "./repos", "Directory containing bare git repositories")
 	flag.Parse()
 
 	fmt.Printf("jul-server %s listening on %s\n", version, *addr)
@@ -31,7 +32,7 @@ func main() {
 	}()
 
 	broker := events.NewBroker()
-	srv := server.New(server.Config{Address: *addr, BaseURL: *baseURL}, store, broker)
+	srv := server.New(server.Config{Address: *addr, BaseURL: *baseURL, ReposDir: *reposDir}, store, broker)
 	if err := srv.Start(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

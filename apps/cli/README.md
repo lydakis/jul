@@ -22,6 +22,10 @@ go run ./cmd/jul hooks install
 
 # Reflog (workspace history)
 go run ./cmd/jul reflog
+
+# JSON output
+go run ./cmd/jul sync --json
+go run ./cmd/jul changes --json
 ```
 
 ## Environment

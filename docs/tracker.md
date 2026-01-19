@@ -10,9 +10,9 @@
 - [x] Add git hooks for auto-sync (post-commit)
 - [x] Add keep-refs handling on server side (workspace reflog)
 - [x] Add smoke tests (server + CLI + git repo)
-- [ ] Add promotion policy checks + actual ref updates
+- [x] Add promotion policy checks + actual ref updates
 - [ ] Add attestation ingestion from CI runner
-- [ ] Add JSON output modes to CLI commands (`changes`, `sync`)
+- [x] Add JSON output modes to CLI commands (`changes`, `sync`)
 
 ## Later
 - [ ] Suggestions API + refs

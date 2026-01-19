@@ -8,6 +8,9 @@ These integration tests spin up a real Jul server, build the CLI, create a git r
 cd apps/server
 
 go test ./integration -run Smoke
+
+# or run the full server suite including integration
+go test ./...
 ```
 
 ## Notes

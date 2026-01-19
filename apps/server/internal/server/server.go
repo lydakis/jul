@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,8 +17,9 @@ import (
 )
 
 type Config struct {
-	Address string
-	BaseURL string
+	Address  string
+	BaseURL  string
+	ReposDir string
 }
 
 type Server struct {
@@ -46,6 +50,9 @@ func New(cfg Config, store *storage.Store, broker *events.Broker) *Server {
 
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "http://localhost" + cfg.Address
+	}
+	if cfg.ReposDir == "" {
+		cfg.ReposDir = "./repos"
 	}
 
 	s := &Server{
@@ -187,6 +194,7 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request, workspace
 	var body struct {
 		TargetBranch string `json:"target_branch"`
 		CommitSHA    string `json:"commit_sha"`
+		Force        bool   `json:"force"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
@@ -197,14 +205,72 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request, workspace
 		return
 	}
 
+	workspace, err := s.store.GetWorkspace(r.Context(), workspaceID)
+	if err != nil {
+		if err == storage.ErrNotFound {
+			writeError(w, http.StatusNotFound, "workspace not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	commitSHA := body.CommitSHA
+	if commitSHA == "" {
+		commitSHA = workspace.LastCommitSHA
+	}
+	if commitSHA == "" {
+		writeError(w, http.StatusBadRequest, "commit_sha required")
+		return
+	}
+
+	if !body.Force {
+		att, err := s.store.GetLatestAttestation(r.Context(), commitSHA)
+		if err == nil && att.Status != "pass" {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":    "promotion blocked",
+				"blockers": []string{"attestation.status != pass"},
+			})
+			return
+		}
+		if err != nil && err != storage.ErrNotFound {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	repoPath, err := s.repoPath(workspace.Repo)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := os.Stat(repoPath); err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if err := updateRef(repoPath, body.TargetBranch, commitSHA); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	data := map[string]any{
 		"workspace_id":  workspaceID,
 		"target_branch": body.TargetBranch,
-		"commit_sha":    body.CommitSHA,
+		"commit_sha":    commitSHA,
 	}
-	s.emitEvent(r.Context(), "promote.requested", data)
+	s.emitEvent(r.Context(), "promote.applied", data)
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":       "promoted",
+		"branch":       body.TargetBranch,
+		"commit_sha":   commitSHA,
+		"workspace_id": workspaceID,
+	})
 }
 
 func (s *Server) handleReflog(w http.ResponseWriter, r *http.Request, workspaceID string) {
@@ -271,6 +337,36 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, changes)
+}
+
+func (s *Server) repoPath(repo string) (string, error) {
+	name := strings.TrimSpace(repo)
+	if name == "" {
+		return "", fmt.Errorf("workspace repo not set")
+	}
+	if strings.Contains(name, "..") || filepath.IsAbs(name) {
+		return "", fmt.Errorf("invalid repo name")
+	}
+	if !strings.HasSuffix(name, ".git") {
+		name += ".git"
+	}
+	return filepath.Join(s.cfg.ReposDir, name), nil
+}
+
+func updateRef(repoPath, branch, commitSHA string) error {
+	if strings.TrimSpace(branch) == "" {
+		return fmt.Errorf("branch required")
+	}
+	if strings.TrimSpace(commitSHA) == "" {
+		return fmt.Errorf("commit sha required")
+	}
+	ref := fmt.Sprintf("refs/heads/%s", branch)
+	cmd := exec.Command("git", "--git-dir", repoPath, "update-ref", ref, commitSHA)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git update-ref failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func (s *Server) handleChangeRoutes(w http.ResponseWriter, r *http.Request) {

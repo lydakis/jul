@@ -135,10 +135,11 @@ func (c *Client) GetAttestation(commitSHA string) (*Attestation, error) {
 	return &att, nil
 }
 
-func (c *Client) Promote(workspaceID, targetBranch, commitSHA string) error {
-	payload := map[string]string{
+func (c *Client) Promote(workspaceID, targetBranch, commitSHA string, force bool) error {
+	payload := map[string]any{
 		"target_branch": targetBranch,
 		"commit_sha":    commitSHA,
+		"force":         force,
 	}
 	return c.doJSON(http.MethodPost, "/api/v1/workspaces/"+workspaceID+"/promote", payload, nil)
 }

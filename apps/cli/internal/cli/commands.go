@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -33,6 +34,7 @@ func newSyncCommand() Command {
 		Run: func(args []string) int {
 			fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
+			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
 			info, err := gitutil.CurrentCommit()
@@ -57,6 +59,16 @@ func newSyncCommand() Command {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
 				return 1
+			}
+
+			if *jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(res); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+					return 1
+				}
+				return 0
 			}
 
 			fmt.Fprintf(os.Stdout, "synced %s -> %s (change %s, rev %d)\n",
@@ -169,7 +181,7 @@ func newPromoteCommand() Command {
 			}
 
 			cli := client.New(config.BaseURL())
-			if err := cli.Promote(config.WorkspaceID(), *toBranch, info.SHA); err != nil {
+			if err := cli.Promote(config.WorkspaceID(), *toBranch, info.SHA, *force); err != nil {
 				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
 				return 1
 			}
@@ -190,12 +202,25 @@ func newChangesCommand() Command {
 		Name:    "changes",
 		Summary: "List changes",
 		Run: func(args []string) int {
-			_ = args
+			fs := flag.NewFlagSet("changes", flag.ContinueOnError)
+			fs.SetOutput(os.Stdout)
+			jsonOut := fs.Bool("json", false, "Output JSON")
+			_ = fs.Parse(args)
+
 			cli := client.New(config.BaseURL())
 			changes, err := cli.ListChanges()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to fetch changes: %v\n", err)
 				return 1
+			}
+			if *jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(changes); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+					return 1
+				}
+				return 0
 			}
 			if len(changes) == 0 {
 				fmt.Fprintln(os.Stdout, "No changes yet.")
