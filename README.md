@@ -27,5 +27,6 @@ docs/                  # Design docs (specs, notes)
 ## Testing
 
 - Smoke tests: `docs/smoke-tests.md`
+- Coverage: `./scripts/coverage.sh` (writes `coverage.out` in each app)
 
 Note: Module paths in `go.mod` may need to be updated once the repo remote is set.

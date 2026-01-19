@@ -16,6 +16,7 @@ import (
 
 	"github.com/lydakis/jul/server/internal/events"
 	"github.com/lydakis/jul/server/internal/storage"
+	"github.com/oklog/ulid/v2"
 )
 
 type Config struct {
@@ -92,6 +93,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/attestations", s.handleAttestations)
 	s.mux.HandleFunc("/api/v1/ci/trigger", s.handleCITrigger)
 	s.mux.HandleFunc("/api/v1/query", s.handleQuery)
+	s.mux.HandleFunc("/api/v1/suggestions", s.handleSuggestions)
+	s.mux.HandleFunc("/api/v1/suggestions/", s.handleSuggestionRoutes)
 	s.mux.HandleFunc("/events/stream", s.handleEvents)
 }
 
@@ -405,6 +408,57 @@ func updateRef(repoPath, branch, commitSHA string, force bool) error {
 	return nil
 }
 
+func suggestionRef(changeID, suggestionID string) (string, error) {
+	if !validRefComponent(changeID) || !validRefComponent(suggestionID) {
+		return "", fmt.Errorf("invalid suggestion ref component")
+	}
+	return fmt.Sprintf("refs/jul/suggest/%s/%s", changeID, suggestionID), nil
+}
+
+func updateSuggestionRef(repoPath, refName, commitSHA string) error {
+	if strings.TrimSpace(refName) == "" {
+		return fmt.Errorf("ref name required")
+	}
+	if strings.TrimSpace(commitSHA) == "" {
+		return fmt.Errorf("commit sha required")
+	}
+	cmd := exec.Command("git", "--git-dir", repoPath, "update-ref", refName, commitSHA)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git update-ref failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func deleteRef(repoPath, refName string) error {
+	cmd := exec.Command("git", "--git-dir", repoPath, "update-ref", "-d", refName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git update-ref -d failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func validRefComponent(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	if strings.Contains(value, "/") || strings.Contains(value, "..") {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func ciProfileCommands(profile string) ([]string, bool) {
 	switch strings.ToLower(profile) {
 	case "unit":
@@ -697,10 +751,15 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowed := map[string]struct{}{
-		"tests":     {},
-		"change_id": {},
-		"author":    {},
-		"limit":     {},
+		"tests":        {},
+		"compiles":     {},
+		"coverage_min": {},
+		"coverage_max": {},
+		"change_id":    {},
+		"author":       {},
+		"since":        {},
+		"until":        {},
+		"limit":        {},
 	}
 	for key := range r.URL.Query() {
 		if _, ok := allowed[key]; !ok {
@@ -715,6 +774,64 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	compilesRaw := strings.TrimSpace(r.URL.Query().Get("compiles"))
+	var compiles *bool
+	if compilesRaw != "" {
+		switch strings.ToLower(compilesRaw) {
+		case "true", "pass", "yes":
+			value := true
+			compiles = &value
+		case "false", "fail", "no":
+			value := false
+			compiles = &value
+		default:
+			writeError(w, http.StatusBadRequest, "compiles must be true or false")
+			return
+		}
+	}
+
+	var coverageMin *float64
+	if raw := strings.TrimSpace(r.URL.Query().Get("coverage_min")); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "coverage_min must be a number")
+			return
+		}
+		coverageMin = &parsed
+	}
+
+	var coverageMax *float64
+	if raw := strings.TrimSpace(r.URL.Query().Get("coverage_max")); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "coverage_max must be a number")
+			return
+		}
+		coverageMax = &parsed
+	}
+
+	var since *time.Time
+	if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "since must be RFC3339")
+			return
+		}
+		utc := parsed.UTC()
+		since = &utc
+	}
+
+	var until *time.Time
+	if raw := strings.TrimSpace(r.URL.Query().Get("until")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "until must be RFC3339")
+			return
+		}
+		utc := parsed.UTC()
+		until = &utc
+	}
+
 	limit := 20
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil {
@@ -723,10 +840,15 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filters := storage.QueryFilters{
-		Tests:    tests,
-		ChangeID: strings.TrimSpace(r.URL.Query().Get("change_id")),
-		Author:   strings.TrimSpace(r.URL.Query().Get("author")),
-		Limit:    limit,
+		Tests:       tests,
+		Compiles:    compiles,
+		CoverageMin: coverageMin,
+		CoverageMax: coverageMax,
+		ChangeID:    strings.TrimSpace(r.URL.Query().Get("change_id")),
+		Author:      strings.TrimSpace(r.URL.Query().Get("author")),
+		Since:       since,
+		Until:       until,
+		Limit:       limit,
 	}
 
 	results, err := s.store.QueryCommits(r.Context(), filters)
@@ -735,6 +857,182 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		changeID := strings.TrimSpace(r.URL.Query().Get("change_id"))
+		status := strings.TrimSpace(r.URL.Query().Get("status"))
+		limit := 50
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil {
+				limit = parsed
+			}
+		}
+
+		suggestions, err := s.store.ListSuggestions(r.Context(), changeID, status, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, suggestions)
+	case http.MethodPost:
+		var body struct {
+			ChangeID           string          `json:"change_id"`
+			BaseCommitSHA      string          `json:"base_commit_sha"`
+			SuggestedCommitSHA string          `json:"suggested_commit_sha"`
+			CreatedBy          string          `json:"created_by"`
+			Reason             string          `json:"reason"`
+			Description        string          `json:"description"`
+			Confidence         float64         `json:"confidence"`
+			Diffstat           json.RawMessage `json:"diffstat"`
+			Repo               string          `json:"repo"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if body.BaseCommitSHA == "" || body.SuggestedCommitSHA == "" {
+			writeError(w, http.StatusBadRequest, "base_commit_sha and suggested_commit_sha required")
+			return
+		}
+
+		rev, err := s.store.GetRevisionByCommit(r.Context(), body.BaseCommitSHA)
+		if err != nil {
+			if err == storage.ErrNotFound {
+				writeError(w, http.StatusNotFound, "base commit not tracked")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		changeID := strings.TrimSpace(body.ChangeID)
+		if changeID == "" {
+			changeID = rev.ChangeID
+		}
+		if changeID != rev.ChangeID {
+			writeError(w, http.StatusBadRequest, "change_id does not match base commit")
+			return
+		}
+
+		repoPath, err := s.resolveRepoPath(r.Context(), body.Repo, body.BaseCommitSHA)
+		if err != nil {
+			if errors.Is(err, ErrInvalidRepoName) {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if errors.Is(err, ErrRepoNotFound) || errors.Is(err, storage.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "repo not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		diffstat := "{}"
+		if len(body.Diffstat) > 0 {
+			diffstat = string(body.Diffstat)
+		}
+
+		suggestion := storage.Suggestion{
+			SuggestionID:       ulid.Make().String(),
+			ChangeID:           changeID,
+			BaseCommitSHA:      body.BaseCommitSHA,
+			SuggestedCommitSHA: body.SuggestedCommitSHA,
+			CreatedBy:          strings.TrimSpace(body.CreatedBy),
+			Reason:             strings.TrimSpace(body.Reason),
+			Description:        strings.TrimSpace(body.Description),
+			Confidence:         body.Confidence,
+			Status:             "open",
+			DiffstatJSON:       diffstat,
+			CreatedAt:          time.Now().UTC(),
+		}
+
+		refName, err := suggestionRef(changeID, suggestion.SuggestionID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := updateSuggestionRef(repoPath, refName, suggestion.SuggestedCommitSHA); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		created, err := s.store.CreateSuggestion(r.Context(), suggestion)
+		if err != nil {
+			_ = deleteRef(repoPath, refName)
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		s.emitEvent(r.Context(), "suggestion.created", map[string]any{
+			"suggestion_id": created.SuggestionID,
+			"change_id":     created.ChangeID,
+			"commit_sha":    created.BaseCommitSHA,
+			"reason":        created.Reason,
+		})
+
+		writeJSON(w, http.StatusCreated, created)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleSuggestionRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/suggestions/")
+	path = strings.Trim(path, "/")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "suggestion id required")
+		return
+	}
+
+	if strings.HasSuffix(path, "/accept") {
+		id := strings.TrimSuffix(path, "/accept")
+		s.handleSuggestionStatus(w, r, id, "accepted")
+		return
+	}
+
+	if strings.HasSuffix(path, "/reject") {
+		id := strings.TrimSuffix(path, "/reject")
+		s.handleSuggestionStatus(w, r, id, "rejected")
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	suggestion, err := s.store.GetSuggestion(r.Context(), path)
+	if err != nil {
+		if err == storage.ErrNotFound {
+			writeError(w, http.StatusNotFound, "suggestion not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, suggestion)
+}
+
+func (s *Server) handleSuggestionStatus(w http.ResponseWriter, r *http.Request, suggestionID, status string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	updated, err := s.store.UpdateSuggestionStatus(r.Context(), suggestionID, status, time.Now().UTC())
+	if err != nil {
+		if err == storage.ErrNotFound {
+			writeError(w, http.StatusNotFound, "suggestion not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) resolveRepoPath(ctx context.Context, repoName, commitSHA string) (string, error) {

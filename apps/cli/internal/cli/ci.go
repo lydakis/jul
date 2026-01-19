@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	cicmd "github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/client"
@@ -40,6 +41,8 @@ func runCIRun(args []string) int {
 	var commands stringList
 	fs.Var(&commands, "cmd", "Command to run (repeatable). Default: go test ./...")
 	attType := fs.String("type", "ci", "Attestation type")
+	coverageLine := fs.Float64("coverage-line", -1, "Coverage line percentage (optional)")
+	coverageBranch := fs.Float64("coverage-branch", -1, "Coverage branch percentage (optional)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	_ = fs.Parse(args)
 
@@ -82,14 +85,28 @@ func runCIRun(args []string) int {
 		return 1
 	}
 
+	testStatus, compileStatus := inferCIStatuses(cmds, result.Status)
+	var coverageLinePtr *float64
+	if *coverageLine >= 0 {
+		coverageLinePtr = coverageLine
+	}
+	var coverageBranchPtr *float64
+	if *coverageBranch >= 0 {
+		coverageBranchPtr = coverageBranch
+	}
+
 	att := client.Attestation{
-		CommitSHA:   info.SHA,
-		ChangeID:    changeID,
-		Type:        *attType,
-		Status:      result.Status,
-		StartedAt:   result.StartedAt,
-		FinishedAt:  result.FinishedAt,
-		SignalsJSON: string(signals),
+		CommitSHA:         info.SHA,
+		ChangeID:          changeID,
+		Type:              *attType,
+		Status:            result.Status,
+		TestStatus:        testStatus,
+		CompileStatus:     compileStatus,
+		CoverageLinePct:   coverageLinePtr,
+		CoverageBranchPct: coverageBranchPtr,
+		StartedAt:         result.StartedAt,
+		FinishedAt:        result.FinishedAt,
+		SignalsJSON:       string(signals),
 	}
 
 	cli := client.New(config.BaseURL())
@@ -120,5 +137,25 @@ func runCIRun(args []string) int {
 }
 
 func printCIUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ci run [--cmd <command>] [--type ci] [--json]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ci run [--cmd <command>] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--json]")
+}
+
+func inferCIStatuses(commands []string, overall string) (string, string) {
+	testStatus := ""
+	compileStatus := ""
+	for _, cmd := range commands {
+		normalized := strings.ToLower(strings.TrimSpace(cmd))
+		if strings.Contains(normalized, "go test") || strings.Contains(normalized, "pytest") ||
+			strings.Contains(normalized, "npm test") || strings.Contains(normalized, "yarn test") ||
+			strings.Contains(normalized, "pnpm test") {
+			testStatus = overall
+			compileStatus = overall
+		}
+		if strings.Contains(normalized, "go build") || strings.Contains(normalized, "go test") {
+			if compileStatus == "" {
+				compileStatus = overall
+			}
+		}
+	}
+	return testStatus, compileStatus
 }

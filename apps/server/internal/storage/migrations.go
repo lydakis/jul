@@ -40,6 +40,10 @@ func runMigrations(db *sql.DB) error {
 			change_id TEXT NOT NULL,
 			type TEXT NOT NULL,
 			status TEXT NOT NULL,
+			compile_status TEXT,
+			test_status TEXT,
+			coverage_line_pct REAL,
+			coverage_branch_pct REAL,
 			started_at TEXT NOT NULL,
 			finished_at TEXT NOT NULL,
 			signals_json TEXT NOT NULL,
@@ -47,6 +51,22 @@ func runMigrations(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_attestations_commit ON attestations(commit_sha);`,
 		`CREATE INDEX IF NOT EXISTS idx_attestations_change ON attestations(change_id);`,
+		`CREATE TABLE IF NOT EXISTS suggestions (
+			suggestion_id TEXT PRIMARY KEY,
+			change_id TEXT NOT NULL,
+			base_commit_sha TEXT NOT NULL,
+			suggested_commit_sha TEXT NOT NULL,
+			created_by TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			description TEXT NOT NULL,
+			confidence REAL NOT NULL,
+			status TEXT NOT NULL,
+			diffstat_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			resolved_at TEXT
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_suggestions_change ON suggestions(change_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);`,
 		`CREATE TABLE IF NOT EXISTS events (
 			event_id TEXT PRIMARY KEY,
 			type TEXT NOT NULL,
@@ -72,6 +92,18 @@ func runMigrations(db *sql.DB) error {
 	}
 
 	if err := ensureColumn(db, "revisions", "repo", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "attestations", "compile_status", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "attestations", "test_status", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "attestations", "coverage_line_pct", "REAL"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "attestations", "coverage_branch_pct", "REAL"); err != nil {
 		return err
 	}
 	return nil

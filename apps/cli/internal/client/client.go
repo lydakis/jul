@@ -63,14 +63,18 @@ type Revision struct {
 }
 
 type Attestation struct {
-	AttestationID string    `json:"attestation_id"`
-	CommitSHA     string    `json:"commit_sha"`
-	ChangeID      string    `json:"change_id"`
-	Type          string    `json:"type"`
-	Status        string    `json:"status"`
-	StartedAt     time.Time `json:"started_at"`
-	FinishedAt    time.Time `json:"finished_at"`
-	SignalsJSON   string    `json:"signals_json"`
+	AttestationID     string    `json:"attestation_id"`
+	CommitSHA         string    `json:"commit_sha"`
+	ChangeID          string    `json:"change_id"`
+	Type              string    `json:"type"`
+	Status            string    `json:"status"`
+	CompileStatus     string    `json:"compile_status,omitempty"`
+	TestStatus        string    `json:"test_status,omitempty"`
+	CoverageLinePct   *float64  `json:"coverage_line_pct,omitempty"`
+	CoverageBranchPct *float64  `json:"coverage_branch_pct,omitempty"`
+	StartedAt         time.Time `json:"started_at"`
+	FinishedAt        time.Time `json:"finished_at"`
+	SignalsJSON       string    `json:"signals_json"`
 }
 
 type ReflogEntry struct {
@@ -88,6 +92,22 @@ type QueryResult struct {
 	Message           string    `json:"message"`
 	CreatedAt         time.Time `json:"created_at"`
 	AttestationStatus string    `json:"attestation_status,omitempty"`
+	TestStatus        string    `json:"test_status,omitempty"`
+	CompileStatus     string    `json:"compile_status,omitempty"`
+	CoverageLinePct   *float64  `json:"coverage_line_pct,omitempty"`
+	CoverageBranchPct *float64  `json:"coverage_branch_pct,omitempty"`
+}
+
+type QueryFilters struct {
+	Tests       string
+	Compiles    *bool
+	CoverageMin *float64
+	CoverageMax *float64
+	ChangeID    string
+	Author      string
+	Since       *time.Time
+	Until       *time.Time
+	Limit       int
 }
 
 type SyncPayload struct {
@@ -174,21 +194,40 @@ func (c *Client) Reflog(workspaceID string, limit int) ([]ReflogEntry, error) {
 	return entries, nil
 }
 
-func (c *Client) Query(tests, changeID, author string, limit int) ([]QueryResult, error) {
+func (c *Client) Query(filters QueryFilters) ([]QueryResult, error) {
 	var results []QueryResult
 	path := "/api/v1/query"
 	query := make([]string, 0, 4)
-	if tests != "" {
-		query = append(query, "tests="+urlQueryEscape(tests))
+	if filters.Tests != "" {
+		query = append(query, "tests="+urlQueryEscape(filters.Tests))
 	}
-	if changeID != "" {
-		query = append(query, "change_id="+urlQueryEscape(changeID))
+	if filters.Compiles != nil {
+		value := "false"
+		if *filters.Compiles {
+			value = "true"
+		}
+		query = append(query, "compiles="+value)
 	}
-	if author != "" {
-		query = append(query, "author="+urlQueryEscape(author))
+	if filters.CoverageMin != nil {
+		query = append(query, fmt.Sprintf("coverage_min=%g", *filters.CoverageMin))
 	}
-	if limit > 0 {
-		query = append(query, fmt.Sprintf("limit=%d", limit))
+	if filters.CoverageMax != nil {
+		query = append(query, fmt.Sprintf("coverage_max=%g", *filters.CoverageMax))
+	}
+	if filters.ChangeID != "" {
+		query = append(query, "change_id="+urlQueryEscape(filters.ChangeID))
+	}
+	if filters.Author != "" {
+		query = append(query, "author="+urlQueryEscape(filters.Author))
+	}
+	if filters.Since != nil {
+		query = append(query, "since="+urlQueryEscape(filters.Since.Format(time.RFC3339)))
+	}
+	if filters.Until != nil {
+		query = append(query, "until="+urlQueryEscape(filters.Until.Format(time.RFC3339)))
+	}
+	if filters.Limit > 0 {
+		query = append(query, fmt.Sprintf("limit=%d", filters.Limit))
 	}
 	if len(query) > 0 {
 		path = path + "?" + strings.Join(query, "&")

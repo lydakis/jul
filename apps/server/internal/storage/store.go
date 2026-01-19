@@ -363,7 +363,7 @@ func (s *Store) GetRevisionByCommit(ctx context.Context, commitSHA string) (Revi
 }
 
 func (s *Store) ListAttestations(ctx context.Context, commitSHA, changeID, status string) ([]Attestation, error) {
-	query := `SELECT attestation_id, commit_sha, change_id, type, status, started_at, finished_at, signals_json, created_at FROM attestations WHERE 1=1`
+	query := `SELECT attestation_id, commit_sha, change_id, type, status, compile_status, test_status, coverage_line_pct, coverage_branch_pct, started_at, finished_at, signals_json, created_at FROM attestations WHERE 1=1`
 	args := []any{}
 	if commitSHA != "" {
 		query += " AND commit_sha = ?"
@@ -389,8 +389,30 @@ func (s *Store) ListAttestations(ctx context.Context, commitSHA, changeID, statu
 	for rows.Next() {
 		var att Attestation
 		var startedAt, finishedAt, createdAt string
-		if err := rows.Scan(&att.AttestationID, &att.CommitSHA, &att.ChangeID, &att.Type, &att.Status, &startedAt, &finishedAt, &att.SignalsJSON, &createdAt); err != nil {
+		var coverageLine sql.NullFloat64
+		var coverageBranch sql.NullFloat64
+		if err := rows.Scan(
+			&att.AttestationID,
+			&att.CommitSHA,
+			&att.ChangeID,
+			&att.Type,
+			&att.Status,
+			&att.CompileStatus,
+			&att.TestStatus,
+			&coverageLine,
+			&coverageBranch,
+			&startedAt,
+			&finishedAt,
+			&att.SignalsJSON,
+			&createdAt,
+		); err != nil {
 			return nil, err
+		}
+		if coverageLine.Valid {
+			att.CoverageLinePct = &coverageLine.Float64
+		}
+		if coverageBranch.Valid {
+			att.CoverageBranchPct = &coverageBranch.Float64
 		}
 		att.StartedAt = parseTime(startedAt)
 		att.FinishedAt = parseTime(finishedAt)
@@ -413,10 +435,26 @@ func (s *Store) CreateAttestation(ctx context.Context, att Attestation) (Attesta
 	if att.FinishedAt.IsZero() {
 		att.FinishedAt = att.CreatedAt
 	}
+	if att.TestStatus == "" {
+		att.TestStatus = att.Status
+	}
+	if att.CompileStatus == "" {
+		att.CompileStatus = att.Status
+	}
 
-	_, err := s.db.ExecContext(ctx, `INSERT INTO attestations (attestation_id, commit_sha, change_id, type, status, started_at, finished_at, signals_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	var coverageLine any
+	var coverageBranch any
+	if att.CoverageLinePct != nil {
+		coverageLine = *att.CoverageLinePct
+	}
+	if att.CoverageBranchPct != nil {
+		coverageBranch = *att.CoverageBranchPct
+	}
+
+	_, err := s.db.ExecContext(ctx, `INSERT INTO attestations (attestation_id, commit_sha, change_id, type, status, compile_status, test_status, coverage_line_pct, coverage_branch_pct, started_at, finished_at, signals_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		att.AttestationID, att.CommitSHA, att.ChangeID, att.Type, att.Status,
+		att.CompileStatus, att.TestStatus, coverageLine, coverageBranch,
 		att.StartedAt.Format(timeFormat), att.FinishedAt.Format(timeFormat), att.SignalsJSON, att.CreatedAt.Format(timeFormat))
 	if err != nil {
 		return Attestation{}, err
@@ -425,15 +463,37 @@ func (s *Store) CreateAttestation(ctx context.Context, att Attestation) (Attesta
 }
 
 func (s *Store) GetLatestAttestation(ctx context.Context, commitSHA string) (Attestation, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT attestation_id, commit_sha, change_id, type, status, started_at, finished_at, signals_json, created_at
+	row := s.db.QueryRowContext(ctx, `SELECT attestation_id, commit_sha, change_id, type, status, compile_status, test_status, coverage_line_pct, coverage_branch_pct, started_at, finished_at, signals_json, created_at
 		FROM attestations WHERE commit_sha = ? ORDER BY created_at DESC LIMIT 1`, commitSHA)
 	var att Attestation
 	var startedAt, finishedAt, createdAt string
-	if err := row.Scan(&att.AttestationID, &att.CommitSHA, &att.ChangeID, &att.Type, &att.Status, &startedAt, &finishedAt, &att.SignalsJSON, &createdAt); err != nil {
+	var coverageLine sql.NullFloat64
+	var coverageBranch sql.NullFloat64
+	if err := row.Scan(
+		&att.AttestationID,
+		&att.CommitSHA,
+		&att.ChangeID,
+		&att.Type,
+		&att.Status,
+		&att.CompileStatus,
+		&att.TestStatus,
+		&coverageLine,
+		&coverageBranch,
+		&startedAt,
+		&finishedAt,
+		&att.SignalsJSON,
+		&createdAt,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Attestation{}, ErrNotFound
 		}
 		return Attestation{}, err
+	}
+	if coverageLine.Valid {
+		att.CoverageLinePct = &coverageLine.Float64
+	}
+	if coverageBranch.Valid {
+		att.CoverageBranchPct = &coverageBranch.Float64
 	}
 	att.StartedAt = parseTime(startedAt)
 	att.FinishedAt = parseTime(finishedAt)
@@ -511,7 +571,11 @@ func (s *Store) ListKeepRefs(ctx context.Context, workspaceID string, limit int)
 
 func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]QueryResult, error) {
 	query := `SELECT r.commit_sha, r.change_id, r.author, r.message, r.created_at,
-		COALESCE((SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1), '') AS att_status
+		COALESCE((SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1), '') AS att_status,
+		(SELECT test_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS test_status,
+		(SELECT compile_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS compile_status,
+		(SELECT coverage_line_pct FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS coverage_line_pct,
+		(SELECT coverage_branch_pct FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS coverage_branch_pct
 		FROM revisions r WHERE 1=1`
 	args := []any{}
 
@@ -524,8 +588,32 @@ func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]Query
 		args = append(args, "%"+filters.Author+"%")
 	}
 	if filters.Tests != "" {
-		query += " AND (SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) = ?"
+		query += " AND (SELECT test_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) = ?"
 		args = append(args, filters.Tests)
+	}
+	if filters.Compiles != nil {
+		status := "fail"
+		if *filters.Compiles {
+			status = "pass"
+		}
+		query += " AND (SELECT compile_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) = ?"
+		args = append(args, status)
+	}
+	if filters.CoverageMin != nil {
+		query += " AND (SELECT coverage_line_pct FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) >= ?"
+		args = append(args, *filters.CoverageMin)
+	}
+	if filters.CoverageMax != nil {
+		query += " AND (SELECT coverage_line_pct FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) <= ?"
+		args = append(args, *filters.CoverageMax)
+	}
+	if filters.Since != nil {
+		query += " AND r.created_at >= ?"
+		args = append(args, filters.Since.Format(timeFormat))
+	}
+	if filters.Until != nil {
+		query += " AND r.created_at <= ?"
+		args = append(args, filters.Until.Format(timeFormat))
 	}
 
 	query += " ORDER BY r.created_at DESC"
@@ -546,8 +634,39 @@ func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]Query
 	for rows.Next() {
 		var res QueryResult
 		var createdAt string
-		if err := rows.Scan(&res.CommitSHA, &res.ChangeID, &res.Author, &res.Message, &createdAt, &res.AttestationStatus); err != nil {
+		var attStatus sql.NullString
+		var testStatus sql.NullString
+		var compileStatus sql.NullString
+		var coverageLine sql.NullFloat64
+		var coverageBranch sql.NullFloat64
+		if err := rows.Scan(
+			&res.CommitSHA,
+			&res.ChangeID,
+			&res.Author,
+			&res.Message,
+			&createdAt,
+			&attStatus,
+			&testStatus,
+			&compileStatus,
+			&coverageLine,
+			&coverageBranch,
+		); err != nil {
 			return nil, err
+		}
+		if attStatus.Valid {
+			res.AttestationStatus = attStatus.String
+		}
+		if testStatus.Valid {
+			res.TestStatus = testStatus.String
+		}
+		if compileStatus.Valid {
+			res.CompileStatus = compileStatus.String
+		}
+		if coverageLine.Valid {
+			res.CoverageLinePct = &coverageLine.Float64
+		}
+		if coverageBranch.Valid {
+			res.CoverageBranchPct = &coverageBranch.Float64
 		}
 		res.CreatedAt = parseTime(createdAt)
 		out = append(out, res)

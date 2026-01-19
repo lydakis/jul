@@ -166,7 +166,7 @@ func TestQueryRejectsUnsupportedFilters(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer store.Close()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/query?coverage_min=80", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/query?unsupported=1", nil)
 	w := httptest.NewRecorder()
 	srv.handleQuery(w, req)
 

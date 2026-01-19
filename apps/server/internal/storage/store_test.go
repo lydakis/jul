@@ -207,6 +207,144 @@ func TestKeepRefsInsertedOnWorkspaceMove(t *testing.T) {
 	}
 }
 
+func TestQueryCommitsFilters(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+
+	first := SyncPayload{
+		WorkspaceID: "alice/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-a",
+		ChangeID:    "I1111111111111111111111111111111111111111",
+		Message:     "feat: first",
+		Author:      "alice",
+		CommittedAt: now.Add(-2 * time.Hour),
+	}
+	second := SyncPayload{
+		WorkspaceID: "alice/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-b",
+		ChangeID:    "I2222222222222222222222222222222222222222",
+		Message:     "feat: second",
+		Author:      "alice",
+		CommittedAt: now.Add(-1 * time.Hour),
+	}
+
+	if _, err := store.RecordSync(context.Background(), first); err != nil {
+		t.Fatalf("RecordSync first failed: %v", err)
+	}
+	if _, err := store.RecordSync(context.Background(), second); err != nil {
+		t.Fatalf("RecordSync second failed: %v", err)
+	}
+
+	lowCoverage := 70.0
+	highCoverage := 85.0
+
+	if _, err := store.CreateAttestation(context.Background(), Attestation{
+		CommitSHA:       first.CommitSHA,
+		ChangeID:        first.ChangeID,
+		Type:            "ci",
+		Status:          "fail",
+		TestStatus:      "fail",
+		CompileStatus:   "fail",
+		CoverageLinePct: &lowCoverage,
+		StartedAt:       now,
+		FinishedAt:      now,
+	}); err != nil {
+		t.Fatalf("CreateAttestation first failed: %v", err)
+	}
+
+	if _, err := store.CreateAttestation(context.Background(), Attestation{
+		CommitSHA:       second.CommitSHA,
+		ChangeID:        second.ChangeID,
+		Type:            "ci",
+		Status:          "pass",
+		TestStatus:      "pass",
+		CompileStatus:   "pass",
+		CoverageLinePct: &highCoverage,
+		StartedAt:       now,
+		FinishedAt:      now,
+	}); err != nil {
+		t.Fatalf("CreateAttestation second failed: %v", err)
+	}
+
+	compiles := true
+	since := now.Add(-90 * time.Minute)
+	until := now.Add(-30 * time.Minute)
+	minCoverage := 80.0
+
+	results, err := store.QueryCommits(context.Background(), QueryFilters{
+		Tests:       "pass",
+		Compiles:    &compiles,
+		CoverageMin: &minCoverage,
+		Since:       &since,
+		Until:       &until,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("QueryCommits failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].CommitSHA != second.CommitSHA {
+		t.Fatalf("expected %s, got %s", second.CommitSHA, results[0].CommitSHA)
+	}
+	if results[0].CoverageLinePct == nil || *results[0].CoverageLinePct != highCoverage {
+		t.Fatalf("expected coverage %.1f, got %v", highCoverage, results[0].CoverageLinePct)
+	}
+}
+
+func TestSuggestionLifecycle(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+
+	created, err := store.CreateSuggestion(context.Background(), Suggestion{
+		ChangeID:           "I3333333333333333333333333333333333333333",
+		BaseCommitSHA:      "base-sha",
+		SuggestedCommitSHA: "suggest-sha",
+		CreatedBy:          "tester",
+		Reason:             "fix_tests",
+		Description:        "adjust failing test",
+		Confidence:         0.82,
+		Status:             "open",
+		DiffstatJSON:       `{"files_changed":1}`,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateSuggestion failed: %v", err)
+	}
+
+	fetched, err := store.GetSuggestion(context.Background(), created.SuggestionID)
+	if err != nil {
+		t.Fatalf("GetSuggestion failed: %v", err)
+	}
+	if fetched.ChangeID != created.ChangeID {
+		t.Fatalf("expected change_id %s, got %s", created.ChangeID, fetched.ChangeID)
+	}
+
+	list, err := store.ListSuggestions(context.Background(), created.ChangeID, "open", 10)
+	if err != nil {
+		t.Fatalf("ListSuggestions failed: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 suggestion, got %d", len(list))
+	}
+
+	updated, err := store.UpdateSuggestionStatus(context.Background(), created.SuggestionID, "accepted", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("UpdateSuggestionStatus failed: %v", err)
+	}
+	if updated.Status != "accepted" {
+		t.Fatalf("expected status accepted, got %s", updated.Status)
+	}
+	if updated.ResolvedAt.IsZero() {
+		t.Fatalf("expected resolved_at to be set")
+	}
+}
+
 func TestQueryCommitsByStatus(t *testing.T) {
 	store := newTestStore(t)
 	first := SyncPayload{

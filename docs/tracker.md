@@ -17,7 +17,7 @@
 - [x] Mirror attestations into git notes
 
 ## Later
-- [ ] Suggestions API + refs
-- [ ] Query endpoints
+- [x] Suggestions API + refs
+- [x] Query endpoints (advanced filters)
 - [ ] Notes namespaces
 - [ ] Web UI

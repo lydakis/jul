@@ -27,6 +27,7 @@
 - Integration tests live in `apps/server/integration/` and exercise real CLI + server flows.
 - New features should include unit tests and, when relevant, a smoke/integration scenario.
 - Run smoke tests with `cd apps/server && go test ./integration -run Smoke`.
+- Track coverage with `./scripts/coverage.sh` (generates `coverage.out` in `apps/cli` and `apps/server`).
 
 ## Commit & Pull Request Guidelines
 - Commit messages in this repo use imperative, sentence‑case style (e.g., “Add auto-sync hooks”, “Fix sync consistency”).
