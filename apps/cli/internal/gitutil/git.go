@@ -56,6 +56,16 @@ func RepoTopLevel() (string, error) {
 	return git("rev-parse", "--show-toplevel")
 }
 
+func GitPath(repoRoot, path string) (string, error) {
+	if strings.TrimSpace(repoRoot) == "" {
+		return "", fmt.Errorf("repo root required")
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("git path required")
+	}
+	return gitWithDir(repoRoot, "rev-parse", "--git-path", path)
+}
+
 func ExtractChangeID(message string) string {
 	lines := strings.Split(message, "\n")
 	for _, line := range lines {
@@ -97,6 +107,18 @@ func git(args ...string) (string, error) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git %s failed: %s", strings.Join(args, " "), strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+func gitWithDir(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git -C %s %s failed: %s", dir, strings.Join(args, " "), strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(out.String()), nil
 }

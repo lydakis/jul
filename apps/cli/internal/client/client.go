@@ -143,9 +143,13 @@ func (c *Client) Promote(workspaceID, targetBranch, commitSHA string) error {
 	return c.doJSON(http.MethodPost, "/api/v1/workspaces/"+workspaceID+"/promote", payload, nil)
 }
 
-func (c *Client) Reflog(workspaceID string) ([]ReflogEntry, error) {
+func (c *Client) Reflog(workspaceID string, limit int) ([]ReflogEntry, error) {
 	var entries []ReflogEntry
-	if err := c.doJSON(http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/reflog", nil, &entries); err != nil {
+	path := "/api/v1/workspaces/" + workspaceID + "/reflog"
+	if limit > 0 {
+		path = fmt.Sprintf("%s?limit=%d", path, limit)
+	}
+	if err := c.doJSON(http.MethodGet, path, nil, &entries); err != nil {
 		return nil, err
 	}
 	return entries, nil

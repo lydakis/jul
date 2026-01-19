@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/lydakis/jul/cli/internal/gitutil"
 )
 
 const (
@@ -21,7 +23,10 @@ func InstallPostCommit(repoRoot, cliCommand string) (string, error) {
 		cliCommand = "jul"
 	}
 
-	hooksDir := filepath.Join(repoRoot, ".git", "hooks")
+	hooksDir, err := gitutil.GitPath(repoRoot, "hooks")
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return "", err
 	}
@@ -52,7 +57,11 @@ func UninstallPostCommit(repoRoot string) error {
 		return errors.New("repo root required")
 	}
 
-	hookPath := filepath.Join(repoRoot, ".git", "hooks", postCommitHookName)
+	hooksDir, err := gitutil.GitPath(repoRoot, "hooks")
+	if err != nil {
+		return err
+	}
+	hookPath := filepath.Join(hooksDir, postCommitHookName)
 	if exists, err := fileExists(hookPath); err != nil {
 		return err
 	} else if !exists {
@@ -75,7 +84,11 @@ func StatusPostCommit(repoRoot string) (bool, string, error) {
 		return false, "", errors.New("repo root required")
 	}
 
-	hookPath := filepath.Join(repoRoot, ".git", "hooks", postCommitHookName)
+	hooksDir, err := gitutil.GitPath(repoRoot, "hooks")
+	if err != nil {
+		return false, "", err
+	}
+	hookPath := filepath.Join(hooksDir, postCommitHookName)
 	if exists, err := fileExists(hookPath); err != nil {
 		return false, "", err
 	} else if !exists {

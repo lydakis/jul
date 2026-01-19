@@ -122,7 +122,7 @@ func newReflogCommand() Command {
 
 			wsID := config.WorkspaceID()
 			cli := client.New(config.BaseURL())
-			entries, err := cli.Reflog(wsID)
+			entries, err := cli.Reflog(wsID, *limit)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to fetch reflog: %v\n", err)
 				return 1

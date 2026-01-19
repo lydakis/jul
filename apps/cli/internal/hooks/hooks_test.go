@@ -2,15 +2,16 @@ package hooks
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestInstallAndUninstallPostCommit(t *testing.T) {
 	repo := t.TempDir()
-	hooksDir := filepath.Join(repo, ".git", "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-		t.Fatalf("failed to create hooks dir: %v", err)
+	if err := initGitRepo(repo); err != nil {
+		t.Fatalf("git init failed: %v", err)
 	}
 
 	hookPath, err := InstallPostCommit(repo, "jul")
@@ -43,9 +44,12 @@ func TestInstallAndUninstallPostCommit(t *testing.T) {
 
 func TestInstallDoesNotOverwriteForeignHook(t *testing.T) {
 	repo := t.TempDir()
-	hooksDir := filepath.Join(repo, ".git", "hooks")
-	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-		t.Fatalf("failed to create hooks dir: %v", err)
+	if err := initGitRepo(repo); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+	hooksDir, err := hooksPath(repo)
+	if err != nil {
+		t.Fatalf("hooks path failed: %v", err)
 	}
 
 	hookPath := filepath.Join(hooksDir, postCommitHookName)
@@ -56,4 +60,42 @@ func TestInstallDoesNotOverwriteForeignHook(t *testing.T) {
 	if _, err := InstallPostCommit(repo, "jul"); err == nil {
 		t.Fatalf("expected error when foreign hook exists")
 	}
+}
+
+func TestInstallUsesCustomHooksPath(t *testing.T) {
+	repo := t.TempDir()
+	if err := initGitRepo(repo); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+
+	customHooks := filepath.Join(repo, "custom-hooks")
+	cmd := exec.Command("git", "config", "core.hooksPath", customHooks)
+	cmd.Dir = repo
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git config core.hooksPath failed: %v", err)
+	}
+
+	hookPath, err := InstallPostCommit(repo, "jul")
+	if err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	if !strings.HasPrefix(hookPath, customHooks) {
+		t.Fatalf("expected hook path under %s, got %s", customHooks, hookPath)
+	}
+}
+
+func initGitRepo(dir string) error {
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	return cmd.Run()
+}
+
+func hooksPath(repo string) (string, error) {
+	cmd := exec.Command("git", "-C", repo, "rev-parse", "--git-path", "hooks")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
