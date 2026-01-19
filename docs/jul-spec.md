@@ -973,6 +973,15 @@ $ jul init --server https://jul.example.com
    debounce_ms = 1000
    ```
 
+**Planned: `jul configure` wizard**
+- Interactive setup to choose default server, workspace name, and agent provider.
+- Writes `~/.config/jul/config.toml` (server + workspace defaults) and `~/.config/jul/agents.toml`.
+- Allows selecting a preferred provider (e.g., opencode, codex) and storing credentials.
+
+**Planned: Repo bootstrap**
+- `jul init` can optionally create the remote repo on the Jul server (dual-backend flow).
+- Requires a simple `POST /api/v1/repos` endpoint with `{name}` and returns repo URL.
+
 ### 7.3 Core Commands
 
 #### `jul sync`
