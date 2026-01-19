@@ -511,7 +511,7 @@ func (s *Store) ListKeepRefs(ctx context.Context, workspaceID string, limit int)
 
 func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]QueryResult, error) {
 	query := `SELECT r.commit_sha, r.change_id, r.author, r.message, r.created_at,
-		(SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS att_status
+		COALESCE((SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1), '') AS att_status
 		FROM revisions r WHERE 1=1`
 	args := []any{}
 
