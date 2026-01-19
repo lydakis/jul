@@ -29,3 +29,6 @@ go run ./cmd/jul-server --addr :8000 --db ./data/jul.db --repos ./repos
 - `POST /api/v1/ci/trigger` — run CI profile for commit
 - `GET /api/v1/query` — query commits by filters
 - `GET /events/stream` — SSE stream
+
+Notes:
+- Attestations are mirrored into git notes at `refs/notes/jul/attestations` when a repo is available.

@@ -14,6 +14,7 @@
 - [x] Add attestation ingestion from CI runner
 - [x] Add JSON output modes to CLI commands (`changes`, `sync`)
 - [x] Add CI trigger endpoint + query API
+- [x] Mirror attestations into git notes
 
 ## Later
 - [ ] Suggestions API + refs

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -564,16 +565,25 @@ func (s *Server) handleAttestations(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, atts)
 	case http.MethodPost:
-		var att storage.Attestation
-		if err := json.NewDecoder(r.Body).Decode(&att); err != nil {
+		var body struct {
+			storage.Attestation
+			Repo string `json:"repo"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
-		created, err := s.store.CreateAttestation(r.Context(), att)
+		created, err := s.store.CreateAttestation(r.Context(), body.Attestation)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if repoPath, err := s.resolveRepoPath(r.Context(), body.Repo, created.CommitSHA); err == nil {
+			if err := writeAttestationNote(repoPath, created.CommitSHA, created); err != nil {
+				log.Printf("failed to write attestation note: %v", err)
+			}
+		}
+
 		s.emitEvent(r.Context(), "ci.finished", map[string]any{"commit_sha": created.CommitSHA, "status": created.Status})
 		writeJSON(w, http.StatusCreated, created)
 	default:
@@ -611,28 +621,10 @@ func (s *Server) handleCITrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repoName := strings.TrimSpace(body.Repo)
-	if repoName == "" {
-		repo, err := s.store.FindRepoForCommit(r.Context(), body.CommitSHA)
-		if err != nil {
-			if err == storage.ErrNotFound {
-				writeError(w, http.StatusNotFound, "repo not found for commit")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		repoName = repo
-	}
-
-	repoPath, err := s.repoPath(repoName)
+	repoPath, err := s.resolveRepoPath(r.Context(), body.Repo, body.CommitSHA)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if _, err := os.Stat(repoPath); err != nil {
-		if os.IsNotExist(err) {
-			writeError(w, http.StatusNotFound, "repo not found")
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "repo not found for commit")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -680,6 +672,10 @@ func (s *Server) handleCITrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := writeAttestationNote(repoPath, body.CommitSHA, att); err != nil {
+		log.Printf("failed to write attestation note: %v", err)
+	}
+
 	s.emitEvent(r.Context(), "ci.finished", map[string]any{
 		"commit_sha": body.CommitSHA,
 		"status":     att.Status,
@@ -720,6 +716,26 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+func (s *Server) resolveRepoPath(ctx context.Context, repoName, commitSHA string) (string, error) {
+	name := strings.TrimSpace(repoName)
+	if name == "" {
+		repo, err := s.store.FindRepoForCommit(ctx, commitSHA)
+		if err != nil {
+			return "", err
+		}
+		name = repo
+	}
+
+	repoPath, err := s.repoPath(name)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(repoPath); err != nil {
+		return "", err
+	}
+	return repoPath, nil
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
