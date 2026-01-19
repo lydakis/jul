@@ -1,0 +1,83 @@
+package server
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/lydakis/jul/server/internal/events"
+	"github.com/lydakis/jul/server/internal/storage"
+)
+
+func newTestServer(t *testing.T) (*Server, *storage.Store) {
+	storePath := t.TempDir() + "/jul.db"
+	store, err := storage.Open(storePath)
+	if err != nil {
+		t.Fatalf("failed to open store: %v", err)
+	}
+	broker := events.NewBroker()
+	return New(Config{Address: ":0"}, store, broker), store
+}
+
+func TestSyncEndpoint(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	payload := storage.SyncPayload{
+		WorkspaceID: "bob/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "abc123",
+		ChangeID:    "I0123456789abcdef0123456789abcdef01234567",
+		Message:     "feat: add",
+		Author:      "bob",
+		CommittedAt: time.Now().UTC(),
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleSync(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var res storage.SyncResult
+	if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if res.Change.ChangeID != payload.ChangeID {
+		t.Fatalf("expected change id %s, got %s", payload.ChangeID, res.Change.ChangeID)
+	}
+}
+
+func TestWorkspacesEndpoint(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	_, err := store.RecordSync(httptest.NewRequest(http.MethodGet, "/", nil).Context(), storage.SyncPayload{
+		WorkspaceID: "bob/desktop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "def456",
+		ChangeID:    "I1111111111111111111111111111111111111111",
+		Message:     "fix: test",
+		Author:      "bob",
+		CommittedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordSync failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+	w := httptest.NewRecorder()
+	srv.handleWorkspaces(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}

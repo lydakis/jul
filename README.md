@@ -20,4 +20,8 @@ docs/                  # Design docs (specs, notes)
 - CLI: `cd apps/cli` then `go run ./cmd/jul --help`
 - Server: `cd apps/server` then `go run ./cmd/jul-server`
 
+## Planning
+
+- Tracker: `docs/tracker.md`
+
 Note: Module paths in `go.mod` may need to be updated once the repo remote is set.

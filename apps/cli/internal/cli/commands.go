@@ -1,15 +1,20 @@
 package cli
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
-	"time"
+
+	"github.com/lydakis/jul/cli/internal/client"
+	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 func Commands(version string) []Command {
 	return []Command{
+		newSyncCommand(),
 		newStatusCommand(),
 		newPromoteCommand(),
 		newChangesCommand(),
@@ -17,35 +22,85 @@ func Commands(version string) []Command {
 	}
 }
 
+func newSyncCommand() Command {
+	return Command{
+		Name:    "sync",
+		Summary: "Sync current commit to server",
+		Run: func(args []string) int {
+			fs := flag.NewFlagSet("sync", flag.ContinueOnError)
+			fs.SetOutput(os.Stdout)
+			_ = fs.Parse(args)
+
+			info, err := gitutil.CurrentCommit()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
+				return 1
+			}
+
+			payload := client.SyncPayload{
+				WorkspaceID: config.WorkspaceID(),
+				Repo:        info.RepoName,
+				Branch:      info.Branch,
+				CommitSHA:   info.SHA,
+				ChangeID:    info.ChangeID,
+				Message:     info.Message,
+				Author:      info.Author,
+				CommittedAt: info.Committed,
+			}
+
+			cli := client.New(config.BaseURL())
+			res, err := cli.Sync(payload)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
+				return 1
+			}
+
+			fmt.Fprintf(os.Stdout, "synced %s -> %s (change %s, rev %d)\n",
+				res.Revision.CommitSHA, res.Workspace.WorkspaceID, res.Change.ChangeID, res.Revision.RevIndex)
+			return 0
+		},
+	}
+}
+
 func newStatusCommand() Command {
 	return Command{
 		Name:    "status",
-		Summary: "Show sync and attestation status (stub)",
+		Summary: "Show sync and attestation status",
 		Run: func(args []string) int {
 			fs := flag.NewFlagSet("status", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			if *jsonOut {
-				payload := map[string]any{
-					"status":        "not_implemented",
-					"workspace":     "",
-					"sync_status":   "unknown",
-					"checked_at_utc": time.Now().UTC().Format(time.RFC3339),
-				}
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(payload); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+			info, err := gitutil.CurrentCommit()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
+				return 1
 			}
 
-			fmt.Fprintln(os.Stdout, "jul status (stub)")
-			fmt.Fprintln(os.Stdout, "  sync: unknown")
-			fmt.Fprintln(os.Stdout, "  attestation: unknown")
+			cli := client.New(config.BaseURL())
+			wsID := config.WorkspaceID()
+			workspace, err := cli.GetWorkspace(wsID)
+			if err != nil {
+				if httpErr, ok := err.(*client.HTTPError); ok && httpErr.Status == http.StatusNotFound {
+					workspace = client.Workspace{}
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to fetch workspace: %v\n", err)
+					return 1
+				}
+			}
+
+			att, err := cli.GetAttestation(info.SHA)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to fetch attestation: %v\n", err)
+				return 1
+			}
+
+			payload := output.BuildStatusPayload(wsID, info.RepoName, info.Branch, info.SHA, info.ChangeID, workspace, att)
+			if err := output.RenderStatus(os.Stdout, payload, *jsonOut); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to render status: %v\n", err)
+				return 1
+			}
 			return 0
 		},
 	}
@@ -54,7 +109,7 @@ func newStatusCommand() Command {
 func newPromoteCommand() Command {
 	return Command{
 		Name:    "promote",
-		Summary: "Promote a workspace to a branch (stub)",
+		Summary: "Promote a workspace to a branch",
 		Run: func(args []string) int {
 			fs := flag.NewFlagSet("promote", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
@@ -67,7 +122,24 @@ func newPromoteCommand() Command {
 				return 1
 			}
 
-			fmt.Fprintf(os.Stdout, "promote (stub): to=%s force=%t\n", *toBranch, *force)
+			info, err := gitutil.CurrentCommit()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
+				return 1
+			}
+
+			cli := client.New(config.BaseURL())
+			if err := cli.Promote(config.WorkspaceID(), *toBranch, info.SHA); err != nil {
+				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
+				return 1
+			}
+
+			if *force {
+				fmt.Fprintln(os.Stdout, "promote requested (force flag noted, server policy pending)")
+				return 0
+			}
+
+			fmt.Fprintln(os.Stdout, "promote requested")
 			return 0
 		},
 	}
@@ -76,11 +148,22 @@ func newPromoteCommand() Command {
 func newChangesCommand() Command {
 	return Command{
 		Name:    "changes",
-		Summary: "List changes (stub)",
+		Summary: "List changes",
 		Run: func(args []string) int {
 			_ = args
-			fmt.Fprintln(os.Stdout, "jul changes (stub)")
-			fmt.Fprintln(os.Stdout, "  no data (server integration not wired yet)")
+			cli := client.New(config.BaseURL())
+			changes, err := cli.ListChanges()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to fetch changes: %v\n", err)
+				return 1
+			}
+			if len(changes) == 0 {
+				fmt.Fprintln(os.Stdout, "No changes yet.")
+				return 0
+			}
+			for _, ch := range changes {
+				fmt.Fprintf(os.Stdout, "%s %s (rev %d, %s)\n", ch.ChangeID, ch.Title, ch.LatestRevision.RevIndex, ch.Status)
+			}
 			return 0
 		},
 	}

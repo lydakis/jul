@@ -1,0 +1,446 @@
+package storage
+
+import (
+	"context"
+	"crypto/sha1"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/oklog/ulid/v2"
+	_ "modernc.org/sqlite"
+)
+
+var ErrNotFound = errors.New("not found")
+
+const timeFormat = time.RFC3339
+
+type Store struct {
+	db *sql.DB
+}
+
+func Open(path string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := runMigrations(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return &Store{db: db}, nil
+}
+
+func (s *Store) Close() error {
+	return s.db.Close()
+}
+
+func (s *Store) RecordSync(ctx context.Context, payload SyncPayload) (SyncResult, error) {
+	if payload.WorkspaceID == "" || payload.CommitSHA == "" {
+		return SyncResult{}, fmt.Errorf("workspace_id and commit_sha are required")
+	}
+
+	if payload.ChangeID == "" {
+		payload.ChangeID = generateChangeID(payload.CommitSHA)
+	}
+
+	user, name := splitWorkspace(payload.WorkspaceID)
+	if user == "" || name == "" {
+		return SyncResult{}, fmt.Errorf("workspace_id must be in the form user/name")
+	}
+
+	commitMessage := strings.TrimSpace(payload.Message)
+	if commitMessage == "" {
+		commitMessage = "(no message)"
+	}
+
+	title := firstLine(commitMessage)
+	if title == "" {
+		title = "(no title)"
+	}
+
+	author := strings.TrimSpace(payload.Author)
+	if author == "" {
+		author = "unknown"
+	}
+
+	committedAt := payload.CommittedAt.UTC()
+	if committedAt.IsZero() {
+		committedAt = time.Now().UTC()
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var changeExists bool
+	row := tx.QueryRowContext(ctx, `SELECT change_id FROM changes WHERE change_id = ?`, payload.ChangeID)
+	var existingID string
+	if err := row.Scan(&existingID); err == nil {
+		changeExists = true
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return SyncResult{}, err
+	}
+
+	if !changeExists {
+		_, err = tx.ExecContext(ctx, `INSERT INTO changes (change_id, title, author, status, created_at, latest_rev_index, latest_commit_sha)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			payload.ChangeID, title, author, "draft", committedAt.Format(timeFormat), 0, "")
+		if err != nil {
+			return SyncResult{}, err
+		}
+	}
+
+	var revIndex int
+	var existingRev int
+	err = tx.QueryRowContext(ctx, `SELECT rev_index FROM revisions WHERE commit_sha = ?`, payload.CommitSHA).Scan(&existingRev)
+	if err == nil {
+		revIndex = existingRev
+	} else if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(rev_index), 0) FROM revisions WHERE change_id = ?`, payload.ChangeID).Scan(&revIndex); err != nil {
+			return SyncResult{}, err
+		}
+		revIndex++
+
+		_, err = tx.ExecContext(ctx, `INSERT INTO revisions (commit_sha, change_id, rev_index, author, message, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			payload.CommitSHA, payload.ChangeID, revIndex, author, commitMessage, committedAt.Format(timeFormat))
+		if err != nil {
+			return SyncResult{}, err
+		}
+	} else {
+		return SyncResult{}, err
+	}
+
+	_, err = tx.ExecContext(ctx, `UPDATE changes SET title = ?, author = ?, latest_rev_index = ?, latest_commit_sha = ? WHERE change_id = ?`,
+		title, author, revIndex, payload.CommitSHA, payload.ChangeID)
+	if err != nil {
+		return SyncResult{}, err
+	}
+
+	updatedAt := time.Now().UTC().Format(timeFormat)
+	_, err = tx.ExecContext(ctx, `INSERT INTO workspaces (workspace_id, user, name, repo, branch, last_commit_sha, last_change_id, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(workspace_id) DO UPDATE SET
+		user = excluded.user,
+		name = excluded.name,
+		repo = excluded.repo,
+		branch = excluded.branch,
+		last_commit_sha = excluded.last_commit_sha,
+		last_change_id = excluded.last_change_id,
+		updated_at = excluded.updated_at`,
+		payload.WorkspaceID, user, name, payload.Repo, payload.Branch, payload.CommitSHA, payload.ChangeID, updatedAt)
+	if err != nil {
+		return SyncResult{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return SyncResult{}, err
+	}
+
+	workspace := Workspace{
+		WorkspaceID:   payload.WorkspaceID,
+		User:          user,
+		Name:          name,
+		Repo:          payload.Repo,
+		Branch:        payload.Branch,
+		LastCommitSHA: payload.CommitSHA,
+		LastChangeID:  payload.ChangeID,
+		UpdatedAt:     time.Now().UTC(),
+	}
+
+	change := Change{
+		ChangeID:        payload.ChangeID,
+		Title:           title,
+		Author:          author,
+		CreatedAt:       committedAt,
+		Status:          "draft",
+		LatestRevIndex:  revIndex,
+		LatestCommitSHA: payload.CommitSHA,
+		LatestRevision: Revision{
+			RevIndex:  revIndex,
+			CommitSHA: payload.CommitSHA,
+		},
+	}
+
+	revision := Revision{
+		ChangeID:  payload.ChangeID,
+		RevIndex:  revIndex,
+		CommitSHA: payload.CommitSHA,
+		Author:    author,
+		Message:   commitMessage,
+		CreatedAt: committedAt,
+	}
+
+	return SyncResult{Workspace: workspace, Change: change, Revision: revision}, nil
+}
+
+func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT workspace_id, user, name, repo, branch, last_commit_sha, last_change_id, updated_at FROM workspaces ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Workspace
+	for rows.Next() {
+		var ws Workspace
+		var updatedAt string
+		if err := rows.Scan(&ws.WorkspaceID, &ws.User, &ws.Name, &ws.Repo, &ws.Branch, &ws.LastCommitSHA, &ws.LastChangeID, &updatedAt); err != nil {
+			return nil, err
+		}
+		ws.UpdatedAt = parseTime(updatedAt)
+		out = append(out, ws)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetWorkspace(ctx context.Context, id string) (Workspace, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT workspace_id, user, name, repo, branch, last_commit_sha, last_change_id, updated_at FROM workspaces WHERE workspace_id = ?`, id)
+	var ws Workspace
+	var updatedAt string
+	if err := row.Scan(&ws.WorkspaceID, &ws.User, &ws.Name, &ws.Repo, &ws.Branch, &ws.LastCommitSHA, &ws.LastChangeID, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Workspace{}, ErrNotFound
+		}
+		return Workspace{}, err
+	}
+	ws.UpdatedAt = parseTime(updatedAt)
+	return ws, nil
+}
+
+func (s *Store) ListChanges(ctx context.Context) ([]Change, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT change_id, title, author, status, created_at, latest_rev_index, latest_commit_sha,
+		(SELECT COUNT(1) FROM revisions r WHERE r.change_id = changes.change_id) as revision_count
+		FROM changes ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Change
+	for rows.Next() {
+		var ch Change
+		var createdAt string
+		if err := rows.Scan(&ch.ChangeID, &ch.Title, &ch.Author, &ch.Status, &createdAt, &ch.LatestRevIndex, &ch.LatestCommitSHA, &ch.RevisionCount); err != nil {
+			return nil, err
+		}
+		ch.CreatedAt = parseTime(createdAt)
+		ch.LatestRevision = Revision{RevIndex: ch.LatestRevIndex, CommitSHA: ch.LatestCommitSHA}
+		out = append(out, ch)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetChange(ctx context.Context, changeID string) (Change, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT change_id, title, author, status, created_at, latest_rev_index, latest_commit_sha FROM changes WHERE change_id = ?`, changeID)
+	var ch Change
+	var createdAt string
+	if err := row.Scan(&ch.ChangeID, &ch.Title, &ch.Author, &ch.Status, &createdAt, &ch.LatestRevIndex, &ch.LatestCommitSHA); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Change{}, ErrNotFound
+		}
+		return Change{}, err
+	}
+	ch.CreatedAt = parseTime(createdAt)
+	ch.LatestRevision = Revision{RevIndex: ch.LatestRevIndex, CommitSHA: ch.LatestCommitSHA}
+	return ch, nil
+}
+
+func (s *Store) ListRevisions(ctx context.Context, changeID string) ([]Revision, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT change_id, rev_index, commit_sha, author, message, created_at FROM revisions WHERE change_id = ? ORDER BY rev_index ASC`, changeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Revision
+	for rows.Next() {
+		var rev Revision
+		var createdAt string
+		if err := rows.Scan(&rev.ChangeID, &rev.RevIndex, &rev.CommitSHA, &rev.Author, &rev.Message, &createdAt); err != nil {
+			return nil, err
+		}
+		rev.CreatedAt = parseTime(createdAt)
+		out = append(out, rev)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetRevisionByCommit(ctx context.Context, commitSHA string) (Revision, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT change_id, rev_index, commit_sha, author, message, created_at FROM revisions WHERE commit_sha = ?`, commitSHA)
+	var rev Revision
+	var createdAt string
+	if err := row.Scan(&rev.ChangeID, &rev.RevIndex, &rev.CommitSHA, &rev.Author, &rev.Message, &createdAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Revision{}, ErrNotFound
+		}
+		return Revision{}, err
+	}
+	rev.CreatedAt = parseTime(createdAt)
+	return rev, nil
+}
+
+func (s *Store) ListAttestations(ctx context.Context, commitSHA, changeID, status string) ([]Attestation, error) {
+	query := `SELECT attestation_id, commit_sha, change_id, type, status, started_at, finished_at, signals_json, created_at FROM attestations WHERE 1=1`
+	args := []any{}
+	if commitSHA != "" {
+		query += " AND commit_sha = ?"
+		args = append(args, commitSHA)
+	}
+	if changeID != "" {
+		query += " AND change_id = ?"
+		args = append(args, changeID)
+	}
+	if status != "" {
+		query += " AND status = ?"
+		args = append(args, status)
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Attestation
+	for rows.Next() {
+		var att Attestation
+		var startedAt, finishedAt, createdAt string
+		if err := rows.Scan(&att.AttestationID, &att.CommitSHA, &att.ChangeID, &att.Type, &att.Status, &startedAt, &finishedAt, &att.SignalsJSON, &createdAt); err != nil {
+			return nil, err
+		}
+		att.StartedAt = parseTime(startedAt)
+		att.FinishedAt = parseTime(finishedAt)
+		att.CreatedAt = parseTime(createdAt)
+		out = append(out, att)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateAttestation(ctx context.Context, att Attestation) (Attestation, error) {
+	if att.AttestationID == "" {
+		att.AttestationID = ulid.Make().String()
+	}
+	if att.CreatedAt.IsZero() {
+		att.CreatedAt = time.Now().UTC()
+	}
+	if att.StartedAt.IsZero() {
+		att.StartedAt = att.CreatedAt
+	}
+	if att.FinishedAt.IsZero() {
+		att.FinishedAt = att.CreatedAt
+	}
+
+	_, err := s.db.ExecContext(ctx, `INSERT INTO attestations (attestation_id, commit_sha, change_id, type, status, started_at, finished_at, signals_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		att.AttestationID, att.CommitSHA, att.ChangeID, att.Type, att.Status,
+		att.StartedAt.Format(timeFormat), att.FinishedAt.Format(timeFormat), att.SignalsJSON, att.CreatedAt.Format(timeFormat))
+	if err != nil {
+		return Attestation{}, err
+	}
+	return att, nil
+}
+
+func (s *Store) GetLatestAttestation(ctx context.Context, commitSHA string) (Attestation, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT attestation_id, commit_sha, change_id, type, status, started_at, finished_at, signals_json, created_at
+		FROM attestations WHERE commit_sha = ? ORDER BY created_at DESC LIMIT 1`, commitSHA)
+	var att Attestation
+	var startedAt, finishedAt, createdAt string
+	if err := row.Scan(&att.AttestationID, &att.CommitSHA, &att.ChangeID, &att.Type, &att.Status, &startedAt, &finishedAt, &att.SignalsJSON, &createdAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Attestation{}, ErrNotFound
+		}
+		return Attestation{}, err
+	}
+	att.StartedAt = parseTime(startedAt)
+	att.FinishedAt = parseTime(finishedAt)
+	att.CreatedAt = parseTime(createdAt)
+	return att, nil
+}
+
+func (s *Store) InsertEvent(ctx context.Context, evt Event) (Event, error) {
+	if evt.EventID == "" {
+		evt.EventID = ulid.Make().String()
+	}
+	if evt.CreatedAt.IsZero() {
+		evt.CreatedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO events (event_id, type, data_json, created_at) VALUES (?, ?, ?, ?)`,
+		evt.EventID, evt.Type, evt.DataJSON, evt.CreatedAt.Format(timeFormat))
+	if err != nil {
+		return Event{}, err
+	}
+	return evt, nil
+}
+
+func (s *Store) ListEventsSince(ctx context.Context, since time.Time, limit int) ([]Event, error) {
+	query := `SELECT event_id, type, data_json, created_at FROM events WHERE created_at >= ? ORDER BY created_at ASC`
+	args := []any{since.Format(timeFormat)}
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Event
+	for rows.Next() {
+		var evt Event
+		var createdAt string
+		if err := rows.Scan(&evt.EventID, &evt.Type, &evt.DataJSON, &createdAt); err != nil {
+			return nil, err
+		}
+		evt.CreatedAt = parseTime(createdAt)
+		out = append(out, evt)
+	}
+	return out, rows.Err()
+}
+
+func parseTime(value string) time.Time {
+	parsed, err := time.Parse(timeFormat, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+func generateChangeID(seed string) string {
+	h := sha1.Sum([]byte(fmt.Sprintf("%s-%d", seed, time.Now().UnixNano())))
+	return "I" + hex.EncodeToString(h[:])
+}
+
+func splitWorkspace(id string) (string, string) {
+	parts := strings.SplitN(id, "/", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+}
+
+func firstLine(message string) string {
+	lines := strings.Split(message, "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(lines[0])
+}
