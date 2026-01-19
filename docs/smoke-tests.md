@@ -1,6 +1,6 @@
 # Smoke Tests
 
-These integration tests spin up a real Jul server, build the CLI, create a git repo, and exercise sync + reflog.
+These integration tests spin up a real Jul server, build the CLI, create a git repo, and exercise sync + reflog + CI attestation.
 
 ## Run
 

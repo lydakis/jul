@@ -22,6 +22,7 @@ func Commands(version string) []Command {
 		newReflogCommand(),
 		newPromoteCommand(),
 		newChangesCommand(),
+		newCICommand(),
 		newHooksCommand(),
 		newVersionCommand(version),
 	}

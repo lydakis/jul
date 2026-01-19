@@ -94,3 +94,15 @@ func TestCurrentCommitUsesCommitTime(t *testing.T) {
 		t.Fatalf("expected commit time %s, got %s", commitTime.Format(time.RFC3339), info.Committed.Format(time.RFC3339))
 	}
 }
+
+func TestFallbackChangeIDDeterministic(t *testing.T) {
+	commit := "abc123"
+	first := FallbackChangeID(commit)
+	second := FallbackChangeID(commit)
+	if first != second {
+		t.Fatalf("expected deterministic change id, got %s and %s", first, second)
+	}
+	if first == "" || first[0] != 'I' {
+		t.Fatalf("expected Change-Id with I prefix, got %s", first)
+	}
+}

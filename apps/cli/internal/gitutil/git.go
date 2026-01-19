@@ -2,6 +2,8 @@ package gitutil
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -108,6 +110,11 @@ func repoNameFromTopLevel(path string) string {
 		return ""
 	}
 	return parts[len(parts)-1]
+}
+
+func FallbackChangeID(commitSHA string) string {
+	hash := sha1.Sum([]byte(commitSHA))
+	return "I" + hex.EncodeToString(hash[:])
 }
 
 func git(args ...string) (string, error) {

@@ -26,6 +26,9 @@ go run ./cmd/jul reflog
 # JSON output
 go run ./cmd/jul sync --json
 go run ./cmd/jul changes --json
+
+# Run local CI and record attestation
+go run ./cmd/jul ci run --cmd "go test ./..."
 ```
 
 ## Environment

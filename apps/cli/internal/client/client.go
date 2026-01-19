@@ -135,6 +135,14 @@ func (c *Client) GetAttestation(commitSHA string) (*Attestation, error) {
 	return &att, nil
 }
 
+func (c *Client) CreateAttestation(att Attestation) (Attestation, error) {
+	var created Attestation
+	if err := c.doJSON(http.MethodPost, "/api/v1/attestations", att, &created); err != nil {
+		return Attestation{}, err
+	}
+	return created, nil
+}
+
 func (c *Client) Promote(workspaceID, targetBranch, commitSHA string, force bool) error {
 	payload := map[string]any{
 		"target_branch": targetBranch,

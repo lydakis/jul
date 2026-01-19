@@ -57,6 +57,9 @@ func TestSmokeSyncAndReflog(t *testing.T) {
 	sha2 := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
 	runCmd(t, repo, env, julPath, "sync")
 
+	// Record a CI attestation
+	runCmd(t, repo, env, julPath, "ci", "run", "--cmd", "true")
+
 	// CLI reflog should include latest commit
 	reflogOut := runCmd(t, repo, env, julPath, "reflog", "--limit", "5")
 	if !strings.Contains(reflogOut, sha2) {
@@ -96,5 +99,27 @@ func TestSmokeSyncAndReflog(t *testing.T) {
 	}
 	if !foundKeep {
 		t.Fatalf("expected keep entry for %s", sha1)
+	}
+
+	attReq, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/commits/%s/attestation", baseURL, sha2), nil)
+	if err != nil {
+		t.Fatalf("failed to build attestation request: %v", err)
+	}
+	attResp, err := http.DefaultClient.Do(attReq)
+	if err != nil {
+		t.Fatalf("attestation request failed: %v", err)
+	}
+	defer attResp.Body.Close()
+	if attResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", attResp.StatusCode)
+	}
+	var att struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(attResp.Body).Decode(&att); err != nil {
+		t.Fatalf("failed to decode attestation: %v", err)
+	}
+	if att.Status != "pass" {
+		t.Fatalf("expected attestation status pass, got %s", att.Status)
 	}
 }
