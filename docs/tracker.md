@@ -13,6 +13,7 @@
 - [x] Add promotion policy checks + actual ref updates
 - [x] Add attestation ingestion from CI runner
 - [x] Add JSON output modes to CLI commands (`changes`, `sync`)
+- [x] Add CI trigger endpoint + query API
 
 ## Later
 - [ ] Suggestions API + refs

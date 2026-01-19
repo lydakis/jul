@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -78,6 +79,15 @@ type ReflogEntry struct {
 	ChangeID    string    `json:"change_id"`
 	CreatedAt   time.Time `json:"created_at"`
 	Source      string    `json:"source"`
+}
+
+type QueryResult struct {
+	CommitSHA         string    `json:"commit_sha"`
+	ChangeID          string    `json:"change_id"`
+	Author            string    `json:"author"`
+	Message           string    `json:"message"`
+	CreatedAt         time.Time `json:"created_at"`
+	AttestationStatus string    `json:"attestation_status,omitempty"`
 }
 
 type SyncPayload struct {
@@ -164,6 +174,32 @@ func (c *Client) Reflog(workspaceID string, limit int) ([]ReflogEntry, error) {
 	return entries, nil
 }
 
+func (c *Client) Query(tests, changeID, author string, limit int) ([]QueryResult, error) {
+	var results []QueryResult
+	path := "/api/v1/query"
+	query := make([]string, 0, 4)
+	if tests != "" {
+		query = append(query, "tests="+urlQueryEscape(tests))
+	}
+	if changeID != "" {
+		query = append(query, "change_id="+urlQueryEscape(changeID))
+	}
+	if author != "" {
+		query = append(query, "author="+urlQueryEscape(author))
+	}
+	if limit > 0 {
+		query = append(query, fmt.Sprintf("limit=%d", limit))
+	}
+	if len(query) > 0 {
+		path = path + "?" + strings.Join(query, "&")
+	}
+
+	if err := c.doJSON(http.MethodGet, path, nil, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func (c *Client) doJSON(method, path string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -208,4 +244,8 @@ func isNotFound(err error) bool {
 		return httpErr.Status == http.StatusNotFound
 	}
 	return strings.Contains(err.Error(), "not found")
+}
+
+func urlQueryEscape(value string) string {
+	return url.QueryEscape(value)
 }

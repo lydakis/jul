@@ -206,3 +206,70 @@ func TestKeepRefsInsertedOnWorkspaceMove(t *testing.T) {
 		t.Fatalf("expected keep ref for %s, got %s", first.CommitSHA, refs[0].CommitSHA)
 	}
 }
+
+func TestQueryCommitsByStatus(t *testing.T) {
+	store := newTestStore(t)
+	first := SyncPayload{
+		WorkspaceID: "alice/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-a",
+		ChangeID:    "I5555555555555555555555555555555555555555",
+		Message:     "feat: first",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC(),
+	}
+	second := SyncPayload{
+		WorkspaceID: "alice/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-b",
+		ChangeID:    "I5555555555555555555555555555555555555555",
+		Message:     "feat: second",
+		Author:      "alice",
+		CommittedAt: time.Now().UTC().Add(1 * time.Minute),
+	}
+
+	if _, err := store.RecordSync(context.Background(), first); err != nil {
+		t.Fatalf("RecordSync first failed: %v", err)
+	}
+	if _, err := store.RecordSync(context.Background(), second); err != nil {
+		t.Fatalf("RecordSync second failed: %v", err)
+	}
+
+	_, err := store.CreateAttestation(context.Background(), Attestation{
+		CommitSHA:   first.CommitSHA,
+		ChangeID:    first.ChangeID,
+		Type:        "ci",
+		Status:      "pass",
+		StartedAt:   time.Now().UTC(),
+		FinishedAt:  time.Now().UTC(),
+		SignalsJSON: "{}",
+	})
+	if err != nil {
+		t.Fatalf("CreateAttestation failed: %v", err)
+	}
+	_, err = store.CreateAttestation(context.Background(), Attestation{
+		CommitSHA:   second.CommitSHA,
+		ChangeID:    second.ChangeID,
+		Type:        "ci",
+		Status:      "fail",
+		StartedAt:   time.Now().UTC(),
+		FinishedAt:  time.Now().UTC(),
+		SignalsJSON: "{}",
+	})
+	if err != nil {
+		t.Fatalf("CreateAttestation failed: %v", err)
+	}
+
+	results, err := store.QueryCommits(context.Background(), QueryFilters{Tests: "pass", Limit: 10})
+	if err != nil {
+		t.Fatalf("QueryCommits failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].CommitSHA != first.CommitSHA {
+		t.Fatalf("expected commit %s, got %s", first.CommitSHA, results[0].CommitSHA)
+	}
+}

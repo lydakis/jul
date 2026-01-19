@@ -26,4 +26,6 @@ go run ./cmd/jul-server --addr :8000 --db ./data/jul.db --repos ./repos
 - `GET /api/v1/commits/{sha}` — commit metadata
 - `GET /api/v1/commits/{sha}/attestation` — latest attestation
 - `GET/POST /api/v1/attestations` — list/create attestations
+- `POST /api/v1/ci/trigger` — run CI profile for commit
+- `GET /api/v1/query` — query commits by filters
 - `GET /events/stream` — SSE stream

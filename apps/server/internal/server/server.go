@@ -87,6 +87,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/changes/", s.handleChangeRoutes)
 	s.mux.HandleFunc("/api/v1/commits/", s.handleCommitRoutes)
 	s.mux.HandleFunc("/api/v1/attestations", s.handleAttestations)
+	s.mux.HandleFunc("/api/v1/ci/trigger", s.handleCITrigger)
+	s.mux.HandleFunc("/api/v1/query", s.handleQuery)
 	s.mux.HandleFunc("/events/stream", s.handleEvents)
 }
 
@@ -400,6 +402,19 @@ func updateRef(repoPath, branch, commitSHA string, force bool) error {
 	return nil
 }
 
+func ciProfileCommands(profile string) ([]string, bool) {
+	switch strings.ToLower(profile) {
+	case "unit":
+		return []string{"go test ./..."}, true
+	case "lint":
+		return []string{"go vet ./..."}, true
+	case "full":
+		return []string{"go test ./...", "go vet ./..."}, true
+	default:
+		return nil, false
+	}
+}
+
 func readRef(repoPath, ref string) (string, bool, error) {
 	cmd := exec.Command("git", "--git-dir", repoPath, "rev-parse", "--verify", "--quiet", ref)
 	output, err := cmd.CombinedOutput()
@@ -564,6 +579,147 @@ func (s *Server) handleAttestations(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleCITrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		CommitSHA string `json:"commit_sha"`
+		Profile   string `json:"profile"`
+		Repo      string `json:"repo"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.CommitSHA == "" {
+		writeError(w, http.StatusBadRequest, "commit_sha required")
+		return
+	}
+
+	profile := strings.TrimSpace(body.Profile)
+	if profile == "" {
+		profile = "unit"
+	}
+	commands, ok := ciProfileCommands(profile)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown profile")
+		return
+	}
+
+	repoName := strings.TrimSpace(body.Repo)
+	if repoName == "" {
+		repo, err := s.store.FindRepoForCommit(r.Context(), body.CommitSHA)
+		if err != nil {
+			if err == storage.ErrNotFound {
+				writeError(w, http.StatusNotFound, "repo not found for commit")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		repoName = repo
+	}
+
+	repoPath, err := s.repoPath(repoName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := os.Stat(repoPath); err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	rev, err := s.store.GetRevisionByCommit(r.Context(), body.CommitSHA)
+	if err != nil {
+		if err == storage.ErrNotFound {
+			writeError(w, http.StatusNotFound, "commit not tracked")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.emitEvent(r.Context(), "ci.started", map[string]any{
+		"commit_sha": body.CommitSHA,
+		"profile":    profile,
+	})
+
+	result, err := runCI(repoPath, body.CommitSHA, commands)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	signals, err := json.Marshal(result)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode signals")
+		return
+	}
+
+	att, err := s.store.CreateAttestation(r.Context(), storage.Attestation{
+		CommitSHA:   body.CommitSHA,
+		ChangeID:    rev.ChangeID,
+		Type:        "ci",
+		Status:      result.Status,
+		StartedAt:   result.StartedAt,
+		FinishedAt:  result.FinishedAt,
+		SignalsJSON: string(signals),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.emitEvent(r.Context(), "ci.finished", map[string]any{
+		"commit_sha": body.CommitSHA,
+		"status":     att.Status,
+	})
+
+	writeJSON(w, http.StatusCreated, att)
+}
+
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	tests := strings.TrimSpace(r.URL.Query().Get("tests"))
+	if tests != "" && tests != "pass" && tests != "fail" {
+		writeError(w, http.StatusBadRequest, "tests must be pass or fail")
+		return
+	}
+
+	limit := 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+
+	filters := storage.QueryFilters{
+		Tests:    tests,
+		ChangeID: strings.TrimSpace(r.URL.Query().Get("change_id")),
+		Author:   strings.TrimSpace(r.URL.Query().Get("author")),
+		Limit:    limit,
+	}
+
+	results, err := s.store.QueryCommits(r.Context(), filters)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

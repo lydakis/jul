@@ -54,6 +54,22 @@ type KeepRef struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type QueryFilters struct {
+	Tests    string
+	ChangeID string
+	Author   string
+	Limit    int
+}
+
+type QueryResult struct {
+	CommitSHA         string    `json:"commit_sha"`
+	ChangeID          string    `json:"change_id"`
+	Author            string    `json:"author"`
+	Message           string    `json:"message"`
+	CreatedAt         time.Time `json:"created_at"`
+	AttestationStatus string    `json:"attestation_status,omitempty"`
+}
+
 type Event struct {
 	EventID   string    `json:"event_id"`
 	Type      string    `json:"type"`

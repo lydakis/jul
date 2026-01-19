@@ -509,6 +509,64 @@ func (s *Store) ListKeepRefs(ctx context.Context, workspaceID string, limit int)
 	return out, rows.Err()
 }
 
+func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]QueryResult, error) {
+	query := `SELECT r.commit_sha, r.change_id, r.author, r.message, r.created_at,
+		(SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS att_status
+		FROM revisions r WHERE 1=1`
+	args := []any{}
+
+	if filters.ChangeID != "" {
+		query += " AND r.change_id = ?"
+		args = append(args, filters.ChangeID)
+	}
+	if filters.Author != "" {
+		query += " AND r.author LIKE ?"
+		args = append(args, "%"+filters.Author+"%")
+	}
+	if filters.Tests != "" {
+		query += " AND (SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) = ?"
+		args = append(args, filters.Tests)
+	}
+
+	query += " ORDER BY r.created_at DESC"
+	limit := filters.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	query += " LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []QueryResult
+	for rows.Next() {
+		var res QueryResult
+		var createdAt string
+		if err := rows.Scan(&res.CommitSHA, &res.ChangeID, &res.Author, &res.Message, &createdAt, &res.AttestationStatus); err != nil {
+			return nil, err
+		}
+		res.CreatedAt = parseTime(createdAt)
+		out = append(out, res)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) FindRepoForCommit(ctx context.Context, commitSHA string) (string, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT repo FROM workspaces WHERE last_commit_sha = ? ORDER BY updated_at DESC LIMIT 1`, commitSHA)
+	var repo string
+	if err := row.Scan(&repo); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return repo, nil
+}
+
 func parseTime(value string) time.Time {
 	parsed, err := time.Parse(timeFormat, value)
 	if err != nil {

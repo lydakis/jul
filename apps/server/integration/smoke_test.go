@@ -122,4 +122,33 @@ func TestSmokeSyncAndReflog(t *testing.T) {
 	if att.Status != "pass" {
 		t.Fatalf("expected attestation status pass, got %s", att.Status)
 	}
+
+	queryReq, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/query?tests=pass&limit=5", baseURL), nil)
+	if err != nil {
+		t.Fatalf("failed to build query request: %v", err)
+	}
+	queryResp, err := http.DefaultClient.Do(queryReq)
+	if err != nil {
+		t.Fatalf("query request failed: %v", err)
+	}
+	defer queryResp.Body.Close()
+	if queryResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", queryResp.StatusCode)
+	}
+	var queryResults []struct {
+		CommitSHA string `json:"commit_sha"`
+	}
+	if err := json.NewDecoder(queryResp.Body).Decode(&queryResults); err != nil {
+		t.Fatalf("failed to decode query: %v", err)
+	}
+	found := false
+	for _, res := range queryResults {
+		if res.CommitSHA == sha2 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected query to include %s", sha2)
+	}
 }
