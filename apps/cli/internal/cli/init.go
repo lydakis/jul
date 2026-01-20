@@ -29,7 +29,6 @@ func newInitCommand() Command {
 			_ = fs.Parse(args)
 
 			repoName := strings.TrimSpace(fs.Arg(0))
-
 			repoRoot, err := gitutil.RepoTopLevel()
 			if err != nil {
 				if err := runGit(".", "init"); err != nil {
@@ -45,6 +44,12 @@ func newInitCommand() Command {
 
 			if repoName == "" {
 				repoName = filepath.Base(repoRoot)
+			} else {
+				base := filepath.Base(repoRoot)
+				if !strings.EqualFold(base, repoName) && !strings.EqualFold(base+".git", repoName) {
+					fmt.Fprintf(os.Stderr, "repo name %q does not match working tree %q\n", repoName, base)
+					return 1
+				}
 			}
 			if repoName == "" {
 				fmt.Fprintln(os.Stderr, "repo name required")
@@ -57,12 +62,15 @@ func newInitCommand() Command {
 			}
 			baseURL = strings.TrimRight(baseURL, "/")
 
+			var cloneURL string
 			if baseURL != "" && !*noCreate {
 				cli := client.New(baseURL)
-				if _, err := cli.CreateRepo(repoName); err != nil {
+				created, err := cli.CreateRepo(repoName)
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "failed to create repo on server: %v\n", err)
 					return 1
 				}
+				cloneURL = created.CloneURL
 			}
 
 			if baseURL != "" {
@@ -85,7 +93,10 @@ func newInitCommand() Command {
 
 			if baseURL != "" && strings.TrimSpace(*remote) != "" {
 				remoteName := strings.TrimSpace(*remote)
-				remoteURL := fmt.Sprintf("%s/%s.git", baseURL, repoName)
+				remoteURL := cloneURL
+				if remoteURL == "" {
+					remoteURL = buildRemoteURL(baseURL, repoName)
+				}
 				if err := runGit(repoRoot, "config", fmt.Sprintf("remote.%s.url", remoteName), remoteURL); err != nil {
 					fmt.Fprintf(os.Stderr, "failed to set remote url: %v\n", err)
 					return 1
@@ -126,4 +137,16 @@ func runGit(dir string, args ...string) error {
 		return fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func buildRemoteURL(baseURL, repoName string) string {
+	base := strings.TrimRight(baseURL, "/")
+	name := strings.TrimSpace(repoName)
+	if name == "" {
+		return base
+	}
+	if strings.HasSuffix(name, ".git") {
+		return base + "/" + name
+	}
+	return base + "/" + name + ".git"
 }
