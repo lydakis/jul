@@ -44,12 +44,6 @@ func newInitCommand() Command {
 
 			if repoName == "" {
 				repoName = filepath.Base(repoRoot)
-			} else {
-				base := filepath.Base(repoRoot)
-				if !strings.EqualFold(base, repoName) && !strings.EqualFold(base+".git", repoName) {
-					fmt.Fprintf(os.Stderr, "repo name %q does not match working tree %q\n", repoName, base)
-					return 1
-				}
 			}
 			if repoName == "" {
 				fmt.Fprintln(os.Stderr, "repo name required")
@@ -89,6 +83,10 @@ func newInitCommand() Command {
 					fmt.Fprintf(os.Stderr, "failed to set jul.workspace: %v\n", err)
 					return 1
 				}
+			}
+			if err := runGit(repoRoot, "config", "jul.reponame", repoName); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to set jul.reponame: %v\n", err)
+				return 1
 			}
 
 			if baseURL != "" && strings.TrimSpace(*remote) != "" {

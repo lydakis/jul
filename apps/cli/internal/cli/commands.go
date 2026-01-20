@@ -17,6 +17,7 @@ import (
 
 func Commands(version string) []Command {
 	return []Command{
+		newCloneCommand(),
 		newInitCommand(),
 		newSyncCommand(),
 		newStatusCommand(),
@@ -44,6 +45,10 @@ func newSyncCommand() Command {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
 				return 1
+			}
+			repoName := config.RepoName()
+			if repoName != "" {
+				info.RepoName = repoName
 			}
 
 			payload := client.SyncPayload{
@@ -95,6 +100,10 @@ func newStatusCommand() Command {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
 				return 1
+			}
+			repoName := config.RepoName()
+			if repoName != "" {
+				info.RepoName = repoName
 			}
 
 			cli := client.New(config.BaseURL())

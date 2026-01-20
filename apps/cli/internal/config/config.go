@@ -42,6 +42,16 @@ func WorkspaceID() string {
 	return name + "/" + host
 }
 
+func RepoName() string {
+	if cfg := gitConfigValue("jul.reponame"); cfg != "" {
+		return cfg
+	}
+	if cfg := gitConfigValue("jul.repo"); cfg != "" {
+		return cfg
+	}
+	return ""
+}
+
 func hostnameFallback() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
