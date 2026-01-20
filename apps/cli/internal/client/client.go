@@ -158,6 +158,15 @@ func (c *Client) Sync(payload SyncPayload) (SyncResult, error) {
 	return result, nil
 }
 
+func (c *Client) Checkpoint(payload SyncPayload) (SyncResult, error) {
+	var result SyncResult
+	path := "/api/v1/workspaces/" + payload.WorkspaceID + "/checkpoint"
+	if err := c.doJSON(http.MethodPost, path, payload, &result); err != nil {
+		return SyncResult{}, err
+	}
+	return result, nil
+}
+
 func (c *Client) GetWorkspace(id string) (Workspace, error) {
 	var ws Workspace
 	if err := c.doJSON(http.MethodGet, "/api/v1/workspaces/"+id, nil, &ws); err != nil {

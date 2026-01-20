@@ -21,6 +21,7 @@ func Commands(version string) []Command {
 		newInitCommand(),
 		newConfigureCommand(),
 		newWorkspaceCommand(),
+		newCheckpointCommand(),
 		newSyncCommand(),
 		newStatusCommand(),
 		newReflogCommand(),

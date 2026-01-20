@@ -180,6 +180,11 @@ func (s *Server) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handleReflog(w, r, id)
 		return
 	}
+	if len(parts) >= 3 && parts[len(parts)-1] == "checkpoint" {
+		id := strings.Join(parts[:len(parts)-1], "/")
+		s.handleCheckpoint(w, r, id)
+		return
+	}
 
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -196,6 +201,39 @@ func (s *Server) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, workspace)
+}
+
+func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload storage.SyncPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if payload.WorkspaceID == "" {
+		payload.WorkspaceID = workspaceID
+	}
+	if payload.WorkspaceID != workspaceID {
+		writeError(w, http.StatusBadRequest, "workspace_id mismatch")
+		return
+	}
+
+	result, err := s.store.RecordSync(r.Context(), payload)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.emitEvent(r.Context(), "checkpoint.created", map[string]any{
+		"workspace_id": payload.WorkspaceID,
+		"commit_sha":   payload.CommitSHA,
+		"change_id":    payload.ChangeID,
+	})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request, workspaceID string) {

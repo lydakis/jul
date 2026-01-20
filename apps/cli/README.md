@@ -45,6 +45,9 @@ go run ./cmd/jul ci run --cmd "go test ./..." --coverage-line 82.5
 # Query recent passing commits with coverage
 go run ./cmd/jul query --tests pass --compiles true --coverage-min 80 --limit 5
 
+# Create a checkpoint for the current commit
+go run ./cmd/jul checkpoint
+
 # List suggestions
 go run ./cmd/jul suggestions --status open
 

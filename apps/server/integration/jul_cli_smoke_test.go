@@ -37,7 +37,7 @@ func TestSmokeJulCLIFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "commit", "-m", "feat: first")
 	sha1 := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
 	runCmd(t, repo, nil, "git", "push", "jul", "main")
-	runCmd(t, repo, env, julPath, "sync")
+	runCmd(t, repo, env, julPath, "checkpoint")
 
 	// Commit 2 (suggestion)
 	writeFile(t, repo, "README.md", "hello\nworld\n")
@@ -45,7 +45,7 @@ func TestSmokeJulCLIFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "commit", "-m", "fix: suggestion")
 	sha2 := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
 	runCmd(t, repo, nil, "git", "push", "jul", "main")
-	runCmd(t, repo, env, julPath, "sync")
+	runCmd(t, repo, env, julPath, "checkpoint")
 
 	runCmd(t, repo, env, julPath, "ci", "run", "--cmd", "true", "--coverage-line", "85")
 

@@ -239,6 +239,38 @@ func TestCITriggerMissingRepo(t *testing.T) {
 	}
 }
 
+func TestCheckpointEndpoint(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	payload := storage.SyncPayload{
+		WorkspaceID: "bob/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "abc123",
+		ChangeID:    "I9999999999999999999999999999999999999999",
+		Message:     "feat: checkpoint",
+		Author:      "bob",
+		CommittedAt: time.Now().UTC(),
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/bob/laptop/checkpoint", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleWorkspaceRoutes(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var res storage.SyncResult
+	if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if res.Revision.CommitSHA != payload.CommitSHA {
+		t.Fatalf("expected commit %s, got %s", payload.CommitSHA, res.Revision.CommitSHA)
+	}
+}
+
 func TestReposEndpointCreatesRepo(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer store.Close()
