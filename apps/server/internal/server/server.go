@@ -224,6 +224,10 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request, worksp
 
 	result, err := s.store.RecordSync(r.Context(), payload)
 	if err != nil {
+		if strings.Contains(err.Error(), "workspace_id") || strings.Contains(err.Error(), "commit_sha") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
