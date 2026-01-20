@@ -43,15 +43,6 @@ func WorkspaceID() string {
 	if cfg := userConfigValue("workspace.id"); cfg != "" {
 		return cfg
 	}
-	if cfg := userConfigValue("workspace.default_name"); cfg != "" {
-		user := ServerUser()
-		if user == "" {
-			user = usernameFallback()
-		}
-		if user != "" {
-			return user + "/" + cfg
-		}
-	}
 	if cfg := userConfigValue("workspace"); cfg != "" {
 		return cfg
 	}
@@ -60,6 +51,15 @@ func WorkspaceID() string {
 	}
 	if cfg := gitConfigValue("jul.workspace"); cfg != "" {
 		return cfg
+	}
+	if cfg := userConfigValue("workspace.default_name"); cfg != "" {
+		user := ServerUser()
+		if user == "" {
+			user = usernameFallback()
+		}
+		if user != "" {
+			return user + "/" + cfg
+		}
 	}
 
 	user := usernameFallback()
