@@ -19,6 +19,10 @@ go run ./cmd/jul configure
 ## Configurable defaults
 # Set create_remote default in ~/.config/jul/config.toml (via `jul configure`)
 
+# Switch or list workspaces
+go run ./cmd/jul ws list
+go run ./cmd/jul ws set feature-auth
+
 # Status
 JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul status
 

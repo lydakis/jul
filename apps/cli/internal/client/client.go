@@ -174,6 +174,14 @@ func (c *Client) ListChanges() ([]Change, error) {
 	return changes, nil
 }
 
+func (c *Client) ListWorkspaces() ([]Workspace, error) {
+	var workspaces []Workspace
+	if err := c.doJSON(http.MethodGet, "/api/v1/workspaces", nil, &workspaces); err != nil {
+		return nil, err
+	}
+	return workspaces, nil
+}
+
 func (c *Client) GetAttestation(commitSHA string) (*Attestation, error) {
 	var att Attestation
 	if err := c.doJSON(http.MethodGet, "/api/v1/commits/"+commitSHA+"/attestation", nil, &att); err != nil {

@@ -20,6 +20,7 @@ func Commands(version string) []Command {
 		newCloneCommand(),
 		newInitCommand(),
 		newConfigureCommand(),
+		newWorkspaceCommand(),
 		newSyncCommand(),
 		newStatusCommand(),
 		newReflogCommand(),

@@ -22,9 +22,9 @@
 - [ ] CLI-only bootstrap (`jul init` done, `jul clone` pending)
 - [x] CLI config wizard (agent/provider selection, default server, workspace)
 - [ ] Agent-backed suggestions/review flow (auto-suggest on sync/CI) - config stub in place
-- [ ] Align CLI config format with v0.2 spec (server/workspace/init sections)
+- [x] Align CLI config format with v0.2 spec (server/workspace/init sections)
 - [ ] Implement draft → checkpoint → promote flow (v0.2)
-- [ ] Workspace commands (jul ws, default @)
+- [ ] Workspace commands (jul ws, default @) - list/set done, switch/rename/delete pending
 - [ ] Checkpoint APIs + queries (v0.2)
 - [ ] Publish prompts for outstanding suggestions
 - [ ] Notes namespaces

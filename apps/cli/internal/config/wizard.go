@@ -10,6 +10,7 @@ import (
 
 type WizardConfig struct {
 	BaseURL      string
+	User         string
 	Workspace    string
 	Agent        string
 	CreateRemote bool
@@ -25,12 +26,22 @@ func RunWizard() (WizardConfig, error) {
 	}
 	baseURL = strings.TrimSpace(baseURL)
 
-	fmt.Print("Workspace id (user/name): ")
+	fmt.Print("Username: ")
+	user, err := reader.ReadString('\n')
+	if err != nil {
+		return WizardConfig{}, err
+	}
+	user = strings.TrimSpace(user)
+
+	fmt.Print("Default workspace name (e.g. @): ")
 	workspace, err := reader.ReadString('\n')
 	if err != nil {
 		return WizardConfig{}, err
 	}
 	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		workspace = "@"
+	}
 
 	fmt.Print("Default agent provider (opencode|codex|custom): ")
 	agent, err := reader.ReadString('\n')
@@ -57,6 +68,7 @@ func RunWizard() (WizardConfig, error) {
 
 	return WizardConfig{
 		BaseURL:      baseURL,
+		User:         user,
 		Workspace:    workspace,
 		Agent:        agent,
 		CreateRemote: createRemote,
@@ -73,15 +85,22 @@ func WriteUserConfig(cfg WizardConfig) error {
 	}
 
 	content := "[client]\n"
+	content = "[server]\n"
 	if cfg.BaseURL != "" {
-		content += fmt.Sprintf("base_url = %q\n", cfg.BaseURL)
+		content += fmt.Sprintf("url = %q\n", cfg.BaseURL)
 	}
+	if cfg.User != "" {
+		content += fmt.Sprintf("user = %q\n", cfg.User)
+	}
+	content += "\n[workspace]\n"
 	if cfg.Workspace != "" {
-		content += fmt.Sprintf("workspace = %q\n", cfg.Workspace)
+		content += fmt.Sprintf("default_name = %q\n", cfg.Workspace)
 	}
+	content += "\n[agent]\n"
 	if cfg.Agent != "" {
-		content += fmt.Sprintf("agent = %q\n", cfg.Agent)
+		content += fmt.Sprintf("provider = %q\n", cfg.Agent)
 	}
+	content += "\n[init]\n"
 	content += fmt.Sprintf("create_remote = %t\n", cfg.CreateRemote)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
