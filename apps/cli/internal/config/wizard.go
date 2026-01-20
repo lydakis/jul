@@ -9,9 +9,10 @@ import (
 )
 
 type WizardConfig struct {
-	BaseURL   string
-	Workspace string
-	Agent     string
+	BaseURL      string
+	Workspace    string
+	Agent        string
+	CreateRemote bool
 }
 
 func RunWizard() (WizardConfig, error) {
@@ -38,10 +39,27 @@ func RunWizard() (WizardConfig, error) {
 	}
 	agent = strings.TrimSpace(agent)
 
+	fmt.Print("Create remote repo by default? [Y/n]: ")
+	createRemoteRaw, err := reader.ReadString('\n')
+	if err != nil {
+		return WizardConfig{}, err
+	}
+	createRemoteRaw = strings.TrimSpace(createRemoteRaw)
+	createRemote := true
+	if createRemoteRaw != "" {
+		switch strings.ToLower(createRemoteRaw) {
+		case "y", "yes", "true":
+			createRemote = true
+		case "n", "no", "false":
+			createRemote = false
+		}
+	}
+
 	return WizardConfig{
-		BaseURL:   baseURL,
-		Workspace: workspace,
-		Agent:     agent,
+		BaseURL:      baseURL,
+		Workspace:    workspace,
+		Agent:        agent,
+		CreateRemote: createRemote,
 	}, nil
 }
 
@@ -64,6 +82,7 @@ func WriteUserConfig(cfg WizardConfig) error {
 	if cfg.Agent != "" {
 		content += fmt.Sprintf("agent = %q\n", cfg.Agent)
 	}
+	content += fmt.Sprintf("create_remote = %t\n", cfg.CreateRemote)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 

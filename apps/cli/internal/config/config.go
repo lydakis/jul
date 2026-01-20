@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"strconv"
 	"strings"
 )
 
@@ -63,6 +64,15 @@ func DefaultAgent() string {
 		return cfg
 	}
 	return ""
+}
+
+func CreateRemoteDefault() bool {
+	if cfg := userConfigValue("create_remote"); cfg != "" {
+		if parsed, err := strconv.ParseBool(cfg); err == nil {
+			return parsed
+		}
+	}
+	return true
 }
 
 func hostnameFallback() string {

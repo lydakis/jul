@@ -839,6 +839,7 @@ Jul Configuration
 ─────────────────
 Server URL: https://jul.example.com
 Username: george
+Create remote by default? [Y/n]: Y
 
 Agent Provider:
   [1] opencode (bundled)
@@ -851,7 +852,7 @@ Configuration saved to ~/.config/jul/config.toml
 ```
 
 Creates:
-- `~/.config/jul/config.toml` — Server, user defaults
+- `~/.config/jul/config.toml` — Server, user defaults, init preferences
 - `~/.config/jul/agents.toml` — Agent provider settings
 
 #### `jul init`
@@ -1268,6 +1269,9 @@ user = "george"
 
 [workspace]
 default_name = "@"
+
+[init]
+create_remote = true
 
 [sync]
 mode = "continuous"              # continuous | on-command | explicit

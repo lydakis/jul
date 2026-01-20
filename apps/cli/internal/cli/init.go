@@ -24,6 +24,7 @@ func newInitCommand() Command {
 			server := fs.String("server", "", "Jul server base URL")
 			workspace := fs.String("workspace", "", "Workspace id (user/name)")
 			remote := fs.String("remote", "jul", "Remote name to configure")
+			createRemote := fs.Bool("create-remote", false, "Force server repo creation")
 			noCreate := fs.Bool("no-create", false, "Skip server repo creation")
 			noHooks := fs.Bool("no-hooks", false, "Skip hook installation")
 			_ = fs.Parse(args)
@@ -56,8 +57,16 @@ func newInitCommand() Command {
 			}
 			baseURL = strings.TrimRight(baseURL, "/")
 
+			shouldCreateRemote := config.CreateRemoteDefault()
+			if *createRemote {
+				shouldCreateRemote = true
+			}
+			if *noCreate {
+				shouldCreateRemote = false
+			}
+
 			var cloneURL string
-			if baseURL != "" && !*noCreate {
+			if baseURL != "" && shouldCreateRemote {
 				cli := client.New(baseURL)
 				created, err := cli.CreateRepo(repoName)
 				if err != nil {

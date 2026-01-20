@@ -16,6 +16,8 @@ go run ./cmd/jul init --server http://localhost:8000
 
 # Run interactive configuration wizard
 go run ./cmd/jul configure
+## Configurable defaults
+# Set create_remote default in ~/.config/jul/config.toml (via `jul configure`)
 
 # Status
 JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul status
