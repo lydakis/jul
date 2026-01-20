@@ -82,25 +82,15 @@ func newSuggestCommand() Command {
 				return 1
 			}
 
-			info, err := gitutil.CurrentCommit()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
-				return 1
-			}
-			repoName := config.RepoName()
-			if repoName != "" {
-				info.RepoName = repoName
-			}
-
 			cli := client.New(config.BaseURL())
 			created, err := cli.CreateSuggestion(client.SuggestionCreateRequest{
-				ChangeID:           info.ChangeID,
+				ChangeID:           "",
 				BaseCommitSHA:      strings.TrimSpace(baseResolved),
 				SuggestedCommitSHA: strings.TrimSpace(*suggestedSHA),
 				Reason:             strings.TrimSpace(*reason),
 				Description:        strings.TrimSpace(*description),
 				Confidence:         *confidence,
-				Repo:               info.RepoName,
+				Repo:               config.RepoName(),
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to create suggestion: %v\n", err)
