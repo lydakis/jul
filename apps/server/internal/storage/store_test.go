@@ -412,6 +412,52 @@ func TestQueryCommitsByStatus(t *testing.T) {
 	}
 }
 
+func TestAttestationNullFieldsFallback(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+
+	if _, err := store.RecordSync(context.Background(), SyncPayload{
+		WorkspaceID: "alice/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "commit-null",
+		ChangeID:    "I7777777777777777777777777777777777777777",
+		Message:     "feat: null attestation",
+		Author:      "alice",
+		CommittedAt: now,
+	}); err != nil {
+		t.Fatalf("RecordSync failed: %v", err)
+	}
+
+	_, err := store.db.ExecContext(context.Background(), `INSERT INTO attestations
+		(attestation_id, commit_sha, change_id, type, status, compile_status, test_status, started_at, finished_at, signals_json, created_at)
+		VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+		"01HNULLATTESTATION", "commit-null", "I7777777777777777777777777777777777777777", "ci", "pass",
+		now.Format(timeFormat), now.Format(timeFormat), "{}", now.Format(timeFormat))
+	if err != nil {
+		t.Fatalf("insert attestation failed: %v", err)
+	}
+
+	list, err := store.ListAttestations(context.Background(), "commit-null", "", "")
+	if err != nil {
+		t.Fatalf("ListAttestations failed: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 attestation, got %d", len(list))
+	}
+	if list[0].CompileStatus != "pass" || list[0].TestStatus != "pass" {
+		t.Fatalf("expected fallback statuses to be pass, got compile=%s test=%s", list[0].CompileStatus, list[0].TestStatus)
+	}
+
+	latest, err := store.GetLatestAttestation(context.Background(), "commit-null")
+	if err != nil {
+		t.Fatalf("GetLatestAttestation failed: %v", err)
+	}
+	if latest.CompileStatus != "pass" || latest.TestStatus != "pass" {
+		t.Fatalf("expected fallback statuses to be pass, got compile=%s test=%s", latest.CompileStatus, latest.TestStatus)
+	}
+}
+
 func TestFindRepoForHistoricalCommit(t *testing.T) {
 	store := newTestStore(t)
 	payload := SyncPayload{

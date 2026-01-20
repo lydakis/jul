@@ -389,6 +389,8 @@ func (s *Store) ListAttestations(ctx context.Context, commitSHA, changeID, statu
 	for rows.Next() {
 		var att Attestation
 		var startedAt, finishedAt, createdAt string
+		var compileStatus sql.NullString
+		var testStatus sql.NullString
 		var coverageLine sql.NullFloat64
 		var coverageBranch sql.NullFloat64
 		if err := rows.Scan(
@@ -397,8 +399,8 @@ func (s *Store) ListAttestations(ctx context.Context, commitSHA, changeID, statu
 			&att.ChangeID,
 			&att.Type,
 			&att.Status,
-			&att.CompileStatus,
-			&att.TestStatus,
+			&compileStatus,
+			&testStatus,
 			&coverageLine,
 			&coverageBranch,
 			&startedAt,
@@ -407,6 +409,16 @@ func (s *Store) ListAttestations(ctx context.Context, commitSHA, changeID, statu
 			&createdAt,
 		); err != nil {
 			return nil, err
+		}
+		if compileStatus.Valid {
+			att.CompileStatus = compileStatus.String
+		} else {
+			att.CompileStatus = att.Status
+		}
+		if testStatus.Valid {
+			att.TestStatus = testStatus.String
+		} else {
+			att.TestStatus = att.Status
 		}
 		if coverageLine.Valid {
 			att.CoverageLinePct = &coverageLine.Float64
@@ -467,6 +479,8 @@ func (s *Store) GetLatestAttestation(ctx context.Context, commitSHA string) (Att
 		FROM attestations WHERE commit_sha = ? ORDER BY created_at DESC LIMIT 1`, commitSHA)
 	var att Attestation
 	var startedAt, finishedAt, createdAt string
+	var compileStatus sql.NullString
+	var testStatus sql.NullString
 	var coverageLine sql.NullFloat64
 	var coverageBranch sql.NullFloat64
 	if err := row.Scan(
@@ -475,8 +489,8 @@ func (s *Store) GetLatestAttestation(ctx context.Context, commitSHA string) (Att
 		&att.ChangeID,
 		&att.Type,
 		&att.Status,
-		&att.CompileStatus,
-		&att.TestStatus,
+		&compileStatus,
+		&testStatus,
 		&coverageLine,
 		&coverageBranch,
 		&startedAt,
@@ -488,6 +502,16 @@ func (s *Store) GetLatestAttestation(ctx context.Context, commitSHA string) (Att
 			return Attestation{}, ErrNotFound
 		}
 		return Attestation{}, err
+	}
+	if compileStatus.Valid {
+		att.CompileStatus = compileStatus.String
+	} else {
+		att.CompileStatus = att.Status
+	}
+	if testStatus.Valid {
+		att.TestStatus = testStatus.String
+	} else {
+		att.TestStatus = att.Status
 	}
 	if coverageLine.Valid {
 		att.CoverageLinePct = &coverageLine.Float64
@@ -572,8 +596,12 @@ func (s *Store) ListKeepRefs(ctx context.Context, workspaceID string, limit int)
 func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]QueryResult, error) {
 	query := `SELECT r.commit_sha, r.change_id, r.author, r.message, r.created_at,
 		COALESCE((SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1), '') AS att_status,
-		(SELECT test_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS test_status,
-		(SELECT compile_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS compile_status,
+		COALESCE((SELECT test_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1),
+			(SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1),
+			'') AS test_status,
+		COALESCE((SELECT compile_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1),
+			(SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1),
+			'') AS compile_status,
 		(SELECT coverage_line_pct FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS coverage_line_pct,
 		(SELECT coverage_branch_pct FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) AS coverage_branch_pct
 		FROM revisions r WHERE 1=1`
@@ -588,7 +616,7 @@ func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]Query
 		args = append(args, "%"+filters.Author+"%")
 	}
 	if filters.Tests != "" {
-		query += " AND (SELECT test_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) = ?"
+		query += " AND COALESCE((SELECT test_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1), (SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1)) = ?"
 		args = append(args, filters.Tests)
 	}
 	if filters.Compiles != nil {
@@ -596,7 +624,7 @@ func (s *Store) QueryCommits(ctx context.Context, filters QueryFilters) ([]Query
 		if *filters.Compiles {
 			status = "pass"
 		}
-		query += " AND (SELECT compile_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1) = ?"
+		query += " AND COALESCE((SELECT compile_status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1), (SELECT status FROM attestations a WHERE a.commit_sha = r.commit_sha ORDER BY a.created_at DESC LIMIT 1)) = ?"
 		args = append(args, status)
 	}
 	if filters.CoverageMin != nil {

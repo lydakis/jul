@@ -106,6 +106,12 @@ func runMigrations(db *sql.DB) error {
 	if err := ensureColumn(db, "attestations", "coverage_branch_pct", "REAL"); err != nil {
 		return err
 	}
+	if _, err := db.Exec(`UPDATE attestations SET compile_status = status WHERE compile_status IS NULL`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE attestations SET test_status = status WHERE test_status IS NULL`); err != nil {
+		return err
+	}
 	return nil
 }
 
