@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -268,6 +269,33 @@ func TestCheckpointEndpoint(t *testing.T) {
 	}
 	if res.Revision.CommitSHA != payload.CommitSHA {
 		t.Fatalf("expected commit %s, got %s", payload.CommitSHA, res.Revision.CommitSHA)
+	}
+}
+
+func TestDeleteWorkspaceEndpoint(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	payload := storage.SyncPayload{
+		WorkspaceID: "bob/laptop",
+		Repo:        "demo",
+		Branch:      "main",
+		CommitSHA:   "abc123",
+		ChangeID:    "I9999999999999999999999999999999999999999",
+		Message:     "feat: sync",
+		Author:      "bob",
+		CommittedAt: time.Now().UTC(),
+	}
+	if _, err := store.RecordSync(context.Background(), payload); err != nil {
+		t.Fatalf("RecordSync failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/bob/laptop", nil)
+	w := httptest.NewRecorder()
+	srv.handleWorkspaceRoutes(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
 	}
 }
 

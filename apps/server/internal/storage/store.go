@@ -276,6 +276,22 @@ func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) DeleteWorkspace(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM workspaces WHERE workspace_id = ?`, id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM keep_refs WHERE workspace_id = ?`, id)
+	return err
+}
+
 func (s *Store) GetWorkspace(ctx context.Context, id string) (Workspace, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT workspace_id, user, name, repo, branch, last_commit_sha, last_change_id, updated_at FROM workspaces WHERE workspace_id = ?`, id)
 	var ws Workspace

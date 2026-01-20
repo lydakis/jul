@@ -27,6 +27,12 @@ func newWorkspaceCommand() Command {
 				return runWorkspaceList(args[1:])
 			case "set", "new":
 				return runWorkspaceSet(args[1:])
+			case "switch":
+				return runWorkspaceSwitch(args[1:])
+			case "rename":
+				return runWorkspaceRename(args[1:])
+			case "delete":
+				return runWorkspaceDelete(args[1:])
 			case "current":
 				fmt.Fprintln(os.Stdout, config.WorkspaceID())
 				return 0
@@ -91,6 +97,64 @@ func runWorkspaceSet(args []string) int {
 	return 0
 }
 
+func runWorkspaceSwitch(args []string) int {
+	return runWorkspaceSet(args)
+}
+
+func runWorkspaceRename(args []string) int {
+	fs := flag.NewFlagSet("ws rename", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	_ = fs.Parse(args)
+	newName := strings.TrimSpace(fs.Arg(0))
+	if newName == "" {
+		fmt.Fprintln(os.Stderr, "new workspace name required")
+		return 1
+	}
+	current := config.WorkspaceID()
+	parts := strings.SplitN(current, "/", 2)
+	user := parts[0]
+	newID := newName
+	if !strings.Contains(newName, "/") {
+		newID = user + "/" + newName
+	}
+	if err := runGitConfig("jul.workspace", newID); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to rename workspace: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "Workspace renamed to %s\n", newID)
+	return 0
+}
+
+func runWorkspaceDelete(args []string) int {
+	fs := flag.NewFlagSet("ws delete", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	_ = fs.Parse(args)
+	name := strings.TrimSpace(fs.Arg(0))
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "workspace name required")
+		return 1
+	}
+	current := config.WorkspaceID()
+	target := name
+	if !strings.Contains(name, "/") {
+		parts := strings.SplitN(current, "/", 2)
+		user := parts[0]
+		target = user + "/" + name
+	}
+	if target == current {
+		fmt.Fprintln(os.Stderr, "cannot delete current workspace")
+		return 1
+	}
+
+	cli := client.New(config.BaseURL())
+	if err := cli.DeleteWorkspace(target); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "Deleted workspace %s\n", target)
+	return 0
+}
+
 func runGitConfig(key, value string) error {
 	cmd := exec.Command("git", "config", key, value)
 	output, err := cmd.CombinedOutput()
@@ -101,5 +165,5 @@ func runGitConfig(key, value string) error {
 }
 
 func printWorkspaceUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|set|new|current]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|set|new|switch|rename|delete|current]")
 }

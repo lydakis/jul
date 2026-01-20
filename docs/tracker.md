@@ -24,7 +24,7 @@
 - [ ] Agent-backed suggestions/review flow (auto-suggest on sync/CI) - config stub in place
 - [x] Align CLI config format with v0.2 spec (server/workspace/init sections)
 - [ ] Implement draft → checkpoint → promote flow (v0.2) - checkpoint endpoint + CLI added
-- [ ] Workspace commands (jul ws, default @) - list/set done, switch/rename/delete pending
+- [ ] Workspace commands (jul ws, default @) - list/set/switch/rename/delete done
 - [ ] Checkpoint APIs + queries (v0.2)
 - [ ] Publish prompts for outstanding suggestions
 - [ ] Notes namespaces

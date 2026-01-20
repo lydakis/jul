@@ -22,6 +22,9 @@ go run ./cmd/jul configure
 # Switch or list workspaces
 go run ./cmd/jul ws list
 go run ./cmd/jul ws set feature-auth
+go run ./cmd/jul ws switch feature-auth
+go run ./cmd/jul ws rename auth-feature
+go run ./cmd/jul ws delete bugfix-123
 
 # Status
 JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul status

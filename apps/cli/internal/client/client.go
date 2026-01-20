@@ -191,6 +191,10 @@ func (c *Client) ListWorkspaces() ([]Workspace, error) {
 	return workspaces, nil
 }
 
+func (c *Client) DeleteWorkspace(id string) error {
+	return c.doJSON(http.MethodDelete, "/api/v1/workspaces/"+id, nil, nil)
+}
+
 func (c *Client) GetAttestation(commitSHA string) (*Attestation, error) {
 	var att Attestation
 	if err := c.doJSON(http.MethodGet, "/api/v1/commits/"+commitSHA+"/attestation", nil, &att); err != nil {

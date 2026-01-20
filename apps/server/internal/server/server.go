@@ -186,6 +186,19 @@ func (s *Server) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodDelete {
+		if err := s.store.DeleteWorkspace(r.Context(), path); err != nil {
+			if err == storage.ErrNotFound {
+				writeError(w, http.StatusNotFound, "workspace not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return

@@ -21,6 +21,7 @@ go run ./cmd/jul-server --addr :8000 --db ./data/jul.db --repos ./repos
 - `POST /api/v1/workspaces/{id}/checkpoint` — record a checkpoint (sync alias)
 - `POST /api/v1/workspaces/{id}/promote` — promote request (fast-forward required unless `force=true`)
 - `GET /api/v1/workspaces/{id}/reflog` — workspace history (keep refs)
+- `DELETE /api/v1/workspaces/{id}` — delete a workspace
 - `GET /api/v1/changes` — list changes
 - `GET /api/v1/changes/{id}` — change details
 - `GET /api/v1/changes/{id}/revisions` — list revisions
