@@ -115,6 +115,21 @@ type RepoInfo struct {
 	CloneURL string `json:"clone_url"`
 }
 
+type Suggestion struct {
+	SuggestionID       string    `json:"suggestion_id"`
+	ChangeID           string    `json:"change_id"`
+	BaseCommitSHA      string    `json:"base_commit_sha"`
+	SuggestedCommitSHA string    `json:"suggested_commit_sha"`
+	CreatedBy          string    `json:"created_by"`
+	Reason             string    `json:"reason"`
+	Description        string    `json:"description"`
+	Confidence         float64   `json:"confidence"`
+	Status             string    `json:"status"`
+	DiffstatJSON       string    `json:"diffstat_json"`
+	CreatedAt          time.Time `json:"created_at"`
+	ResolvedAt         time.Time `json:"resolved_at,omitempty"`
+}
+
 type SyncPayload struct {
 	WorkspaceID string    `json:"workspace_id"`
 	Repo        string    `json:"repo"`
@@ -251,6 +266,65 @@ func (c *Client) CreateRepo(name string) (RepoInfo, error) {
 		return RepoInfo{}, err
 	}
 	return repo, nil
+}
+
+func (c *Client) ListSuggestions(changeID, status string, limit int) ([]Suggestion, error) {
+	var out []Suggestion
+	path := "/api/v1/suggestions"
+	query := make([]string, 0, 3)
+	if changeID != "" {
+		query = append(query, "change_id="+urlQueryEscape(changeID))
+	}
+	if status != "" {
+		query = append(query, "status="+urlQueryEscape(status))
+	}
+	if limit > 0 {
+		query = append(query, fmt.Sprintf("limit=%d", limit))
+	}
+	if len(query) > 0 {
+		path = path + "?" + strings.Join(query, "&")
+	}
+	if err := c.doJSON(http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetSuggestion(id string) (Suggestion, error) {
+	var out Suggestion
+	if err := c.doJSON(http.MethodGet, "/api/v1/suggestions/"+id, nil, &out); err != nil {
+		return Suggestion{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) CreateSuggestion(req SuggestionCreateRequest) (Suggestion, error) {
+	var out Suggestion
+	if err := c.doJSON(http.MethodPost, "/api/v1/suggestions", req, &out); err != nil {
+		return Suggestion{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) UpdateSuggestionStatus(id, action string) (Suggestion, error) {
+	var out Suggestion
+	path := fmt.Sprintf("/api/v1/suggestions/%s/%s", id, action)
+	if err := c.doJSON(http.MethodPost, path, map[string]string{}, &out); err != nil {
+		return Suggestion{}, err
+	}
+	return out, nil
+}
+
+type SuggestionCreateRequest struct {
+	ChangeID           string          `json:"change_id"`
+	BaseCommitSHA      string          `json:"base_commit_sha"`
+	SuggestedCommitSHA string          `json:"suggested_commit_sha"`
+	CreatedBy          string          `json:"created_by,omitempty"`
+	Reason             string          `json:"reason,omitempty"`
+	Description        string          `json:"description,omitempty"`
+	Confidence         float64         `json:"confidence,omitempty"`
+	Diffstat           json.RawMessage `json:"diffstat,omitempty"`
+	Repo               string          `json:"repo,omitempty"`
 }
 
 func (c *Client) doJSON(method, path string, body any, out any) error {

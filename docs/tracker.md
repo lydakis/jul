@@ -20,8 +20,8 @@
 - [x] Suggestions API + refs
 - [x] Query endpoints (advanced filters)
 - [ ] CLI-only bootstrap (`jul init` done, `jul clone` pending)
-- [ ] CLI config wizard (agent/provider selection, default server, workspace)
-- [ ] Agent-backed suggestions/review flow (auto-suggest on sync/CI)
+- [x] CLI config wizard (agent/provider selection, default server, workspace)
+- [ ] Agent-backed suggestions/review flow (auto-suggest on sync/CI) - config stub in place
 - [ ] Publish prompts for outstanding suggestions
 - [ ] Notes namespaces
 - [ ] Web UI

@@ -14,6 +14,9 @@ JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul sync
 # Initialize a repo and configure Jul remote
 go run ./cmd/jul init --server http://localhost:8000
 
+# Run interactive configuration wizard
+go run ./cmd/jul configure
+
 # Status
 JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul status
 
@@ -35,6 +38,12 @@ go run ./cmd/jul ci run --cmd "go test ./..." --coverage-line 82.5
 
 # Query recent passing commits with coverage
 go run ./cmd/jul query --tests pass --compiles true --coverage-min 80 --limit 5
+
+# List suggestions
+go run ./cmd/jul suggestions --status open
+
+# Create a suggestion
+go run ./cmd/jul suggest --base HEAD --suggested <sha> --reason fix_tests
 ```
 
 ## Environment

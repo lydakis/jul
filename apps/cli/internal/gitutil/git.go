@@ -129,6 +129,11 @@ func git(args ...string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
+// Git exposes git execution for CLI commands that need to resolve refs.
+func Git(args ...string) (string, error) {
+	return git(args...)
+}
+
 func gitWithDir(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	var out bytes.Buffer
