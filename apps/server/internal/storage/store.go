@@ -277,19 +277,33 @@ func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 }
 
 func (s *Store) DeleteWorkspace(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM workspaces WHERE workspace_id = ?`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return err
+	}
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM workspaces WHERE workspace_id = ?`, id)
+	if err != nil {
+		_ = tx.Rollback()
 		return err
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
+		_ = tx.Rollback()
 		return err
 	}
 	if affected == 0 {
+		_ = tx.Rollback()
 		return ErrNotFound
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM keep_refs WHERE workspace_id = ?`, id)
-	return err
+	if _, err := tx.ExecContext(ctx, `DELETE FROM keep_refs WHERE workspace_id = ?`, id); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) GetWorkspace(ctx context.Context, id string) (Workspace, error) {
