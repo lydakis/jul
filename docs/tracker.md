@@ -19,7 +19,7 @@
 ## Later
 - [x] Suggestions API + refs
 - [x] Query endpoints (advanced filters)
-- [ ] CLI-only bootstrap (`jul init`, `jul clone`, repo create on server)
+- [ ] CLI-only bootstrap (`jul init` done, `jul clone` pending)
 - [ ] CLI config wizard (agent/provider selection, default server, workspace)
 - [ ] Agent-backed suggestions/review flow (auto-suggest on sync/CI)
 - [ ] Publish prompts for outstanding suggestions

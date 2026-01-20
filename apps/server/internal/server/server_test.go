@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -19,7 +21,7 @@ func newTestServer(t *testing.T) (*Server, *storage.Store) {
 		t.Fatalf("failed to open store: %v", err)
 	}
 	broker := events.NewBroker()
-	return New(Config{Address: ":0"}, store, broker), store
+	return New(Config{Address: ":0", ReposDir: t.TempDir()}, store, broker), store
 }
 
 func TestSyncEndpoint(t *testing.T) {
@@ -234,5 +236,32 @@ func TestCITriggerMissingRepo(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestReposEndpointCreatesRepo(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer store.Close()
+
+	body := []byte(`{"name":"demo"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/repos", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleRepos(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", w.Code)
+	}
+
+	var info RepoInfo
+	if err := json.NewDecoder(w.Body).Decode(&info); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if info.Name != "demo" {
+		t.Fatalf("expected repo name demo, got %s", info.Name)
+	}
+
+	path := filepath.Join(srv.cfg.ReposDir, "demo.git")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected repo at %s: %v", path, err)
 	}
 }

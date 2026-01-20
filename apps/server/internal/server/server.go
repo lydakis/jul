@@ -95,6 +95,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/query", s.handleQuery)
 	s.mux.HandleFunc("/api/v1/suggestions", s.handleSuggestions)
 	s.mux.HandleFunc("/api/v1/suggestions/", s.handleSuggestionRoutes)
+	s.mux.HandleFunc("/api/v1/repos", s.handleRepos)
 	s.mux.HandleFunc("/events/stream", s.handleEvents)
 }
 
@@ -857,6 +858,73 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+
+	repoPath, err := s.repoPath(name)
+	if err != nil {
+		if errors.Is(err, ErrInvalidRepoName) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if _, err := os.Stat(repoPath); err == nil {
+		writeJSON(w, http.StatusOK, RepoInfo{Name: name, CloneURL: repoCloneURL(s.cfg.BaseURL, name)})
+		return
+	} else if !os.IsNotExist(err) {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	cmd := exec.Command("git", "init", "--bare", repoPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("git init --bare failed: %s", strings.TrimSpace(string(output))))
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, RepoInfo{Name: name, CloneURL: repoCloneURL(s.cfg.BaseURL, name)})
+}
+
+type RepoInfo struct {
+	Name     string `json:"name"`
+	CloneURL string `json:"clone_url"`
+}
+
+func repoCloneURL(baseURL, name string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if base == "" {
+		return ""
+	}
+	if strings.HasSuffix(name, ".git") {
+		return base + "/" + name
+	}
+	return base + "/" + name + ".git"
 }
 
 func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request) {

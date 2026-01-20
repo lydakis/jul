@@ -31,6 +31,7 @@ go run ./cmd/jul-server --addr :8000 --db ./data/jul.db --repos ./repos
 - `GET /api/v1/suggestions/{id}` — suggestion details
 - `POST /api/v1/suggestions/{id}/accept` — mark suggestion accepted
 - `POST /api/v1/suggestions/{id}/reject` — mark suggestion rejected
+- `POST /api/v1/repos` — create or fetch a bare repo
 - `GET /api/v1/query` — query commits by filters (`tests`, `compiles`, `coverage_min`, `coverage_max`, `author`, `change_id`, `since`, `until`, `limit`)
 - `GET /events/stream` — SSE stream
 

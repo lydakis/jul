@@ -110,6 +110,11 @@ type QueryFilters struct {
 	Limit       int
 }
 
+type RepoInfo struct {
+	Name     string `json:"name"`
+	CloneURL string `json:"clone_url"`
+}
+
 type SyncPayload struct {
 	WorkspaceID string    `json:"workspace_id"`
 	Repo        string    `json:"repo"`
@@ -237,6 +242,15 @@ func (c *Client) Query(filters QueryFilters) ([]QueryResult, error) {
 		return nil, err
 	}
 	return results, nil
+}
+
+func (c *Client) CreateRepo(name string) (RepoInfo, error) {
+	var repo RepoInfo
+	payload := map[string]string{"name": name}
+	if err := c.doJSON(http.MethodPost, "/api/v1/repos", payload, &repo); err != nil {
+		return RepoInfo{}, err
+	}
+	return repo, nil
 }
 
 func (c *Client) doJSON(method, path string, body any, out any) error {

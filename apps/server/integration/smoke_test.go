@@ -23,18 +23,10 @@ func TestSmokeSyncAndReflog(t *testing.T) {
 	baseURL, cleanup := startServer(t, reposDir)
 	defer cleanup()
 
-	bareRepo := filepath.Join(reposDir, "demo.git")
-	runCmd(t, reposDir, nil, "git", "init", "--bare", bareRepo)
-
 	repo := filepath.Join(t.TempDir(), "demo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatalf("failed to create repo dir: %v", err)
 	}
-	runCmd(t, repo, nil, "git", "init")
-	runCmd(t, repo, nil, "git", "branch", "-M", "main")
-	runCmd(t, repo, nil, "git", "config", "user.name", "Test User")
-	runCmd(t, repo, nil, "git", "config", "user.email", "test@example.com")
-	runCmd(t, repo, nil, "git", "remote", "add", "origin", bareRepo)
 
 	julPath := buildCLI(t)
 	workspaceID := "tester/workspace"
@@ -43,8 +35,11 @@ func TestSmokeSyncAndReflog(t *testing.T) {
 		"JUL_WORKSPACE": workspaceID,
 	}
 
-	// Install hook
-	runCmd(t, repo, env, julPath, "hooks", "install")
+	runCmd(t, repo, env, julPath, "init", "demo")
+	runCmd(t, repo, nil, "git", "branch", "-M", "main")
+	runCmd(t, repo, nil, "git", "config", "user.name", "Test User")
+	runCmd(t, repo, nil, "git", "config", "user.email", "test@example.com")
+	bareRepo := filepath.Join(reposDir, "demo.git")
 	hooksDir := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "--git-path", "hooks"))
 	if !filepath.IsAbs(hooksDir) {
 		hooksDir = filepath.Join(repo, hooksDir)
@@ -59,7 +54,7 @@ func TestSmokeSyncAndReflog(t *testing.T) {
 	runCmd(t, repo, nil, "git", "add", "README.md")
 	runCmd(t, repo, nil, "git", "commit", "-m", "feat: first")
 	sha1 := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
-	runCmd(t, repo, nil, "git", "push", "-u", "origin", "main")
+	runCmd(t, repo, nil, "git", "push", bareRepo, "main")
 	runCmd(t, repo, env, julPath, "sync")
 
 	// Commit 2
@@ -67,7 +62,7 @@ func TestSmokeSyncAndReflog(t *testing.T) {
 	runCmd(t, repo, nil, "git", "add", "README.md")
 	runCmd(t, repo, nil, "git", "commit", "-m", "feat: second")
 	sha2 := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
-	runCmd(t, repo, nil, "git", "push", "origin", "main")
+	runCmd(t, repo, nil, "git", "push", bareRepo, "main")
 	runCmd(t, repo, env, julPath, "sync")
 
 	// Record a CI attestation
@@ -178,7 +173,7 @@ func TestSmokeSyncAndReflog(t *testing.T) {
 	runCmd(t, repo, nil, "git", "add", "README.md")
 	runCmd(t, repo, nil, "git", "commit", "-m", "fix: suggestion")
 	sha3 := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
-	runCmd(t, repo, nil, "git", "push", "origin", "main")
+	runCmd(t, repo, nil, "git", "push", bareRepo, "main")
 
 	commitReq, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/commits/%s", baseURL, sha2), nil)
 	if err != nil {

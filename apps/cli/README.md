@@ -11,6 +11,9 @@
 cd apps/cli
 JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul sync
 
+# Initialize a repo and configure Jul remote
+go run ./cmd/jul init --server http://localhost:8000
+
 # Status
 JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul status
 

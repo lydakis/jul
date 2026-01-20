@@ -17,6 +17,7 @@ import (
 
 func Commands(version string) []Command {
 	return []Command{
+		newInitCommand(),
 		newSyncCommand(),
 		newStatusCommand(),
 		newReflogCommand(),
