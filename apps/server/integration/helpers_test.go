@@ -18,6 +18,10 @@ import (
 
 func startServer(t *testing.T, reposDir string) (string, func()) {
 	storePath := filepath.Join(t.TempDir(), "jul.db")
+	return startServerWithDB(t, storePath, reposDir)
+}
+
+func startServerWithDB(t *testing.T, storePath, reposDir string) (string, func()) {
 	store, err := storage.Open(storePath)
 	if err != nil {
 		t.Fatalf("failed to open store: %v", err)
