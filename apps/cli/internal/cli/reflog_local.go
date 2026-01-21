@@ -74,8 +74,3 @@ func normalizeWhen(value string) string {
 	}
 	return value
 }
-
-func isDraftMessage(message string) bool {
-	trimmed := strings.TrimSpace(message)
-	return strings.HasPrefix(trimmed, "[draft]")
-}

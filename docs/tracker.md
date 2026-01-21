@@ -13,13 +13,13 @@
 - [x] Workspace ref lease + auto-merge flow (`jul sync`, `jul merge`)
 - [x] Local metadata in notes (attestations, suggestions)
 - [ ] Notes for review + prompts (optional, local-only by default)
-- [ ] Agent sandbox + review pipeline (internal agent)
+- [x] Agent sandbox + review pipeline (internal agent)
 - [ ] `jul ws checkout` + local workspace save/restore integration
 - [x] Query/log/diff/show over local metadata
 - [x] Local reflog + status summaries from refs/notes
 - [ ] CI config wiring for draft/background runs (run_on_draft, draft_ci_blocking)
 - [ ] Align `jul status --json` and human output with new spec (draft/checkpoint summaries)
-- [ ] Add `jul review` (stub -> agent integration later)
+- [x] Add `jul review` (internal agent, worktree isolation)
 - [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
 
 ## Completed (pre-pivot groundwork)

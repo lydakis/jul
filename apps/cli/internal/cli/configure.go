@@ -26,6 +26,10 @@ func newConfigureCommand() Command {
 				fmt.Fprintf(os.Stderr, "failed to write config: %v\n", err)
 				return 1
 			}
+			if err := config.WriteAgentConfig(cfg.Agent); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to write agent config: %v\n", err)
+				return 1
+			}
 			fmt.Fprintln(os.Stdout, "Configuration saved.")
 			return 0
 		},

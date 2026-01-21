@@ -6,6 +6,7 @@ Covered flows:
 - **Local-only**: `jul init`, `jul sync`, `jul checkpoint`, `jul ci` with no remotes configured.
 - **Git remote**: bare repo as `origin`, `jul sync` pushes sync/workspace refs, `jul checkpoint` pushes keep refs.
 - **Jul remote config**: `jul init --server <path> --create-remote` sets a remote and runs the same flow.
+- **Review agent**: `jul review` runs against a stub agent and creates suggestions.
 
 ## Run
 

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -84,6 +85,9 @@ func RepoName() string {
 }
 
 func DefaultAgent() string {
+	if cfg := strings.TrimSpace(LoadAgentConfig().DefaultProvider); cfg != "" {
+		return cfg
+	}
 	if cfg := configValue("agent.provider"); cfg != "" {
 		return cfg
 	}
@@ -153,6 +157,18 @@ func CIRunOnDraft() bool {
 
 func CIDraftBlocking() bool {
 	return configBool("ci.draft_ci_blocking", false)
+}
+
+func ReviewEnabled() bool {
+	return configBool("review.enabled", true)
+}
+
+func ReviewRunOnCheckpoint() bool {
+	return configBool("review.run_on_checkpoint", true)
+}
+
+func ReviewMinConfidence() float64 {
+	return configFloat("review.min_confidence", 0)
 }
 
 func hostnameFallback() string {
@@ -252,6 +268,15 @@ func configBool(key string, def bool) bool {
 			return true
 		case "false", "no", "0", "off":
 			return false
+		}
+	}
+	return def
+}
+
+func configFloat(key string, def float64) float64 {
+	if cfg := configValue(key); cfg != "" {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(cfg), 64); err == nil {
+			return val
 		}
 	}
 	return def

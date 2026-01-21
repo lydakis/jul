@@ -54,7 +54,7 @@ func TestSmokeGitRemoteFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.SyncRef)
 	runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.WorkspaceRef)
 
-	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--json")
+	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
 	var checkpointRes checkpointJSON
 	decodeJSON(t, checkpointOut, &checkpointRes)
 	if checkpointRes.KeepRef == "" || checkpointRes.CheckpointSHA == "" {
@@ -99,7 +99,7 @@ func TestSmokeJulRemoteFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.SyncRef)
 	runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.WorkspaceRef)
 
-	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--json")
+	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
 	var checkpointRes checkpointJSON
 	decodeJSON(t, checkpointOut, &checkpointRes)
 	if checkpointRes.KeepRef == "" || checkpointRes.CheckpointSHA == "" {

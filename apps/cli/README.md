@@ -51,6 +51,9 @@ go run ./cmd/jul query --tests pass --compiles true --coverage-min 80 --limit 5
 # Create a checkpoint for the current commit
 go run ./cmd/jul checkpoint
 
+# Run review agent (bundled OpenCode by default)
+go run ./cmd/jul review
+
 # List suggestions
 go run ./cmd/jul suggestions --status pending
 
@@ -65,3 +68,5 @@ go run ./cmd/jul suggest --base HEAD --suggested <sha> --reason fix_tests
 - `JUL_HOOK_CMD`: Command used by git hook (default: `jul`)
 - `JUL_NO_SYNC`: Set to disable auto-sync in the hook
 - `JUL_HOOK_VERBOSE`: Set to show hook warnings
+- `JUL_AGENT_CMD`: Override review agent command (default: bundled OpenCode)
+- `JUL_AGENT_MODE`: Review agent mode (`stdin` or `file`)

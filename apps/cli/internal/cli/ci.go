@@ -447,27 +447,6 @@ func resolveCICommit(targetSHA string) (gitutil.CommitInfo, error) {
 	}, nil
 }
 
-func currentDraftSHA() (string, error) {
-	user, workspace := workspaceParts()
-	if workspace == "" {
-		workspace = "@"
-	}
-	if ref, err := syncRef(user, workspace); err == nil {
-		if gitutil.RefExists(ref) {
-			if sha, err := gitutil.ResolveRef(ref); err == nil {
-				return sha, nil
-			}
-		}
-	}
-	ref := workspaceRef(user, workspace)
-	if gitutil.RefExists(ref) {
-		if sha, err := gitutil.ResolveRef(ref); err == nil {
-			return sha, nil
-		}
-	}
-	return gitutil.Git("rev-parse", "HEAD")
-}
-
 type ciStatusJSON struct {
 	CI ciStatusDetails `json:"ci"`
 }

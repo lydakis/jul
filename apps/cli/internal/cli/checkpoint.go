@@ -2,11 +2,13 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/lydakis/jul/cli/internal/agent"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
@@ -21,6 +23,7 @@ func newCheckpointCommand() Command {
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			message := fs.String("m", "", "Checkpoint message")
 			noCI := fs.Bool("no-ci", false, "Skip CI run")
+			noReview := fs.Bool("no-review", false, "Skip review")
 			_ = fs.Parse(args)
 
 			res, err := syncer.Checkpoint(*message)
@@ -38,6 +41,14 @@ func newCheckpointCommand() Command {
 					errOut = io.Discard
 				}
 				ciExit = runCIRunWithStream([]string{}, nil, out, errOut, res.CheckpointSHA)
+			}
+
+			if config.ReviewEnabled() && config.ReviewRunOnCheckpoint() && !*noReview {
+				if _, _, err := runReview(); err != nil {
+					if !errors.Is(err, agent.ErrAgentNotConfigured) && !errors.Is(err, agent.ErrBundledMissing) {
+						fmt.Fprintf(os.Stderr, "review failed: %v\n", err)
+					}
+				}
 			}
 
 			if *jsonOut {

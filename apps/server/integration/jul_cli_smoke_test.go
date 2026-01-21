@@ -45,7 +45,7 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "show-ref", syncRes.WorkspaceRef)
 
 	// Checkpoint locally (keep-ref)
-	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--json")
+	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
 	var checkpointRes struct {
 		CheckpointSHA string `json:"CheckpointSHA"`
 		KeepRef       string `json:"KeepRef"`
