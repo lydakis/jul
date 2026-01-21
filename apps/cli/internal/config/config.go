@@ -143,6 +143,18 @@ func RemoteURL() string {
 	return ""
 }
 
+func CIRunOnCheckpoint() bool {
+	return configBool("ci.run_on_checkpoint", true)
+}
+
+func CIRunOnDraft() bool {
+	return configBool("ci.run_on_draft", true)
+}
+
+func CIDraftBlocking() bool {
+	return configBool("ci.draft_ci_blocking", false)
+}
+
 func hostnameFallback() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -230,6 +242,19 @@ func parseUserConfig(raw string) map[string]string {
 		config[fullKey] = value
 	}
 	return config
+}
+
+func configBool(key string, def bool) bool {
+	if cfg := configValue(key); cfg != "" {
+		normalized := strings.ToLower(strings.TrimSpace(cfg))
+		switch normalized {
+		case "true", "yes", "1", "on":
+			return true
+		case "false", "no", "0", "off":
+			return false
+		}
+	}
+	return def
 }
 
 func repoConfigPath() (string, error) {

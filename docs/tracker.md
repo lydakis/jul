@@ -13,7 +13,9 @@
 - [ ] Notes for review + prompts (optional, local-only by default)
 - [ ] Agent sandbox + review pipeline (internal agent)
 - [ ] `jul ws checkout` + local workspace save/restore integration
-- [ ] Query/log/diff/show over local metadata
+- [x] Query/log/diff/show over local metadata
+- [x] Local reflog + status summaries from refs/notes
+- [ ] CI config wiring for draft/background runs (run_on_draft, draft_ci_blocking)
 - [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
 
 ## Completed (pre-pivot groundwork)

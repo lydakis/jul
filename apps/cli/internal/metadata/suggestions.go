@@ -137,3 +137,31 @@ func UpdateSuggestionStatus(id, status string) (client.Suggestion, error) {
 	}
 	return client.Suggestion{}, errors.New("suggestion not found")
 }
+
+func GetSuggestionByID(id string) (client.Suggestion, bool, error) {
+	if strings.TrimSpace(id) == "" {
+		return client.Suggestion{}, false, errors.New("suggestion id required")
+	}
+	entries, err := notes.List(notes.RefSuggestions)
+	if err != nil {
+		return client.Suggestion{}, false, err
+	}
+	for _, entry := range entries {
+		var sug client.Suggestion
+		found, err := notes.ReadJSON(notes.RefSuggestions, entry.ObjectSHA, &sug)
+		if err != nil {
+			return client.Suggestion{}, false, err
+		}
+		if !found {
+			continue
+		}
+		if sug.SuggestionID != id {
+			continue
+		}
+		if sug.SuggestedCommitSHA == "" {
+			sug.SuggestedCommitSHA = entry.ObjectSHA
+		}
+		return sug, true, nil
+	}
+	return client.Suggestion{}, false, nil
+}

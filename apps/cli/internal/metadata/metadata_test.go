@@ -83,6 +83,14 @@ func TestSuggestionLifecycle(t *testing.T) {
 			t.Fatalf("expected accepted status, got %s", updated.Status)
 		}
 
+		foundSug, ok, err := GetSuggestionByID(sug.SuggestionID)
+		if err != nil {
+			t.Fatalf("GetSuggestionByID failed: %v", err)
+		}
+		if !ok || foundSug.SuggestionID != sug.SuggestionID {
+			t.Fatalf("expected to find suggestion by id")
+		}
+
 		accepted, err := ListSuggestions("", "accepted", 10)
 		if err != nil {
 			t.Fatalf("ListSuggestions failed: %v", err)

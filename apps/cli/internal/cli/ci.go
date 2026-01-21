@@ -49,16 +49,16 @@ func newCICommand() Command {
 }
 
 func runCIRun(args []string) int {
-	return runCIRunWithStream(args, nil)
+	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr)
 }
 
 func runCIWatch(args []string) int {
-	return runCIRunWithStream(args, os.Stdout)
+	return runCIRunWithStream(args, os.Stdout, os.Stdout, os.Stderr)
 }
 
-func runCIRunWithStream(args []string, stream io.Writer) int {
+func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer) int {
 	fs := flag.NewFlagSet("ci run", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs.SetOutput(out)
 	var commands stringList
 	fs.Var(&commands, "cmd", "Command to run (repeatable). Default: go test ./...")
 	attType := fs.String("type", "ci", "Attestation type")
@@ -74,7 +74,7 @@ func runCIRunWithStream(args []string, stream io.Writer) int {
 
 	info, err := gitutil.CurrentCommit()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
+		fmt.Fprintf(errOut, "failed to read git state: %v\n", err)
 		return 1
 	}
 
@@ -85,19 +85,19 @@ func runCIRunWithStream(args []string, stream io.Writer) int {
 		}
 	}
 	if workdir == "" {
-		fmt.Fprintln(os.Stderr, "failed to determine repo root")
+		fmt.Fprintln(errOut, "failed to determine repo root")
 		return 1
 	}
 
 	var result cicmd.Result
 	if stream != nil && !*jsonOut {
-		fmt.Fprintln(os.Stdout, "Running CI (streaming)...")
+		fmt.Fprintln(out, "Running CI (streaming)...")
 		result, err = cicmd.RunCommandsStreaming(cmds, workdir, stream)
 	} else {
 		result, err = cicmd.RunCommands(cmds, workdir)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ci run failed: %v\n", err)
+		fmt.Fprintf(errOut, "ci run failed: %v\n", err)
 		return 1
 	}
 
@@ -108,7 +108,7 @@ func runCIRunWithStream(args []string, stream io.Writer) int {
 
 	signals, err := json.Marshal(result)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to encode signals: %v\n", err)
+		fmt.Fprintf(errOut, "failed to encode signals: %v\n", err)
 		return 1
 	}
 
@@ -145,13 +145,13 @@ func runCIRunWithStream(args []string, stream io.Writer) int {
 	if *jsonOut {
 		payload := buildCIJSON(result, created)
 		if err := renderCIJSON(payload); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+			fmt.Fprintf(errOut, "failed to encode json: %v\n", err)
 			return 1
 		}
 		return exitCodeForStatus(result.Status)
 	}
 
-	renderCIHuman(result)
+	renderCIHuman(out, result)
 	return exitCodeForStatus(result.Status)
 }
 
@@ -226,7 +226,7 @@ func runCIStatus(args []string) int {
 		fmt.Fprintf(os.Stdout, "ci %s (commit %s)\n", att.Status, info.SHA)
 		return exitCodeForStatus(att.Status)
 	}
-	renderCIHuman(result)
+	renderCIHuman(os.Stdout, result)
 	return exitCodeForStatus(result.Status)
 }
 
@@ -303,28 +303,28 @@ func renderCIJSON(payload ciJSON) error {
 	return enc.Encode(payload)
 }
 
-func renderCIHuman(result cicmd.Result) {
-	fmt.Fprintln(os.Stdout, "Running CI...")
+func renderCIHuman(out io.Writer, result cicmd.Result) {
+	fmt.Fprintln(out, "Running CI...")
 	for _, cmd := range result.Commands {
 		icon := "✓"
 		if cmd.Status != "pass" {
 			icon = "✗"
 		}
-		fmt.Fprintf(os.Stdout, "  %s %s (%dms)\n", icon, labelForCommand(cmd.Command), cmd.DurationMs)
+		fmt.Fprintf(out, "  %s %s (%dms)\n", icon, labelForCommand(cmd.Command), cmd.DurationMs)
 		if cmd.Status != "pass" && cmd.OutputExcerpt != "" {
 			for _, line := range strings.Split(cmd.OutputExcerpt, "\n") {
 				if strings.TrimSpace(line) == "" {
 					continue
 				}
-				fmt.Fprintf(os.Stdout, "    %s\n", line)
+				fmt.Fprintf(out, "    %s\n", line)
 			}
 		}
 	}
 	if result.Status == "pass" {
-		fmt.Fprintln(os.Stdout, "All checks passed.")
+		fmt.Fprintln(out, "All checks passed.")
 		return
 	}
-	fmt.Fprintln(os.Stdout, "One or more checks failed.")
+	fmt.Fprintln(out, "One or more checks failed.")
 }
 
 func labelForCommand(command string) string {

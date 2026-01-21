@@ -11,8 +11,6 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
-	"github.com/lydakis/jul/cli/internal/metadata"
-	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
@@ -26,6 +24,9 @@ func Commands(version string) []Command {
 		newCheckpointCommand(),
 		newSyncCommand(),
 		newStatusCommand(),
+		newLogCommand(),
+		newDiffCommand(),
+		newShowCommand(),
 		newReflogCommand(),
 		newPromoteCommand(),
 		newChangesCommand(),
@@ -103,29 +104,23 @@ func newStatusCommand() Command {
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			info, err := gitutil.CurrentCommit()
+			status, err := buildLocalStatus()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
-				return 1
-			}
-			repoName := config.RepoName()
-			if repoName != "" {
-				info.RepoName = repoName
-			}
-
-			wsID := config.WorkspaceID()
-			att, err := metadata.GetAttestation(info.SHA)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to fetch attestation: %v\n", err)
+				fmt.Fprintf(os.Stderr, "failed to read status: %v\n", err)
 				return 1
 			}
 
-			payload := output.BuildStatusPayload(wsID, info.RepoName, info.Branch, info.SHA, info.ChangeID, client.Workspace{}, att)
-			payload.SyncStatus = "local"
-			if err := output.RenderStatus(os.Stdout, payload, *jsonOut); err != nil {
-				fmt.Fprintf(os.Stderr, "failed to render status: %v\n", err)
-				return 1
+			if *jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(status); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+					return 1
+				}
+				return 0
 			}
+
+			renderLocalStatus(os.Stdout, status)
 			return 0
 		},
 	}
@@ -139,28 +134,38 @@ func newReflogCommand() Command {
 			fs := flag.NewFlagSet("reflog", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
 			limit := fs.Int("limit", 20, "Max entries to show")
+			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			wsID := config.WorkspaceID()
-			cli := client.New(config.BaseURL())
-			entries, err := cli.Reflog(wsID, *limit)
+			entries, err := localReflogEntries(*limit)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to fetch reflog: %v\n", err)
 				return 1
+			}
+			if *jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(entries); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+					return 1
+				}
+				return 0
 			}
 
 			if len(entries) == 0 {
 				fmt.Fprintln(os.Stdout, "No reflog entries.")
 				return 0
 			}
-
-			shown := 0
 			for _, entry := range entries {
-				fmt.Fprintf(os.Stdout, "%s %s (%s)\n", entry.CommitSHA, entry.ChangeID, entry.Source)
-				shown++
-				if *limit > 0 && shown >= *limit {
-					break
+				if entry.Kind == "draft" {
+					fmt.Fprintf(os.Stdout, "        └─ draft sync (%s)\n", entry.When)
+					continue
 				}
+				msg := entry.Message
+				if msg == "" {
+					msg = "checkpoint"
+				}
+				fmt.Fprintf(os.Stdout, "%s checkpoint \"%s\" (%s)\n", entry.CommitSHA, msg, entry.When)
 			}
 			return 0
 		},
