@@ -1,10 +1,11 @@
 # Smoke Tests
 
-These integration tests spin up a real Jul server, build the CLI, create a git repo, and exercise sync + reflog + CI attestation + query (including coverage filters) + suggestions refs + git notes.
+These integration tests build the CLI, create temporary git repos, and exercise Jul’s local-first flows end-to-end. They focus on draft/checkpoint behavior and remote ref updates without requiring server APIs.
 
-Two variants:
-- Mixed Git + HTTP: validates raw API responses and ref updates.
-- Jul CLI flow: uses `jul` commands for sync/query/suggestions; still uses `git` for commits/push because Git transport isn’t implemented yet.
+Covered flows:
+- **Local-only**: `jul init`, `jul sync`, `jul checkpoint` with no remotes configured.
+- **Git remote**: bare repo as `origin`, `jul sync` pushes sync/workspace refs, `jul checkpoint` pushes keep refs.
+- **Jul remote config**: `jul init --server <path> --create-remote` sets a remote and runs the same flow.
 
 ## Run
 
@@ -18,5 +19,5 @@ go test ./...
 ```
 
 ## Notes
-- Requires `git` and `go` available on PATH.
-- The test builds the CLI binary from `apps/cli`.
+- Requires `git` and `go` on PATH.
+- Tests build the CLI binary from `apps/cli`.

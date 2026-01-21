@@ -24,7 +24,7 @@
 ## Testing Guidelines
 - Use Go’s `testing` package; no external test framework required.
 - Unit tests should cover core logic and error paths.
-- Integration tests live in `apps/server/integration/` and exercise real CLI + server flows.
+- Integration tests live in `apps/server/integration/` and exercise real CLI local/remote flows; server API tests are separate.
 - New features should include unit tests and, when relevant, a smoke/integration scenario.
 - Run smoke tests with `cd apps/server && go test ./integration -run Smoke`.
 - Track coverage with `./scripts/coverage.sh` (generates `coverage.out` in `apps/cli` and `apps/server`).

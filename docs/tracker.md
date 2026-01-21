@@ -8,12 +8,12 @@
 
 ## Next Up
 - [x] Checkpoint semantics: new checkpoint commit + new draft + keep-ref
-- [ ] Workspace ref lease + auto-merge flow (`jul sync`, `jul merge`)
+- [x] Workspace ref lease + auto-merge flow (`jul sync`, `jul merge`)
 - [ ] Local metadata in notes (attestations, suggestions, review, prompts)
 - [ ] Agent sandbox + review pipeline (internal agent)
 - [ ] `jul ws checkout` + local workspace save/restore integration
 - [ ] Query/log/diff/show over local metadata
-- [ ] Update smoke tests: local-only, Git remote, Jul-remote (optional)
+- [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
 
 ## Completed (pre-pivot groundwork)
 - [x] Monorepo scaffold (CLI/server/web/infra)

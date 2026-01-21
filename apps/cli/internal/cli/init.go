@@ -26,6 +26,7 @@ func newInitCommand() Command {
 			remote := fs.String("remote", "", "Remote name to configure")
 			createRemote := fs.Bool("create-remote", false, "Create or update remote using --server (no API calls)")
 			noHooks := fs.Bool("no-hooks", false, "Skip hook installation")
+			args = normalizeInitArgs(args)
 			_ = fs.Parse(args)
 
 			repoName := strings.TrimSpace(fs.Arg(0))
@@ -148,4 +149,56 @@ func configureRemoteURL(repoRoot, remoteName, remoteURL string) error {
 
 func ensureJulDir(repoRoot string) error {
 	return os.MkdirAll(filepath.Join(repoRoot, ".jul"), 0o755)
+}
+
+func normalizeInitArgs(args []string) []string {
+	seenPositional := false
+	needsReorder := false
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			if seenPositional {
+				needsReorder = true
+				break
+			}
+			continue
+		}
+		seenPositional = true
+	}
+	if !needsReorder {
+		return args
+	}
+
+	flags := []string{}
+	positionals := []string{}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			flags = append(flags, arg)
+			name := initFlagName(arg)
+			if initFlagTakesValue(name) && !strings.Contains(arg, "=") && i+1 < len(args) {
+				flags = append(flags, args[i+1])
+				i++
+			}
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+	return append(flags, positionals...)
+}
+
+func initFlagName(arg string) string {
+	name := strings.TrimLeft(arg, "-")
+	if idx := strings.Index(name, "="); idx >= 0 {
+		name = name[:idx]
+	}
+	return name
+}
+
+func initFlagTakesValue(name string) bool {
+	switch name {
+	case "server", "workspace", "remote":
+		return true
+	default:
+		return false
+	}
 }

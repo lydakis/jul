@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestSmokeLegacyAttestationQuery(t *testing.T) {
+func TestLegacyAttestationQuery(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "legacy.db")
 
