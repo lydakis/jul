@@ -49,14 +49,14 @@ func newCICommand() Command {
 }
 
 func runCIRun(args []string) int {
-	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr)
+	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr, "")
 }
 
 func runCIWatch(args []string) int {
-	return runCIRunWithStream(args, os.Stdout, os.Stdout, os.Stderr)
+	return runCIRunWithStream(args, os.Stdout, os.Stdout, os.Stderr, "")
 }
 
-func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer) int {
+func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer, targetSHA string) int {
 	fs := flag.NewFlagSet("ci run", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var commands stringList
@@ -72,7 +72,7 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		cmds = []string{"go test ./..."}
 	}
 
-	info, err := gitutil.CurrentCommit()
+	info, err := resolveCICommit(targetSHA)
 	if err != nil {
 		fmt.Fprintf(errOut, "failed to read git state: %v\n", err)
 		return 1
@@ -351,4 +351,28 @@ func exitCodeForStatus(status string) int {
 		return 0
 	}
 	return 1
+}
+
+func resolveCICommit(targetSHA string) (gitutil.CommitInfo, error) {
+	if strings.TrimSpace(targetSHA) == "" {
+		return gitutil.CurrentCommit()
+	}
+	sha, err := gitutil.Git("rev-parse", targetSHA)
+	if err != nil {
+		return gitutil.CommitInfo{}, err
+	}
+	msg, _ := gitutil.CommitMessage(sha)
+	author, _ := gitutil.Git("log", "-1", "--format=%an", sha)
+	top, _ := gitutil.RepoTopLevel()
+	changeID := gitutil.ExtractChangeID(msg)
+	if changeID == "" {
+		changeID = gitutil.FallbackChangeID(sha)
+	}
+	return gitutil.CommitInfo{
+		SHA:      strings.TrimSpace(sha),
+		Author:   strings.TrimSpace(author),
+		Message:  msg,
+		ChangeID: changeID,
+		TopLevel: strings.TrimSpace(top),
+	}, nil
 }

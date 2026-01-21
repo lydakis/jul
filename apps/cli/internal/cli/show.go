@@ -164,7 +164,11 @@ func diffStatParent(sha string) string {
 	}
 	parent, err := gitutil.Git("rev-parse", sha+"^")
 	if err != nil {
-		return diffStat("", sha)
+		out, err := gitutil.Git("diff", "--stat", "--root", sha)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(out)
 	}
 	return diffStat(parent, sha)
 }

@@ -30,13 +30,13 @@ func newDiffCommand() Command {
 			_ = fs.Parse(args)
 
 			pos := fs.Args()
-			from, to, err := resolveDiffTargets(pos)
+			from, to, rootDiff, err := resolveDiffTargets(pos)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "diff failed: %v\n", err)
 				return 1
 			}
 
-			diffOut, err := runDiff(from, to, *stat, *nameOnly)
+			diffOut, err := runDiff(from, to, *stat, *nameOnly, rootDiff)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "diff failed: %v\n", err)
 				return 1
@@ -59,7 +59,7 @@ func newDiffCommand() Command {
 	}
 }
 
-func resolveDiffTargets(args []string) (string, string, error) {
+func resolveDiffTargets(args []string) (string, string, bool, error) {
 	switch len(args) {
 	case 0:
 		user, workspace := workspaceParts()
@@ -68,7 +68,7 @@ func resolveDiffTargets(args []string) (string, string, error) {
 		}
 		draftRef, err := syncRef(user, workspace)
 		if err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
 		draftSHA := ""
 		if gitutil.RefExists(draftRef) {
@@ -79,36 +79,36 @@ func resolveDiffTargets(args []string) (string, string, error) {
 		}
 		last, err := latestCheckpoint()
 		if err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
 		if last == nil {
-			return "", "", fmt.Errorf("no checkpoints found")
+			return "", "", false, fmt.Errorf("no checkpoints found")
 		}
-		return last.SHA, draftSHA, nil
+		return last.SHA, draftSHA, false, nil
 	case 1:
 		id := strings.TrimSpace(args[0])
 		if id == "" {
-			return "", "", fmt.Errorf("commit or suggestion required")
+			return "", "", false, fmt.Errorf("commit or suggestion required")
 		}
 		if sug, ok, err := metadata.GetSuggestionByID(id); err == nil && ok {
-			return sug.BaseCommitSHA, sug.SuggestedCommitSHA, nil
+			return sug.BaseCommitSHA, sug.SuggestedCommitSHA, false, nil
 		} else if err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
 		sha, err := gitutil.Git("rev-parse", id)
 		if err != nil {
-			return "", "", fmt.Errorf("failed to resolve %s", id)
+			return "", "", false, fmt.Errorf("failed to resolve %s", id)
 		}
 		parent, err := gitutil.Git("rev-parse", sha+"^")
 		if err != nil {
-			return "", sha, nil
+			return "", sha, true, nil
 		}
-		return parent, sha, nil
+		return parent, sha, false, nil
 	default:
 		left := strings.TrimSpace(args[0])
 		right := strings.TrimSpace(args[1])
 		if left == "" || right == "" {
-			return "", "", fmt.Errorf("two commits required")
+			return "", "", false, fmt.Errorf("two commits required")
 		}
 		from := left
 		to := right
@@ -116,33 +116,36 @@ func resolveDiffTargets(args []string) (string, string, error) {
 			from = sug.BaseCommitSHA
 			to = sug.SuggestedCommitSHA
 		} else if err != nil {
-			return "", "", err
+			return "", "", false, err
 		} else if sha, err := gitutil.Git("rev-parse", left); err == nil {
 			from = sha
 		} else {
-			return "", "", fmt.Errorf("failed to resolve %s", left)
+			return "", "", false, fmt.Errorf("failed to resolve %s", left)
 		}
 
 		if sug, ok, err := metadata.GetSuggestionByID(right); err == nil && ok {
 			to = sug.SuggestedCommitSHA
 		} else if err != nil {
-			return "", "", err
+			return "", "", false, err
 		} else if sha, err := gitutil.Git("rev-parse", right); err == nil {
 			to = sha
 		} else {
-			return "", "", fmt.Errorf("failed to resolve %s", right)
+			return "", "", false, fmt.Errorf("failed to resolve %s", right)
 		}
-		return from, to, nil
+		return from, to, false, nil
 	}
 }
 
-func runDiff(from, to string, stat, nameOnly bool) (string, error) {
+func runDiff(from, to string, stat, nameOnly bool, root bool) (string, error) {
 	args := []string{"diff"}
 	if stat {
 		args = append(args, "--stat")
 	}
 	if nameOnly {
 		args = append(args, "--name-only")
+	}
+	if root {
+		args = append(args, "--root")
 	}
 	if strings.TrimSpace(from) != "" {
 		args = append(args, from)

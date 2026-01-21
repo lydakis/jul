@@ -21,6 +21,9 @@ func localReflogEntries(limit int) ([]reflogEntry, error) {
 		workspace = "@"
 	}
 	ref := workspaceRef(user, workspace)
+	if !gitutil.RefExists(ref) {
+		return []reflogEntry{}, nil
+	}
 
 	args := []string{"reflog", "show", "--date=iso-strict", "--format=%H%x1f%gs%x1f%cd", ref}
 	if limit > 0 {

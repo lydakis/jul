@@ -37,7 +37,7 @@ func newCheckpointCommand() Command {
 					out = io.Discard
 					errOut = io.Discard
 				}
-				ciExit = runCIRunWithStream([]string{}, nil, out, errOut)
+				ciExit = runCIRunWithStream([]string{}, nil, out, errOut, res.CheckpointSHA)
 			}
 
 			if *jsonOut {
