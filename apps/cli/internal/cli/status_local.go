@@ -93,7 +93,7 @@ func buildLocalStatus() (localStatus, error) {
 		changeID = gitutil.FallbackChangeID(info.SHA)
 	}
 
-	suggestions, err := metadata.ListSuggestions(changeID, "open", 1000)
+	suggestions, err := metadata.ListSuggestions(changeID, "pending", 1000)
 	if err != nil {
 		return localStatus{}, err
 	}

@@ -309,7 +309,7 @@ func TestSuggestionLifecycle(t *testing.T) {
 		Reason:             "fix_tests",
 		Description:        "adjust failing test",
 		Confidence:         0.82,
-		Status:             "open",
+		Status:             "pending",
 		DiffstatJSON:       `{"files_changed":1}`,
 		CreatedAt:          now,
 	})
@@ -325,7 +325,7 @@ func TestSuggestionLifecycle(t *testing.T) {
 		t.Fatalf("expected change_id %s, got %s", created.ChangeID, fetched.ChangeID)
 	}
 
-	list, err := store.ListSuggestions(context.Background(), created.ChangeID, "open", 10)
+	list, err := store.ListSuggestions(context.Background(), created.ChangeID, "pending", 10)
 	if err != nil {
 		t.Fatalf("ListSuggestions failed: %v", err)
 	}
@@ -333,12 +333,12 @@ func TestSuggestionLifecycle(t *testing.T) {
 		t.Fatalf("expected 1 suggestion, got %d", len(list))
 	}
 
-	updated, err := store.UpdateSuggestionStatus(context.Background(), created.SuggestionID, "accepted", time.Now().UTC())
+	updated, err := store.UpdateSuggestionStatus(context.Background(), created.SuggestionID, "applied", time.Now().UTC())
 	if err != nil {
 		t.Fatalf("UpdateSuggestionStatus failed: %v", err)
 	}
-	if updated.Status != "accepted" {
-		t.Fatalf("expected status accepted, got %s", updated.Status)
+	if updated.Status != "applied" {
+		t.Fatalf("expected status applied, got %s", updated.Status)
 	}
 	if updated.ResolvedAt.IsZero() {
 		t.Fatalf("expected resolved_at to be set")

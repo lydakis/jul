@@ -67,20 +67,20 @@ func TestSuggestionLifecycle(t *testing.T) {
 			t.Fatalf("expected ref to point at %s, got %s", suggested, resolved)
 		}
 
-		open, err := ListSuggestions("", "open", 10)
+		pending, err := ListSuggestions("", "pending", 10)
 		if err != nil {
 			t.Fatalf("ListSuggestions failed: %v", err)
 		}
-		if len(open) != 1 {
-			t.Fatalf("expected 1 open suggestion, got %d", len(open))
+		if len(pending) != 1 {
+			t.Fatalf("expected 1 pending suggestion, got %d", len(pending))
 		}
 
-		updated, err := UpdateSuggestionStatus(sug.SuggestionID, "accepted")
+		updated, err := UpdateSuggestionStatus(sug.SuggestionID, "applied", "")
 		if err != nil {
 			t.Fatalf("UpdateSuggestionStatus failed: %v", err)
 		}
-		if updated.Status != "accepted" {
-			t.Fatalf("expected accepted status, got %s", updated.Status)
+		if updated.Status != "applied" {
+			t.Fatalf("expected applied status, got %s", updated.Status)
 		}
 
 		foundSug, ok, err := GetSuggestionByID(sug.SuggestionID)
@@ -91,12 +91,12 @@ func TestSuggestionLifecycle(t *testing.T) {
 			t.Fatalf("expected to find suggestion by id")
 		}
 
-		accepted, err := ListSuggestions("", "accepted", 10)
+		accepted, err := ListSuggestions("", "applied", 10)
 		if err != nil {
 			t.Fatalf("ListSuggestions failed: %v", err)
 		}
 		if len(accepted) != 1 {
-			t.Fatalf("expected 1 accepted suggestion, got %d", len(accepted))
+			t.Fatalf("expected 1 applied suggestion, got %d", len(accepted))
 		}
 	})
 }

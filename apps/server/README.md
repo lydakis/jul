@@ -31,7 +31,7 @@ go run ./cmd/jul-server --addr :8000 --db ./data/jul.db --repos ./repos
 - `POST /api/v1/ci/trigger` — run CI profile for commit
 - `GET/POST /api/v1/suggestions` — list/create suggestions
 - `GET /api/v1/suggestions/{id}` — suggestion details
-- `POST /api/v1/suggestions/{id}/accept` — mark suggestion accepted
+- `POST /api/v1/suggestions/{id}/accept` — mark suggestion applied
 - `POST /api/v1/suggestions/{id}/reject` — mark suggestion rejected
 - `POST /api/v1/repos` — create or fetch a bare repo
 - `GET /api/v1/query` — query commits by filters (`tests`, `compiles`, `coverage_min`, `coverage_max`, `author`, `change_id`, `since`, `until`, `limit`)

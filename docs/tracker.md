@@ -5,6 +5,8 @@
 - [x] Device ID + `workspace_base` tracking per workspace
 - [x] Remote selection rules (origin fallback) + `jul remote set/show`
 - [x] Update `jul init` and config to local-first defaults (`[remote]`, `[user]`)
+- [x] Suggestion statuses (`pending/applied/rejected`) + `jul apply`
+- [x] CI state files in `.jul/ci` + `jul ci status/cancel`
 
 ## Next Up
 - [x] Checkpoint semantics: new checkpoint commit + new draft + keep-ref
@@ -16,6 +18,8 @@
 - [x] Query/log/diff/show over local metadata
 - [x] Local reflog + status summaries from refs/notes
 - [ ] CI config wiring for draft/background runs (run_on_draft, draft_ci_blocking)
+- [ ] Align `jul status --json` and human output with new spec (draft/checkpoint summaries)
+- [ ] Add `jul review` (stub -> agent integration later)
 - [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
 
 ## Completed (pre-pivot groundwork)

@@ -126,6 +126,7 @@ type Suggestion struct {
 	Description        string    `json:"description"`
 	Confidence         float64   `json:"confidence"`
 	Status             string    `json:"status"`
+	ResolutionMessage  string    `json:"resolution_message,omitempty"`
 	DiffstatJSON       string    `json:"diffstat_json"`
 	CreatedAt          time.Time `json:"created_at"`
 	ResolvedAt         time.Time `json:"resolved_at,omitempty"`

@@ -7,9 +7,12 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
+	"time"
 
 	cicmd "github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/client"
+	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
 )
@@ -40,6 +43,8 @@ func newCICommand() Command {
 				return runCIWatch(args[1:])
 			case "config":
 				return runCIConfig(args[1:])
+			case "cancel":
+				return runCICancel(args[1:])
 			default:
 				printCIUsage()
 				return 1
@@ -89,6 +94,15 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		return 1
 	}
 
+	_ = cicmd.WriteRunning(cicmd.Running{
+		CommitSHA: info.SHA,
+		StartedAt: time.Now().UTC(),
+		PID:       os.Getpid(),
+	})
+	defer func() {
+		_ = cicmd.ClearRunning()
+	}()
+
 	var result cicmd.Result
 	if stream != nil && !*jsonOut {
 		fmt.Fprintln(out, "Running CI (streaming)...")
@@ -122,7 +136,7 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		coverageBranchPtr = coverageBranch
 	}
 
-	att := client.Attestation{
+	created := client.Attestation{
 		CommitSHA:         info.SHA,
 		ChangeID:          changeID,
 		Type:              *attType,
@@ -136,11 +150,22 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		SignalsJSON:       string(signals),
 	}
 
-	created, err := metadata.WriteAttestation(att)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to record attestation: %v\n", err)
-		return 1
+	if !isDraftMessage(info.Message) {
+		stored, err := metadata.WriteAttestation(created)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to record attestation: %v\n", err)
+			return 1
+		}
+		created = stored
 	}
+
+	_ = cicmd.WriteCompleted(cicmd.Status{
+		CommitSHA:         info.SHA,
+		CompletedAt:       time.Now().UTC(),
+		Result:            result,
+		CoverageLinePct:   coverageLinePtr,
+		CoverageBranchPct: coverageBranchPtr,
+	})
 
 	if *jsonOut {
 		payload := buildCIJSON(result, created)
@@ -160,6 +185,7 @@ func printCIUsage() {
 	fmt.Fprintln(os.Stdout, "       jul ci status [--json]")
 	fmt.Fprintln(os.Stdout, "       jul ci watch [--cmd <command>]")
 	fmt.Fprintln(os.Stdout, "       jul ci config")
+	fmt.Fprintln(os.Stdout, "       jul ci cancel")
 }
 
 func inferCIStatuses(commands []string, overall string) (string, string) {
@@ -188,55 +214,99 @@ func runCIStatus(args []string) int {
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	_ = fs.Parse(args)
 
-	info, err := gitutil.CurrentCommit()
+	current, err := currentDraftSHA()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
 		return 1
 	}
 
-	att, err := metadata.GetAttestation(info.SHA)
+	completed, err := cicmd.ReadCompleted()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read attestation: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to read ci results: %v\n", err)
 		return 1
 	}
-	if att == nil {
-		if *jsonOut {
-			_ = renderCIJSON(ciJSON{CI: ciJSONDetails{Status: "unknown"}})
-			return 1
+	running, _ := cicmd.ReadRunning()
+
+	status := "unknown"
+	resultsCurrent := false
+	completedSHA := ""
+	if completed != nil {
+		completedSHA = completed.CommitSHA
+		resultsCurrent = completed.CommitSHA == current
+		if resultsCurrent {
+			status = completed.Result.Status
+		} else {
+			status = "stale"
 		}
-		fmt.Fprintln(os.Stdout, "No CI results for current commit.")
-		return 1
+	}
+	if running != nil && running.CommitSHA == current {
+		status = "running"
 	}
 
-	var result cicmd.Result
-	if strings.TrimSpace(att.SignalsJSON) != "" {
-		_ = json.Unmarshal([]byte(att.SignalsJSON), &result)
-	}
+	payload := buildCIStatusJSON(status, current, completed, running, resultsCurrent)
 
 	if *jsonOut {
-		payload := buildCIJSON(result, *att)
-		if err := renderCIJSON(payload); err != nil {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(payload); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
 			return 1
 		}
-		return exitCodeForStatus(att.Status)
+		if status == "pass" {
+			return 0
+		}
+		return 1
 	}
 
-	if result.Status == "" {
-		fmt.Fprintf(os.Stdout, "ci %s (commit %s)\n", att.Status, info.SHA)
-		return exitCodeForStatus(att.Status)
+	fmt.Fprintln(os.Stdout, "CI Status:")
+	fmt.Fprintf(os.Stdout, "  Current draft: %s\n", current)
+	if completedSHA != "" {
+		marker := "✓"
+		if !resultsCurrent {
+			marker = "⚠"
+		}
+		fmt.Fprintf(os.Stdout, "  Last completed: %s %s\n", completedSHA, marker)
 	}
-	renderCIHuman(os.Stdout, result)
-	return exitCodeForStatus(result.Status)
+	if running != nil && running.CommitSHA != "" {
+		fmt.Fprintf(os.Stdout, "  ⚡ CI running for %s...\n", running.CommitSHA)
+	}
+	if completed != nil {
+		fmt.Fprintln(os.Stdout, "")
+		renderCIHuman(os.Stdout, completed.Result)
+	}
+	if status == "pass" {
+		return 0
+	}
+	return 1
 }
 
 func runCIConfig(args []string) int {
 	_ = args
 	fmt.Fprintln(os.Stdout, "CI configuration:")
-	fmt.Fprintln(os.Stdout, "  run_on_checkpoint: true (default)")
-	fmt.Fprintln(os.Stdout, "  run_on_draft: true (default)")
-	fmt.Fprintln(os.Stdout, "  draft_ci_blocking: false (default)")
+	fmt.Fprintf(os.Stdout, "  run_on_checkpoint: %t\n", config.CIRunOnCheckpoint())
+	fmt.Fprintf(os.Stdout, "  run_on_draft: %t\n", config.CIRunOnDraft())
+	fmt.Fprintf(os.Stdout, "  draft_ci_blocking: %t\n", config.CIDraftBlocking())
 	fmt.Fprintln(os.Stdout, "  default command: go test ./...")
+	return 0
+}
+
+func runCICancel(args []string) int {
+	_ = args
+	running, err := cicmd.ReadRunning()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read running CI: %v\n", err)
+		return 1
+	}
+	if running == nil || running.PID == 0 {
+		fmt.Fprintln(os.Stdout, "No running CI job.")
+		return 0
+	}
+	proc, err := os.FindProcess(running.PID)
+	if err == nil {
+		_ = proc.Signal(syscall.SIGTERM)
+	}
+	_ = cicmd.ClearRunning()
+	fmt.Fprintf(os.Stdout, "Cancelled CI run for %s\n", running.CommitSHA)
 	return 0
 }
 
@@ -375,4 +445,81 @@ func resolveCICommit(targetSHA string) (gitutil.CommitInfo, error) {
 		ChangeID: changeID,
 		TopLevel: strings.TrimSpace(top),
 	}, nil
+}
+
+func currentDraftSHA() (string, error) {
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	if ref, err := syncRef(user, workspace); err == nil {
+		if gitutil.RefExists(ref) {
+			if sha, err := gitutil.ResolveRef(ref); err == nil {
+				return sha, nil
+			}
+		}
+	}
+	ref := workspaceRef(user, workspace)
+	if gitutil.RefExists(ref) {
+		if sha, err := gitutil.ResolveRef(ref); err == nil {
+			return sha, nil
+		}
+	}
+	return gitutil.Git("rev-parse", "HEAD")
+}
+
+type ciStatusJSON struct {
+	CI ciStatusDetails `json:"ci"`
+}
+
+type ciStatusDetails struct {
+	Status          string        `json:"status"`
+	CurrentDraftSHA string        `json:"current_draft_sha,omitempty"`
+	CompletedSHA    string        `json:"completed_sha,omitempty"`
+	ResultsCurrent  bool          `json:"results_current"`
+	RunningSHA      string        `json:"running_sha,omitempty"`
+	DurationMs      int64         `json:"duration_ms,omitempty"`
+	Results         []ciJSONCheck `json:"results,omitempty"`
+}
+
+func buildCIStatusJSON(status string, current string, completed *cicmd.Status, running *cicmd.Running, resultsCurrent bool) ciStatusJSON {
+	details := ciStatusDetails{
+		Status:          status,
+		CurrentDraftSHA: current,
+		ResultsCurrent:  resultsCurrent,
+	}
+	if completed != nil {
+		details.CompletedSHA = completed.CommitSHA
+		if !completed.Result.StartedAt.IsZero() && !completed.Result.FinishedAt.IsZero() {
+			details.DurationMs = completed.Result.FinishedAt.Sub(completed.Result.StartedAt).Milliseconds()
+		}
+		checks := make([]ciJSONCheck, 0, len(completed.Result.Commands))
+		for _, cmd := range completed.Result.Commands {
+			checks = append(checks, ciJSONCheck{
+				Name:       labelForCommand(cmd.Command),
+				Status:     cmd.Status,
+				DurationMs: cmd.DurationMs,
+				Output:     cmd.OutputExcerpt,
+			})
+		}
+		if completed.CoverageLinePct != nil {
+			checks = append(checks, ciJSONCheck{
+				Name:   "coverage_line",
+				Status: "pass",
+				Value:  *completed.CoverageLinePct,
+			})
+		}
+		if completed.CoverageBranchPct != nil {
+			checks = append(checks, ciJSONCheck{
+				Name:   "coverage_branch",
+				Status: "pass",
+				Value:  *completed.CoverageBranchPct,
+			})
+		}
+		details.Results = checks
+	}
+	if running != nil {
+		details.RunningSHA = running.CommitSHA
+	}
+	return ciStatusJSON{CI: details}
 }

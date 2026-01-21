@@ -1068,7 +1068,7 @@ func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request) {
 			Reason:             strings.TrimSpace(body.Reason),
 			Description:        strings.TrimSpace(body.Description),
 			Confidence:         body.Confidence,
-			Status:             "open",
+			Status:             "pending",
 			DiffstatJSON:       diffstat,
 			CreatedAt:          time.Now().UTC(),
 		}
@@ -1113,7 +1113,7 @@ func (s *Server) handleSuggestionRoutes(w http.ResponseWriter, r *http.Request) 
 
 	if strings.HasSuffix(path, "/accept") {
 		id := strings.TrimSuffix(path, "/accept")
-		s.handleSuggestionStatus(w, r, id, "accepted")
+		s.handleSuggestionStatus(w, r, id, "applied")
 		return
 	}
 

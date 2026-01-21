@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
@@ -20,15 +21,45 @@ func newSuggestionsCommand() Command {
 			fs := flag.NewFlagSet("suggestions", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
 			changeID := fs.String("change-id", "", "Filter by change ID")
-			status := fs.String("status", "open", "Filter by status")
+			status := fs.String("status", "pending", "Filter by status (pending|applied|rejected|stale|all)")
 			limit := fs.Int("limit", 20, "Max results")
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			results, err := metadata.ListSuggestions(strings.TrimSpace(*changeID), strings.TrimSpace(*status), *limit)
+			currentCheckpoint, _ := latestCheckpoint()
+			currentChangeID := strings.TrimSpace(*changeID)
+			currentCheckpointSHA := ""
+			currentMessage := ""
+			if currentCheckpoint != nil {
+				currentCheckpointSHA = currentCheckpoint.SHA
+				currentMessage = firstLine(currentCheckpoint.Message)
+				if currentChangeID == "" {
+					currentChangeID = currentCheckpoint.ChangeID
+				}
+			}
+
+			statusFilter := strings.TrimSpace(*status)
+			listStatus := statusFilter
+			if statusFilter == "all" {
+				listStatus = ""
+			}
+			if statusFilter == "stale" {
+				listStatus = "pending"
+			}
+			results, err := metadata.ListSuggestions(currentChangeID, listStatus, *limit)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to list suggestions: %v\n", err)
 				return 1
+			}
+			if statusFilter == "stale" {
+				staleOnly := make([]client.Suggestion, 0, len(results))
+				for _, sug := range results {
+					stale := currentCheckpointSHA != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != currentCheckpointSHA
+					if stale {
+						staleOnly = append(staleOnly, sug)
+					}
+				}
+				results = staleOnly
 			}
 			if *jsonOut {
 				enc := json.NewEncoder(os.Stdout)
@@ -43,9 +74,38 @@ func newSuggestionsCommand() Command {
 				fmt.Fprintln(os.Stdout, "No suggestions.")
 				return 0
 			}
-			for _, sug := range results {
-				fmt.Fprintf(os.Stdout, "%s %s (%s)\n", sug.SuggestionID, sug.Reason, sug.Status)
+			if currentChangeID != "" {
+				header := "Pending"
+				if statusFilter != "" && statusFilter != "pending" && statusFilter != "stale" {
+					header = strings.ToUpper(statusFilter[:1]) + statusFilter[1:]
+				}
+				if currentCheckpointSHA != "" && currentMessage != "" {
+					fmt.Fprintf(os.Stdout, "%s for %s (%s) %q:\n\n", header, currentChangeID, currentCheckpointSHA, currentMessage)
+				} else {
+					fmt.Fprintf(os.Stdout, "%s for %s:\n\n", header, currentChangeID)
+				}
 			}
+			for _, sug := range results {
+				confidence := formatConfidence(sug.Confidence)
+				stale := currentCheckpointSHA != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != currentCheckpointSHA
+				staleMark := "✓"
+				if stale {
+					staleMark = "⚠ stale"
+				}
+				fmt.Fprintf(os.Stdout, "[%s] %s %s %s\n", sug.SuggestionID, sug.Reason, confidence, staleMark)
+				if stale && currentCheckpointSHA != "" {
+					fmt.Fprintf(os.Stdout, "             Created for %s, current is %s\n", sug.BaseCommitSHA, currentCheckpointSHA)
+				} else if sug.BaseCommitSHA != "" {
+					fmt.Fprintf(os.Stdout, "             base %s\n", sug.BaseCommitSHA)
+				}
+				if sug.Description != "" {
+					fmt.Fprintf(os.Stdout, "             %s\n", sug.Description)
+				}
+			}
+			fmt.Fprintln(os.Stdout, "\nActions:")
+			fmt.Fprintln(os.Stdout, "  jul show <id>      Show diff")
+			fmt.Fprintln(os.Stdout, "  jul apply <id>     Apply to draft")
+			fmt.Fprintln(os.Stdout, "  jul reject <id>    Reject")
 			return 0
 		},
 	}
@@ -118,6 +178,7 @@ func newSuggestionActionCommand(name, action string) Command {
 		Run: func(args []string) int {
 			fs := flag.NewFlagSet(name, flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
+			message := fs.String("m", "", "Resolution note")
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 			id := strings.TrimSpace(fs.Arg(0))
@@ -128,12 +189,12 @@ func newSuggestionActionCommand(name, action string) Command {
 
 			status := action
 			if action == "accept" {
-				status = "accepted"
+				status = "applied"
 			}
 			if action == "reject" {
 				status = "rejected"
 			}
-			updated, err := metadata.UpdateSuggestionStatus(id, status)
+			updated, err := metadata.UpdateSuggestionStatus(id, status, *message)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to update suggestion: %v\n", err)
 				return 1
@@ -153,4 +214,15 @@ func newSuggestionActionCommand(name, action string) Command {
 			return 0
 		},
 	}
+}
+
+func formatConfidence(value float64) string {
+	if value <= 0 {
+		return ""
+	}
+	percent := value
+	if value <= 1 {
+		percent = value * 100
+	}
+	return fmt.Sprintf("(%.0f%%)", percent)
 }

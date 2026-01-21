@@ -48,7 +48,7 @@ func CreateSuggestion(req SuggestionCreate) (client.Suggestion, error) {
 		Reason:             strings.TrimSpace(req.Reason),
 		Description:        strings.TrimSpace(req.Description),
 		Confidence:         req.Confidence,
-		Status:             "open",
+		Status:             "pending",
 		CreatedAt:          time.Now().UTC(),
 	}
 	if suggestion.CreatedBy == "" {
@@ -105,10 +105,15 @@ func ListSuggestions(changeID, status string, limit int) ([]client.Suggestion, e
 	return results[:limit], nil
 }
 
-func UpdateSuggestionStatus(id, status string) (client.Suggestion, error) {
+func UpdateSuggestionStatus(id, status, resolution string) (client.Suggestion, error) {
 	if strings.TrimSpace(id) == "" {
 		return client.Suggestion{}, errors.New("suggestion id required")
 	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return client.Suggestion{}, errors.New("status required")
+	}
+	resolution = strings.TrimSpace(resolution)
 	entries, err := notes.List(notes.RefSuggestions)
 	if err != nil {
 		return client.Suggestion{}, err
@@ -126,7 +131,14 @@ func UpdateSuggestionStatus(id, status string) (client.Suggestion, error) {
 			continue
 		}
 		sug.Status = status
-		sug.ResolvedAt = time.Now().UTC()
+		if resolution != "" {
+			sug.ResolutionMessage = resolution
+		}
+		if status == "pending" {
+			sug.ResolvedAt = time.Time{}
+		} else {
+			sug.ResolvedAt = time.Now().UTC()
+		}
 		if sug.SuggestedCommitSHA == "" {
 			sug.SuggestedCommitSHA = entry.ObjectSHA
 		}

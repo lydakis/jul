@@ -52,7 +52,7 @@ go run ./cmd/jul query --tests pass --compiles true --coverage-min 80 --limit 5
 go run ./cmd/jul checkpoint
 
 # List suggestions
-go run ./cmd/jul suggestions --status open
+go run ./cmd/jul suggestions --status pending
 
 # Create a suggestion
 go run ./cmd/jul suggest --base HEAD --suggested <sha> --reason fix_tests

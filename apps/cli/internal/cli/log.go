@@ -44,7 +44,7 @@ func newLogCommand() Command {
 					continue
 				}
 				att, _ := metadata.GetAttestation(cp.SHA)
-				suggestions, _ := metadata.ListSuggestions(cp.ChangeID, "open", 1000)
+				suggestions, _ := metadata.ListSuggestions(cp.ChangeID, "pending", 1000)
 				entry := logEntry{
 					CommitSHA:   cp.SHA,
 					ChangeID:    cp.ChangeID,

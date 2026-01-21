@@ -23,7 +23,7 @@ func (s *Store) CreateSuggestion(ctx context.Context, sug Suggestion) (Suggestio
 		sug.CreatedBy = "client"
 	}
 	if sug.Status == "" {
-		sug.Status = "open"
+		sug.Status = "pending"
 	}
 	if sug.Reason == "" {
 		sug.Reason = "unspecified"
