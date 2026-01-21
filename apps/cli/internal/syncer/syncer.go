@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
@@ -119,6 +118,9 @@ func Sync() (Result, error) {
 			return res, err
 		}
 		if err := gitutil.UpdateRef(workspaceRef, mergedSHA); err != nil {
+			return res, err
+		}
+		if err := updateWorktree(repoRoot, mergedSHA); err != nil {
 			return res, err
 		}
 		if err := writeWorkspaceBase(repoRoot, workspace, mergedSHA); err != nil {
@@ -373,40 +375,21 @@ func autoMerge(repoRoot, workspaceRemote, draftSHA, changeID string) (string, bo
 }
 
 func mergeTree(repoRoot, baseSHA, theirsSHA, oursSHA string) (string, bool, error) {
-	julDir := filepath.Join(repoRoot, ".jul")
-	if err := os.MkdirAll(julDir, 0o755); err != nil {
-		return "", false, err
-	}
-	indexPath := filepath.Join(julDir, fmt.Sprintf("merge-index-%d", time.Now().UnixNano()))
-	env := map[string]string{
-		"GIT_INDEX_FILE": indexPath,
-	}
-	defer func() { _ = os.Remove(indexPath) }()
-
-	_, _ = gitWithEnv(repoRoot, env, "read-tree", "-m", baseSHA, oursSHA, theirsSHA)
-	conflicts, err := hasConflicts(repoRoot, env)
+	cmd := exec.Command("git", "-C", repoRoot, "merge-tree", "--write-tree", "--merge-base", baseSHA, oursSHA, theirsSHA)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	out := strings.TrimSpace(string(output))
 	if err != nil {
-		return "", false, err
+		if strings.Contains(out, "CONFLICT") {
+			return "", true, nil
+		}
+		return "", false, fmt.Errorf("git -C %s merge-tree --write-tree failed: %s", repoRoot, out)
 	}
-	if conflicts {
-		return "", true, nil
-	}
-	treeSHA, err := gitWithEnv(repoRoot, env, "write-tree")
-	if err != nil {
-		return "", false, err
-	}
-	if _, err := gitWithEnv(repoRoot, env, "checkout-index", "-a", "-f"); err != nil {
-		return "", false, err
+	treeSHA := out
+	if treeSHA == "" {
+		return "", false, fmt.Errorf("merge-tree returned empty tree")
 	}
 	return treeSHA, false, nil
-}
-
-func hasConflicts(repoRoot string, env map[string]string) (bool, error) {
-	out, err := gitWithEnv(repoRoot, env, "ls-files", "-u")
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(out) != "", nil
 }
 
 func gitWithEnv(dir string, env map[string]string, args ...string) (string, error) {
@@ -425,6 +408,17 @@ func flattenEnv(env map[string]string) []string {
 		out = append(out, fmt.Sprintf("%s=%s", key, value))
 	}
 	return out
+}
+
+func updateWorktree(repoRoot, ref string) error {
+	if strings.TrimSpace(ref) == "" {
+		return fmt.Errorf("ref required for worktree update")
+	}
+	if _, err := gitWithEnv(repoRoot, nil, "checkout", "--force", ref, "--"); err != nil {
+		return err
+	}
+	_, err := gitWithEnv(repoRoot, nil, "clean", "-fd")
+	return err
 }
 
 func fetchRef(remoteName, ref string) error {

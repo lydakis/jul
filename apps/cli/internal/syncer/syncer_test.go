@@ -138,7 +138,13 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
 		t.Fatal(err)
 	}
+	if err := run(remoteDir, "git", "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
 	if err := run(repoDir, "git", "remote", "add", "origin", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "push", "origin", "HEAD:refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -158,6 +164,9 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 	}
 	workspaceRef := "refs/jul/workspaces/tester/@"
 	if err := run(repoDir, "git", "push", "origin", theirsSHA+":"+workspaceRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "fetch", "origin", "+"+workspaceRef+":"+workspaceRef); err != nil {
 		t.Fatal(err)
 	}
 	if err := run(repoDir, "git", "reset", "--hard", baseSHA); err != nil {
@@ -213,6 +222,130 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 	}
 	if strings.TrimSpace(string(localContent)) != "local" {
 		t.Fatalf("expected local change in working tree, got %q", string(localContent))
+	}
+}
+
+func TestSyncAutoMergeDeletesFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	repoDir := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "gone.txt"), []byte("gone\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "base.txt", "gone.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	baseSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	remoteDir := filepath.Join(tmp, "remote.git")
+	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(remoteDir, "git", "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "remote", "add", "origin", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create "theirs" draft commit that deletes gone.txt in a separate clone.
+	cloneDir := filepath.Join(tmp, "clone")
+	if err := run(tmp, "git", "clone", remoteDir, cloneDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(cloneDir, "git", "config", "user.name", "Remote User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(cloneDir, "git", "config", "user.email", "remote@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(cloneDir, "git", "fetch", "origin", "refs/heads/main:refs/remotes/origin/main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(cloneDir, "git", "checkout", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(cloneDir, "git", "rm", "gone.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(cloneDir, "git", "commit", "-m", "[draft] WIP\n\nChange-Id: Iremote"); err != nil {
+		t.Fatal(err)
+	}
+	theirsSHA, err := gitOut(cloneDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceRef := "refs/jul/workspaces/tester/@"
+	if err := run(cloneDir, "git", "push", "origin", theirsSHA+":"+workspaceRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "fetch", "origin", "+"+workspaceRef+":"+workspaceRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "reset", "--hard", baseSHA); err != nil {
+		t.Fatal(err)
+	}
+
+	basePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "base")
+	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(basePath, []byte(baseSHA+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	res, err := Sync()
+	if err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	if !res.AutoMerged {
+		t.Fatalf("expected auto-merge, got %+v", res)
+	}
+	if res.Diverged {
+		t.Fatalf("expected no divergence after auto-merge")
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "gone.txt")); err == nil {
+		t.Fatalf("expected gone.txt to be removed after auto-merge")
 	}
 }
 
