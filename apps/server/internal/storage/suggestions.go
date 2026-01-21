@@ -65,9 +65,15 @@ func (s *Store) ListSuggestions(ctx context.Context, changeID, status string, li
 		query += " AND change_id = ?"
 		args = append(args, changeID)
 	}
-	if status != "" {
-		query += " AND status = ?"
-		args = append(args, status)
+	statuses := expandSuggestionStatusFilter(status)
+	if len(statuses) > 0 {
+		if len(statuses) == 1 {
+			query += " AND status = ?"
+			args = append(args, statuses[0])
+		} else {
+			query += " AND status IN (?, ?)"
+			args = append(args, statuses[0], statuses[1])
+		}
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
@@ -148,5 +154,19 @@ func normalizeSuggestionStatus(status string) string {
 		return "applied"
 	default:
 		return strings.TrimSpace(status)
+	}
+}
+
+func expandSuggestionStatusFilter(status string) []string {
+	normalized := normalizeSuggestionStatus(status)
+	switch normalized {
+	case "pending":
+		return []string{"pending", "open"}
+	case "applied":
+		return []string{"applied", "accepted"}
+	case "":
+		return nil
+	default:
+		return []string{normalized}
 	}
 }

@@ -61,8 +61,18 @@ func newApplyCommand() Command {
 			}
 
 			currentCheckpoint, _ := latestCheckpoint()
-			if currentCheckpoint != nil && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != currentCheckpoint.SHA && !*force {
-				fmt.Fprintf(os.Stderr, "Suggestion is stale (created for %s, current is %s)\n", sug.BaseCommitSHA, currentCheckpoint.SHA)
+			staleBase := ""
+			if currentCheckpoint != nil {
+				staleBase = currentCheckpoint.SHA
+			} else if draftSHA, err := currentDraftSHA(); err == nil {
+				staleBase = strings.TrimSpace(draftSHA)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to resolve current draft: %v\n", err)
+				return 1
+			}
+
+			if staleBase != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != staleBase && !*force {
+				fmt.Fprintf(os.Stderr, "Suggestion is stale (created for %s, current is %s)\n", sug.BaseCommitSHA, staleBase)
 				fmt.Fprintln(os.Stderr, "Use --force to apply anyway.")
 				return 1
 			}
