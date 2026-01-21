@@ -84,8 +84,10 @@ func Sync() (Result, error) {
 	}
 
 	baseSHA, _ := readWorkspaceBase(repoRoot, workspace)
-	if baseSHA == "" {
-		baseSHA = workspaceRemote
+	if baseSHA == "" && workspaceRemote != "" {
+		res.Diverged = true
+		res.RemoteProblem = "workspace baseline missing; run 'jul ws checkout' first"
+		return res, nil
 	}
 	if workspaceRemote != "" && baseSHA != "" && workspaceRemote != baseSHA {
 		res.Diverged = true
@@ -137,11 +139,7 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 			if msg, err := gitutil.CommitMessage(sha); err == nil {
 				changeID = gitutil.ExtractChangeID(msg)
 			}
-			if parent, err := gitutil.ParentOf(sha); err == nil {
-				parentSHA = parent
-			} else {
-				parentSHA = sha
-			}
+			parentSHA = sha
 		}
 	}
 	if changeID == "" && parentSHA != "" {
