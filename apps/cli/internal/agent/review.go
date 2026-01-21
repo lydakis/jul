@@ -45,7 +45,10 @@ func RunReview(ctx context.Context, provider Provider, req ReviewRequest) (Revie
 }
 
 func runJSONAgentStdin(ctx context.Context, provider Provider, payload []byte, workdir string) (ReviewResponse, error) {
-	cmdPath, cmdArgs := splitCommand(provider.Command)
+	cmdPath, cmdArgs, err := splitCommand(provider.Command)
+	if err != nil {
+		return ReviewResponse{}, err
+	}
 	cmd := exec.CommandContext(ctx, cmdPath, cmdArgs...)
 	cmd.Dir = workdir
 	cmd.Env = append(os.Environ(),
@@ -83,7 +86,10 @@ func runJSONAgentFile(ctx context.Context, provider Provider, req ReviewRequest,
 	_ = outputFile.Close()
 	defer os.Remove(outputFile.Name())
 
-	cmdPath, cmdArgs := splitCommand(provider.Command)
+	cmdPath, cmdArgs, err := splitCommand(provider.Command)
+	if err != nil {
+		return ReviewResponse{}, err
+	}
 	cmd := exec.CommandContext(ctx, cmdPath, cmdArgs...)
 	cmd.Dir = req.WorkspacePath
 	cmd.Env = append(os.Environ(),
@@ -107,19 +113,7 @@ func runJSONAgentFile(ctx context.Context, provider Provider, req ReviewRequest,
 func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewRequest) (ReviewResponse, error) {
 	prompt := buildOpenCodePrompt(req)
 	cmdPath := provider.Command
-	args := []string{"run", prompt}
-	if provider.Headless != "" {
-		expanded := os.Expand(provider.Headless, func(key string) string {
-			switch key {
-			case "PROMPT":
-				return prompt
-			default:
-				return os.Getenv(key)
-			}
-		})
-		cmdPath = "sh"
-		args = []string{"-c", expanded}
-	}
+	args := []string{"run", "-f", "json"}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	cmd.Dir = req.WorkspacePath
 	cmd.Env = append(os.Environ(),
@@ -127,6 +121,7 @@ func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewReques
 		"JUL_AGENT_ACTION=review",
 		"JUL_AGENT_WORKSPACE="+req.WorkspacePath,
 	)
+	cmd.Stdin = strings.NewReader(prompt)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return ReviewResponse{}, fmt.Errorf("opencode failed: %w (%s)", err, strings.TrimSpace(string(output)))
@@ -134,12 +129,61 @@ func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewReques
 	return parseReviewResponse(output)
 }
 
-func splitCommand(command string) (string, []string) {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return command, nil
+func splitCommand(command string) (string, []string, error) {
+	args, err := parseCommandLine(command)
+	if err != nil {
+		return "", nil, err
 	}
-	return fields[0], fields[1:]
+	if len(args) == 0 {
+		return "", nil, fmt.Errorf("command required")
+	}
+	return args[0], args[1:], nil
+}
+
+func parseCommandLine(command string) ([]string, error) {
+	var args []string
+	var buf []rune
+	inSingle := false
+	inDouble := false
+	escaped := false
+
+	flush := func() {
+		if len(buf) == 0 {
+			return
+		}
+		args = append(args, string(buf))
+		buf = buf[:0]
+	}
+
+	for _, r := range []rune(command) {
+		if escaped {
+			buf = append(buf, r)
+			escaped = false
+			continue
+		}
+		if r == '\\' && !inSingle {
+			escaped = true
+			continue
+		}
+		if r == '"' && !inSingle {
+			inDouble = !inDouble
+			continue
+		}
+		if r == '\'' && !inDouble {
+			inSingle = !inSingle
+			continue
+		}
+		if !inSingle && !inDouble && (r == ' ' || r == '\t' || r == '\n') {
+			flush()
+			continue
+		}
+		buf = append(buf, r)
+	}
+	if escaped || inSingle || inDouble {
+		return nil, fmt.Errorf("unterminated quote in command")
+	}
+	flush()
+	return args, nil
 }
 
 func parseReviewResponse(data []byte) (ReviewResponse, error) {

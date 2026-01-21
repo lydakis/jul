@@ -166,7 +166,7 @@ func reviewDiff(baseSHA string) string {
 	}
 	parent, err := gitutil.ParentOf(baseSHA)
 	if err != nil || parent == "" {
-		out, err := gitutil.Git("diff", "--root", baseSHA)
+		out, err := gitutil.Git("show", "--format=", "--root", baseSHA)
 		if err != nil {
 			return ""
 		}
@@ -183,17 +183,7 @@ func reviewFiles(baseSHA string) []agent.ReviewFile {
 	if strings.TrimSpace(baseSHA) == "" {
 		return nil
 	}
-	parent, err := gitutil.ParentOf(baseSHA)
-	if err != nil || parent == "" {
-		parent = ""
-	}
-	args := []string{"diff", "--name-only"}
-	if parent != "" {
-		args = append(args, parent, baseSHA)
-	} else {
-		args = append(args, "--root", baseSHA)
-	}
-	out, err := gitutil.Git(args...)
+	out, err := gitutil.Git("diff-tree", "--no-commit-id", "--name-only", "-r", "--root", baseSHA)
 	if err != nil {
 		return nil
 	}
