@@ -206,12 +206,18 @@ $ jul promote --to main --json
 
 ### 2.5 Suggestion Lifecycle
 
-Suggestions are agent-proposed fixes created after checkpoint:
+Suggestions are agent-proposed fixes tied to a specific checkpoint SHA:
 
 ```
-checkpoint ──► CI + review runs ──► suggestions created
-                                          │
-         ┌────────────────────────────────┼────────────────────────┐
+checkpoint abc123 (Iab4f...)
+         │
+         ▼
+CI + review runs
+         │
+         ▼
+suggestions created (base_sha: abc123)
+         │
+         ├─────────────────────────────────────────────────────────┐
          ▼                                ▼                        ▼
    jul apply <id>                  jul reject <id>          ignore (warn on promote)
          │                                │
@@ -219,8 +225,47 @@ checkpoint ──► CI + review runs ──► suggestions created
    added to current draft          marked rejected
          │
          ▼
-   jul checkpoint (locks fix as separate checkpoint)
+   jul checkpoint (locks fix)
 ```
+
+**Suggestion metadata:**
+```json
+{
+  "id": "01HX7Y9A",
+  "change_id": "Iab4f...",
+  "base_sha": "abc123",      // Exact SHA this was created against
+  "commit": "def456",         // The suggestion's commit
+  "status": "pending",        // pending | applied | rejected | stale
+  "reason": "fix_failing_test",
+  "confidence": 0.89
+}
+```
+
+**Staleness:** If you amend the checkpoint (same Change-Id, new SHA), existing suggestions become stale:
+
+```
+checkpoint abc123 (Iab4f...)
+         │
+         ├── suggestion created (base_sha: abc123)
+         │
+         ▼
+amend → checkpoint def456 (same Iab4f...)
+         │
+         ├── suggestion marked "stale" (base mismatch)
+         │
+         ▼
+$ jul apply 01HX7Y9A
+⚠ Suggestion is stale (created for abc123, current is def456)
+  Run 'jul review' to generate fresh suggestions.
+```
+
+**Why track base_sha?** Change-Id survives amends, but the code changed. A suggestion that fixed line 45 in abc123 might not apply cleanly to def456 if you edited that area.
+
+**Status transitions:**
+- `pending` → `applied` (via `jul apply`)
+- `pending` → `rejected` (via `jul reject`)
+- `pending` → `stale` (checkpoint amended)
+- `stale` → stays stale (must run fresh review)
 
 **Result**: Clean history with your work and agent fixes as separate checkpoints.
 
@@ -296,10 +341,23 @@ refs/jul/sync/george/swift-tiger/feature-auth
 refs/jul/suggest/<change_id>/<suggestion_id>
 ```
 
-- Points to suggested commit(s) — the actual code changes
+- Points to suggested commit — the actual code changes
+- Tied to a Change-Id (checkpoint) AND a specific base SHA
 - Immutable once created
 - Can be fetched, inspected, cherry-picked
-- Metadata (reasoning, confidence) stored in notes
+- Metadata (reasoning, confidence, base_sha) stored in notes
+
+**Staleness:** If the checkpoint is amended (same Change-Id, new SHA), existing suggestions become stale because they were created against the old SHA.
+
+**Cleanup:** Suggestion refs are deleted when their parent checkpoint's keep-ref expires. This prevents ref accumulation:
+
+```
+refs/jul/keep/george/@/Iab4f.../abc123  expires
+    → delete refs/jul/suggest/Iab4f.../*
+    → delete associated notes
+```
+
+Without this, suggestion refs would accumulate forever even after their checkpoints are GC'd.
 
 ### 3.5 Keep Refs
 
@@ -311,15 +369,24 @@ Anchors checkpoints for retention/fetchability. Without a ref, git may GC unreac
 
 ### 3.6 Notes Namespaces
 
+**Synced notes (pushed to remote):**
 ```
-refs/notes/jul/attestations    # CI/test/coverage results
-refs/notes/jul/review          # Review comments  
-refs/notes/jul/meta            # Change-Id mappings
-refs/notes/jul/suggestions     # Suggestion metadata
-refs/notes/jul/prompts         # Optional: prompts that led to checkpoints
+refs/notes/jul/attestations/checkpoint   # Checkpoint CI results (keyed by SHA)
+refs/notes/jul/attestations/published    # Published CI results (keyed by SHA)
+refs/notes/jul/review                    # Review comments  
+refs/notes/jul/meta                      # Change-Id mappings
+refs/notes/jul/suggestions               # Suggestion metadata
+refs/notes/jul/prompts                   # Optional: prompts that led to checkpoints
 ```
 
-Notes are stored locally and pushed with explicit refspecs.
+**Local-only storage (not synced):**
+```
+.jul/ci/                  # Draft attestations (device-scoped, ephemeral)
+.jul/workspaces/<ws>/     # Per-workspace tracking (workspace_base)
+.jul/local/               # Saved local workspace states
+```
+
+Notes are pushed with explicit refspecs. Draft attestations are local-only by default to avoid multi-device write contention.
 
 ### 3.7 Complete Ref Layout
 
@@ -438,6 +505,8 @@ This means:
 - `git stash` works normally
 - Jul's draft commits are separate from your staged changes
 
+**Crash safety:** Shadow index uses atomic writes (write to temp file, then rename). If Jul crashes mid-sync, the shadow index may be stale but not corrupt — next sync regenerates it from the working tree. The shadow index is purely derived state.
+
 ### 5.2 Checkpoint vs Draft
 
 | Aspect | Draft | Checkpoint |
@@ -527,6 +596,15 @@ Syncing...
 
 No user action needed. Git's 3-way merge handles it.
 
+**Important:** Auto-merge produces a **new draft commit with single parent** (the checkpoint), NOT a 2-parent merge commit. Jul uses `git merge-tree` or equivalent to compute the merged tree, then creates a new draft commit:
+
+```
+parent = checkpoint (single parent, preserving "draft parent = checkpoint" invariant)
+tree = result of 3-way merge
+```
+
+This is NOT `git merge` which would create a 2-parent commit.
+
 #### Sync with conflicts (deferred)
 
 If the changes actually conflict:
@@ -542,6 +620,37 @@ Continue working. Run 'jul merge' when ready.
 ```
 
 **You keep coding.** Your sync ref keeps updating. Deal with the conflict when you're ready.
+
+#### Checkpoint base divergence
+
+**Failure mode:** What if Device A checkpointed while Device B has a local draft based on the OLD checkpoint?
+
+```
+Device A: checkpoint1 → checkpoint2 (pushed)
+Device B: checkpoint1 → draft (still on old base)
+```
+
+This is different from normal divergence (both on same checkpoint, different drafts). Here, the checkpoint histories have forked.
+
+**Detection:** When auto-merge runs, the merge-base of the two drafts will be `checkpoint1`, not `checkpoint2`. If Device B's draft parent ≠ `checkpoint2`, we've got checkpoint base divergence.
+
+**V1 behavior:** Fail with clear error:
+
+```bash
+$ jul sync
+Syncing...
+  ✓ Pushed to sync ref (your work is safe!)
+  ✗ Checkpoint base diverged
+  
+Your draft is based on checkpoint1, but workspace is now at checkpoint2.
+Your work is safe on your sync ref.
+
+Options:
+  jul ws checkout @     # Discard local changes, start fresh from checkpoint2
+  jul transplant        # (future) Rebase your draft onto checkpoint2
+```
+
+**Why not auto-fix?** Transplanting a draft from one checkpoint base to another is a rebase operation that can have complex conflicts. V1 takes the safe path: your work is preserved on sync ref, but you must explicitly decide how to proceed.
 
 #### Merge when ready
 
@@ -574,6 +683,7 @@ Accept? [y/n] y
 - Sync ref = this device's backup (always pushes, device-scoped)
 - Workspace ref = canonical state (shared across devices)
 - `workspace_base` = last workspace SHA we incorporated (per-workspace)
+- Auto-merge produces single-parent commit (parent = checkpoint), not 2-parent merge
 - Diverged only when: auto-merge fails due to actual conflicts
 - Can't promote until divergence is resolved
 
@@ -601,6 +711,21 @@ Or when conflicts exist:
     "merge_pending": true
   },
   "next_actions": ["continue working", "jul merge"]
+}
+```
+
+Or when checkpoint bases have diverged:
+
+```json
+{
+  "sync": {
+    "status": "checkpoint_base_diverged",
+    "sync_pushed": true,
+    "workspace_updated": false,
+    "local_base": "checkpoint1_sha",
+    "remote_base": "checkpoint2_sha"
+  },
+  "next_actions": ["jul ws checkout @", "manual intervention"]
 }
 ```
 
@@ -824,8 +949,11 @@ refs/jul/keep/george/feature/Icd5e6f7a/ghi789
 **Lifecycle:**
 - Created when checkpoint is locked
 - TTL-based expiration (configurable, default 90 days)
-- Expired keep-refs deleted by Jul remote maintenance job (if used)
-- Objects become unreachable after keep-ref deletion, eventually GC'd
+- Expired keep-refs deleted by Jul maintenance job
+- **Cascade cleanup:** When keep-ref expires, also delete:
+  - Associated suggestion refs (`refs/jul/suggest/<change-id>/*`)
+  - Associated notes (attestations, review comments)
+- Objects become unreachable after ref deletion, eventually GC'd
 
 ```toml
 # Jul remote config (optional)
@@ -849,17 +977,17 @@ checkpoint_keep_days = -1    # Never expire (infinite)
 
 **Future multi-user consideration:** Don't enable `uploadpack.allowAnySHA1InWant` in multi-tenant scenarios. Keep-refs are the safe path.
 
-### 5.6 Two Classes of Attestations
+### 5.6 Three Classes of Attestations
 
 **Problem:** Rebase/squash changes SHAs. An attestation for checkpoint `abc123` doesn't apply to the rebased commit `xyz789` on main.
 
-**Solution: Separate checkpoint attestations from published attestations.**
+**Solution: Separate attestations by lifecycle.**
 
-| Attestation Type | Attached To | Purpose |
-|------------------|-------------|---------|
-| **Draft** | Current draft SHA | Continuous feedback, ephemeral |
-| **Checkpoint** | Original checkpoint SHA | Pre-integration CI, review |
-| **Published** | Post-rebase SHA on target | Final verification on main |
+| Attestation Type | Attached To | Scope | Purpose |
+|------------------|-------------|-------|---------|
+| **Draft** | Current draft SHA | Device-local | Continuous feedback, ephemeral |
+| **Checkpoint** | Original checkpoint SHA | Synced | Pre-integration CI, review |
+| **Published** | Post-rebase SHA on target | Synced | Final verification on main |
 
 **Draft attestations (continuous CI):**
 
@@ -881,21 +1009,45 @@ Draft Iab4f... (2 files changed)
 
 Draft attestations are:
 - **Non-blocking** — you keep working, results appear when ready
-- **Ephemeral** — overwritten on each sync (not kept in history)
-- **Stored separately** — `refs/notes/jul/attestations/draft` (not mixed with checkpoint attestations)
+- **Ephemeral** — replaced on each sync (only current draft matters)
+- **Device-local by default** — stored in `.jul/ci/`, not pushed to remote
+- **Coalesced** — only the latest draft SHA runs; older runs are cancelled/ignored
 
-This gives agents continuous feedback: "Am I breaking anything?" without waiting for checkpoint.
+**Why device-local?** Two devices syncing to the same workspace would conflict on a shared draft notes ref. Since drafts are device-scoped anyway (via sync refs), their attestations should be too.
 
 ```toml
 [ci]
 run_on_draft = true           # Default: run CI on every draft sync
 run_on_checkpoint = true      # Always run on checkpoint
 draft_ci_blocking = false     # Default: non-blocking background run
+sync_draft_attestations = false  # Default: local-only (avoid multi-device conflicts)
 ```
 
-**Storage:**
+**Local storage (device-scoped):**
 ```
-refs/notes/jul/attestations/draft        # Ephemeral, current draft only
+.jul/ci/
+├── current_draft_sha         # SHA of draft being tested (or last tested)
+├── current_run_pid           # PID of running CI (for cancellation)
+├── results.json              # Latest results
+└── logs/
+    └── 2026-01-19-153045.log
+```
+
+**CI coalescing rules:**
+1. New sync → cancel any in-progress CI run for old draft
+2. Start CI for new draft SHA
+3. `jul ci status` reports: (a) latest completed SHA, (b) whether it matches current draft
+4. If results are for old draft: show with warning "⚠ results for old draft"
+
+```bash
+$ jul status
+Draft Iab4f... (3 files changed)
+  ⚠ CI results for previous draft (abc123)
+  ⚡ CI running for current draft (def456)...
+```
+
+**Synced storage (checkpoint/published only):**
+```
 refs/notes/jul/attestations/checkpoint   # Keyed by original SHA
 refs/notes/jul/attestations/published    # Keyed by published SHA
 ```
@@ -904,12 +1056,12 @@ refs/notes/jul/attestations/published    # Keyed by published SHA
 ```
 draft sync
     │
-    ├── CI runs (background) → draft attestation (ephemeral)
+    ├── CI runs (background, local) → .jul/ci/results.json
     │
     ▼
 checkpoint Iab4f... (sha: abc123)
     │
-    ├── CI runs → checkpoint attestation for abc123 (permanent)
+    ├── CI runs → checkpoint attestation (synced via notes)
     │
     ▼
 jul promote --to main --rebase
@@ -1425,27 +1577,62 @@ Deleted.
 
 Can't delete current workspace.
 
+#### `jul transplant` (Future)
+
+Rebase a draft from one checkpoint base to another. Used when checkpoint bases have diverged.
+
+```bash
+$ jul sync
+  ✗ Checkpoint base diverged
+  Your draft is based on checkpoint1, but workspace is now at checkpoint2.
+
+# Future command to carry changes forward:
+$ jul transplant
+Rebasing draft from checkpoint1 onto checkpoint2...
+  ⚠ Conflicts in src/auth.py
+  
+Run 'jul merge' to resolve.
+```
+
+**V1:** Not implemented. Use `jul ws checkout @` to start fresh, or manually cherry-pick from your sync ref.
+
 ### 6.4 Suggestion Commands
 
 #### `jul suggestions`
 
-List pending suggestions.
+List pending suggestions for current checkpoint.
 
 ```bash
 $ jul suggestions
 
-Pending for Iab4f... "feat: add JWT validation":
+Pending for Iab4f... (abc123) "feat: add JWT validation":
 
-  [01HX7Y9A] potential_null_check (92%)
+  [01HX7Y9A] potential_null_check (92%) ✓
              src/auth.py:42 - Missing null check on token
              
-  [01HX7Y9B] test_coverage (78%)
+  [01HX7Y9B] test_coverage (78%) ✓
              src/auth.py:67-73 - Uncovered error path
 
 Actions:
   jul show <id>      Show diff
   jul apply <id>     Apply to draft
   jul reject <id>    Reject
+```
+
+If checkpoint was amended, stale suggestions are marked:
+
+```bash
+$ jul suggestions
+
+Pending for Iab4f... (def456) "feat: add JWT validation":
+
+  [01HX7Y9A] potential_null_check (92%) ⚠ stale
+             Created for abc123, current is def456
+             
+  [01HX7Y9B] test_coverage (78%) ⚠ stale
+             Created for abc123, current is def456
+
+Run 'jul review' to generate fresh suggestions.
 ```
 
 #### `jul show`
@@ -1458,6 +1645,7 @@ $ jul show 01HX7Y9A
 Suggestion: potential_null_check
 Confidence: 92%
 Checkpoint: Iab4f... "feat: add JWT validation"
+Base SHA:   abc123
 
 src/auth.py:
   @@ -40,6 +40,9 @@
@@ -1484,6 +1672,18 @@ Applied to draft.
 # Or apply and checkpoint immediately
 $ jul apply 01HX7Y9A --checkpoint
 Applied and checkpointed as Icd5e... "fix: add null check for auth token"
+```
+
+If suggestion is stale:
+
+```bash
+$ jul apply 01HX7Y9A
+⚠ Suggestion is stale (created for abc123, current is def456)
+
+Options:
+  --force    Apply anyway (may not apply cleanly)
+  
+Run 'jul review' to generate fresh suggestions.
 ```
 
 #### `jul reject`
@@ -1591,6 +1791,34 @@ $ jul ci              # Run CI now, wait for results
 $ jul ci status       # Show latest results (don't re-run)
 $ jul ci watch        # Run and stream output
 $ jul ci config       # Show CI configuration
+$ jul ci cancel       # Cancel in-progress background CI
+```
+
+**`jul ci status` reports current vs completed:**
+
+```bash
+$ jul ci status
+CI Status:
+  Current draft: def456
+  Last completed: def456 ✓ (results current)
+  
+  ✓ lint: pass
+  ✓ test: pass (48/48)
+  ✓ coverage: 84%
+```
+
+If you've edited since the last CI run:
+
+```bash
+$ jul ci status
+CI Status:
+  Current draft: ghi789
+  Last completed: def456 ⚠ (stale)
+  ⚡ CI running for ghi789...
+  
+  Previous results (def456):
+    ✓ lint: pass
+    ✓ test: pass (48/48)
 ```
 
 **For agents (JSON):**
@@ -1603,12 +1831,30 @@ $ jul ci --json
 {
   "ci": {
     "status": "pass",
+    "current_draft_sha": "def456",
+    "completed_sha": "def456",
+    "results_current": true,
     "duration_ms": 9600,
     "results": [
       {"name": "lint", "status": "pass", "duration_ms": 1200},
       {"name": "test", "status": "pass", "duration_ms": 8400, "passed": 48, "failed": 0},
       {"name": "coverage", "status": "pass", "value": 84, "threshold": 80}
     ]
+  }
+}
+```
+
+When results are stale:
+
+```json
+{
+  "ci": {
+    "status": "stale",
+    "current_draft_sha": "ghi789",
+    "completed_sha": "def456",
+    "results_current": false,
+    "running_sha": "ghi789",
+    "results": [...]
   }
 }
 ```
@@ -1891,7 +2137,7 @@ Jul is designed for two types of agents:
 
 External agents use Jul as infrastructure. The key principle: **every command returns structured feedback that agents can act on.**
 
-#### 9.1.1 The Feedback Loop
+#### 8.1.1 The Feedback Loop
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -1909,7 +2155,7 @@ External agents use Jul as infrastructure. The key principle: **every command re
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 9.1.2 Checkpoint Response
+#### 8.1.2 Checkpoint Response
 
 When an external agent runs `jul checkpoint --json`:
 
@@ -1965,7 +2211,7 @@ The external agent can then:
 - Or make its own fix and checkpoint again
 - Or ask the user for help
 
-#### 9.1.3 Apply Response
+#### 8.1.3 Apply Response
 
 When agent runs `jul apply <id> --json`:
 
@@ -1985,7 +2231,7 @@ When agent runs `jul apply <id> --json`:
 }
 ```
 
-#### 9.1.4 Full External Agent Loop
+#### 8.1.4 Full External Agent Loop
 
 ```python
 # Example: External agent using Jul
@@ -2023,17 +2269,24 @@ jul("promote --to main")
 
 ### 8.2 Internal Agent (Review Agent)
 
-The internal agent is your configured provider (opencode, codex, etc.). It runs review and generates suggestions.
+The internal agent is your configured provider (OpenCode bundled, or Claude Code/Codex if configured). It runs reviews, resolves conflicts, and generates suggestions.
 
-**Key principle**: The internal agent works in an isolated sandbox, never touching your files directly.
+**Key principle**: The internal agent works in an isolated git worktree, never touching your files directly.
 
-#### 9.2.1 Agent Sandbox
+#### 8.2.1 Agent Workspace (Git Worktree)
+
+Jul uses a full git worktree for agent isolation:
+
+```bash
+# Jul creates worktree automatically
+git worktree add .jul/agent-workspace/worktree <checkpoint-sha>
+```
 
 ```
 .jul/
 ├── agent-workspace/              # Isolated agent sandbox
-│   ├── worktree/                 # Git worktree for agent
-│   │   └── ... (checked out files)
+│   ├── worktree/                 # Full git worktree (separate checkout)
+│   │   └── ... (all project files)
 │   ├── suggestions/
 │   │   ├── 01HX7Y9A/            # Each suggestion is a commit
 │   │   │   ├── commit           # SHA of suggestion commit
@@ -2044,7 +2297,13 @@ The internal agent is your configured provider (opencode, codex, etc.). It runs 
 │       └── review-2026-01-19.log
 ```
 
-#### 9.2.2 How Internal Agent Creates Suggestions
+**Why git worktree?**
+- Full checkout — agent sees all files, can run tests
+- Isolated — agent changes don't affect user's working tree
+- Git-native — commits become suggestion refs naturally
+- Standard tooling — agent can use normal git commands
+
+#### 8.2.2 How Internal Agent Creates Suggestions
 
 When `jul checkpoint` triggers review:
 
@@ -2058,7 +2317,8 @@ When `jul checkpoint` triggers review:
    {
      "action": "review",
      "workspace": ".jul/agent-workspace/worktree",
-     "checkpoint": "Iab4f3c2d...",
+     "change_id": "Iab4f3c2d...",
+     "checkpoint_sha": "abc123...",
      "diff": "...",
      "ci_results": {...}
    }
@@ -2081,28 +2341,57 @@ When `jul checkpoint` triggers review:
    ```json
    {
      "id": "01HX7Y9A",
+     "change_id": "Iab4f3c2d...",
+     "base_sha": "abc123...",
      "commit": "def456...",
-     "base": "abc123...",
+     "status": "pending",
      "reason": "potential_null_check",
      "confidence": 0.92
    }
    ```
 
-#### 9.2.3 Applying Suggestions
+The `base_sha` tracks which exact checkpoint SHA the suggestion was created against. If the checkpoint is amended (same Change-Id, new SHA), the suggestion becomes stale.
+
+#### 8.2.3 Applying Suggestions
 
 When user runs `jul apply 01HX7Y9A`:
 
-1. Get the suggestion's commit SHA
-2. Cherry-pick or patch into user's draft
+1. **Check staleness**: Compare suggestion's `base_sha` with current checkpoint SHA
+   - If match: proceed
+   - If mismatch: warn "stale", require `--force` or fresh review
+
+2. **Get the suggestion's commit SHA**
+
+3. **Cherry-pick or patch** into user's draft
    ```bash
    git cherry-pick --no-commit def456
    ```
-3. Changes appear in user's working directory
-4. User can review, edit, then checkpoint
+
+4. **Changes appear** in user's working directory
+
+5. **User can review**, edit, then checkpoint
 
 **The user never sees the agent workspace.** Suggestions appear as "proposed changes" that can be previewed and applied.
 
-#### 9.2.4 Agent Workspace Lifecycle
+**Staleness handling:**
+```bash
+# Normal case (not stale)
+$ jul apply 01HX7Y9A
+Applied to draft.
+
+# Stale case
+$ jul apply 01HX7Y9A
+⚠ Suggestion is stale (created for abc123, current is def456)
+  Run 'jul review' to generate fresh suggestions.
+  Or use --force to apply anyway.
+
+# Force apply (may conflict)
+$ jul apply 01HX7Y9A --force
+⚠ Applying stale suggestion...
+Applied to draft (check for conflicts).
+```
+
+#### 8.2.4 Agent Workspace Lifecycle
 
 ```
 jul checkpoint
@@ -2173,38 +2462,147 @@ Communication with internal agent via stdin/stdout JSON.
 
 ### 8.4 Agent Actions
 
-| Action | Triggered by | Agent workspace | Purpose |
-|--------|--------------|-----------------|---------|
-| `generate_message` | `jul checkpoint` | No | Create commit message |
-| `review` | After checkpoint | Yes | Analyze code, create suggestions |
-| `resolve_conflict` | `jul resolve` | Yes | 3-way merge resolution |
-| `setup_ci` | First checkpoint | No | Auto-configure CI (future) |
+| Action | Triggered by | Agent Workspace | Blocking | Purpose |
+|--------|--------------|-----------------|----------|---------|
+| `generate_message` | `jul checkpoint` | No | Yes | Create commit message |
+| `review` | After checkpoint | Yes (worktree) | No | Analyze code, create suggestions |
+| `resolve_conflict` | `jul merge` | Yes (worktree) | Yes | 3-way merge resolution |
+| `setup_ci` | First checkpoint (no config) | No | Yes | Auto-configure CI |
 
-### 8.5 Configuration
+**Workspace = git worktree** at `.jul/agent-workspace/worktree/` — full checkout, isolated from user's files.
+
+### 8.5 Agent Providers
+
+Jul can use any compatible coding agent. OpenCode is bundled for zero-config setup; others can be configured.
+
+#### Bundled: OpenCode
+
+Jul bundles OpenCode, so it works out of the box:
+
+```bash
+$ jul init
+Device ID: swift-tiger
+Agent: opencode (bundled)
+Workspace '@' ready
+```
+
+No API keys needed if using OpenCode's free tier or your own provider keys configured in `~/.config/opencode/`.
+
+#### External Agents
+
+Users can configure Claude Code, Codex, or other agents:
 
 ```toml
 # ~/.config/jul/agents.toml
 
 [default]
-provider = "opencode"
+provider = "opencode"              # Bundled, works out of box
 
 [providers.opencode]
 command = "opencode"
-protocol = "jul-agent-v1"
+bundled = true
+headless = "opencode run --model $MODEL \"$PROMPT\" -f json"
 timeout_seconds = 300
 
 [providers.claude-code]
 command = "claude"
-protocol = "jul-agent-v1"
+bundled = false                    # User must install
+headless = "claude -p \"$PROMPT\" --output-format json --permission-mode acceptEdits"
+timeout_seconds = 300
+
+[providers.codex]
+command = "codex"
+bundled = false                    # User must install
+headless = "codex exec \"$PROMPT\" --output-format json --full-auto"
 timeout_seconds = 300
 
 [sandbox]
-enable_network = false          # Agent can't make network calls
-enable_exec = true              # Agent can run tests
-max_iterations = 5              # Max edit-test cycles per review
+enable_network = false             # Agent can't make network calls
+enable_exec = true                 # Agent can run tests in sandbox
+max_iterations = 5                 # Max edit-test cycles per review
 ```
 
-### 8.6 Structured Output
+#### Headless Invocation
+
+Jul invokes agents in headless mode (non-interactive) for automated tasks:
+
+| Agent | Headless Command | Key Flags |
+|-------|------------------|-----------|
+| **OpenCode** | `opencode run --model <p/m> "task"` | `-f json` for output |
+| **Claude Code** | `claude -p "task"` | `--output-format json`, `--permission-mode acceptEdits` |
+| **Codex** | `codex exec "task"` | `--output-format json`, `--full-auto` |
+
+**Example: Jul invoking agent for review**
+
+```bash
+# Jul creates worktree, then invokes agent
+cd .jul/agent-workspace/worktree
+
+# OpenCode (bundled)
+opencode run --model opencode/claude-sonnet "Review this code for bugs. \
+  CI failed with: $FAILURES. Create fixes in this directory." -f json
+
+# Claude Code (if configured)
+claude -p "Review this code for bugs. CI failed with: $FAILURES. \
+  Create fixes in this directory." \
+  --output-format json \
+  --permission-mode acceptEdits \
+  --allowedTools "Read,Write,Edit,Bash(npm test)"
+```
+
+### 8.6 CI Auto-Setup
+
+When no CI configuration exists, the agent proposes one:
+
+```bash
+$ jul checkpoint
+No CI configuration found.
+Agent analyzing project...
+
+Detected: Python 3.11, pytest, ruff
+Proposed CI config:
+
+  [ci]
+  lint = "ruff check ."
+  test = "pytest"
+  coverage = "pytest --cov --cov-report=json"
+
+Accept? [y/n/edit] y
+
+  ✓ CI configuration saved to .jul/ci.toml
+  ✓ Running CI...
+```
+
+**Jul's CI is for fast local feedback**, separate from project CI (GitHub Actions, etc.):
+
+```toml
+# .jul/ci.toml (auto-generated or manual)
+
+[commands]
+lint = "ruff check ."
+test = "pytest"
+coverage = "pytest --cov --cov-report=json"
+
+[thresholds]
+min_coverage_pct = 80
+
+[options]
+timeout_seconds = 300
+parallel = true
+```
+
+If the project already has standard tooling (package.json scripts, Makefile, pyproject.toml), the agent detects and uses it:
+
+```bash
+$ jul checkpoint
+Detected CI from pyproject.toml:
+  lint: ruff check .
+  test: pytest
+
+Use detected config? [y/n/edit] y
+```
+
+### 8.7 Structured Output
 
 All commands support `--json` for external agent consumption:
 
@@ -2326,21 +2724,31 @@ This is future work. For v1, any git remote works.
 
 | Term | Definition |
 |------|------------|
+| **Agent Workspace** | Isolated git worktree (`.jul/agent-workspace/worktree/`) where internal agent works |
 | **Attestation** | CI/test/coverage results attached to a commit (draft, checkpoint, or published) |
+| **Auto-merge** | 3-way merge producing single-parent draft commit (NOT a 2-parent merge commit) |
 | **Change-Id** | Stable identifier (`Iab4f...`) for a checkpoint |
 | **Checkpoint** | Locked unit of work with message and Change-Id |
+| **Checkpoint Base Divergence** | When one device checkpointed while another has draft on old base |
+| **CI Coalescing** | Only latest draft SHA runs CI; older runs cancelled/ignored |
 | **Device ID** | Random word pair (e.g., "swift-tiger") identifying this machine |
 | **Draft** | Ephemeral commit snapshotting working tree (parent = last checkpoint) |
-| **Draft Attestation** | Ephemeral CI results for current draft (overwritten on each sync) |
+| **Draft Attestation** | Device-local CI results for current draft (ephemeral, not synced) |
+| **External Agent** | Coding agent (Claude Code, Codex) that uses Jul for feedback |
+| **Headless Mode** | Non-interactive agent invocation for automation |
+| **Internal Agent** | Configured provider (OpenCode bundled) that runs reviews/merge resolution |
 | **Keep-ref** | Ref that anchors a checkpoint for retention |
 | **Local Workspace** | Client-side saved state for fast context switching |
 | **Merge** | Agent-assisted resolution when sync has actual conflicts |
 | **Promote** | Move checkpoints to a target branch (main) |
 | **Prompt** | Optional metadata: the instruction that led to a checkpoint |
 | **Shadow Index** | Separate index file so Jul doesn't interfere with git staging |
-| **Suggestion** | Agent-proposed fix with apply/reject lifecycle |
+| **Stale Suggestion** | Suggestion created against an old checkpoint SHA (checkpoint was amended) |
+| **Suggestion** | Agent-proposed fix tied to a Change-Id and base SHA, with apply/reject lifecycle |
+| **Suggestion Base SHA** | The exact checkpoint SHA a suggestion was created against |
 | **Sync** | Fetch, push to sync ref, auto-merge if no conflicts, defer if conflicts |
 | **Sync Ref** | Device's backup stream (`refs/jul/sync/<user>/<device>/...`) |
+| **Transplant** | (Future) Rebase draft from one checkpoint base to another |
 | **Workspace** | Named stream of work (replaces branches) |
 | **Workspace Base** | Per-workspace file (`.jul/workspaces/<ws>/base`) tracking last merged SHA |
 | **Workspace Ref** | Canonical state (`refs/jul/workspaces/...`) — shared across devices |
