@@ -13,12 +13,14 @@ import (
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
 	"github.com/lydakis/jul/cli/internal/output"
+	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
 func Commands(version string) []Command {
 	return []Command{
 		newCloneCommand(),
 		newInitCommand(),
+		newRemoteCommand(),
 		newConfigureCommand(),
 		newWorkspaceCommand(),
 		newCheckpointCommand(),
@@ -41,36 +43,14 @@ func Commands(version string) []Command {
 func newSyncCommand() Command {
 	return Command{
 		Name:    "sync",
-		Summary: "Sync current commit to server",
+		Summary: "Sync draft locally and optionally to remote",
 		Run: func(args []string) int {
 			fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			info, err := gitutil.CurrentCommit()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
-				return 1
-			}
-			repoName := config.RepoName()
-			if repoName != "" {
-				info.RepoName = repoName
-			}
-
-			payload := client.SyncPayload{
-				WorkspaceID: config.WorkspaceID(),
-				Repo:        info.RepoName,
-				Branch:      info.Branch,
-				CommitSHA:   info.SHA,
-				ChangeID:    info.ChangeID,
-				Message:     info.Message,
-				Author:      info.Author,
-				CommittedAt: info.Committed,
-			}
-
-			cli := client.New(config.BaseURL())
-			res, err := cli.Sync(payload)
+			res, err := syncer.Sync()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
 				return 1
@@ -86,8 +66,25 @@ func newSyncCommand() Command {
 				return 0
 			}
 
-			fmt.Fprintf(os.Stdout, "synced %s -> %s (change %s, rev %d)\n",
-				res.Revision.CommitSHA, res.Workspace.WorkspaceID, res.Change.ChangeID, res.Revision.RevIndex)
+			fmt.Fprintln(os.Stdout, "Syncing...")
+			fmt.Fprintf(os.Stdout, "  ✓ Draft committed (%s)\n", res.DraftSHA)
+			if res.RemoteName == "" {
+				fmt.Fprintln(os.Stdout, "  ✓ Workspace ref updated (local)")
+				if res.RemoteProblem != "" {
+					fmt.Fprintf(os.Stdout, "  (%s)\n", res.RemoteProblem)
+				} else {
+					fmt.Fprintln(os.Stdout, "  (No remote configured)")
+				}
+				return 0
+			}
+			fmt.Fprintf(os.Stdout, "  ✓ Sync ref pushed (%s)\n", res.SyncRef)
+			if res.Diverged {
+				fmt.Fprintln(os.Stdout, "  ⚠ Workspace diverged — run 'jul merge' when ready")
+				return 0
+			}
+			if res.WorkspaceUpdated {
+				fmt.Fprintln(os.Stdout, "  ✓ Workspace ref updated")
+			}
 			return 0
 		},
 	}

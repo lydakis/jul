@@ -1,27 +1,53 @@
-# 줄 Jul: AI-First Git Hosting
+# 줄 Jul: AI-First Git Workflow
 
-**Version**: 0.2 (Draft)
+**Version**: 0.3 (Draft)
 **Status**: Design Specification
 
 ---
 
 ## 0. What Jul Is
 
-Jul is **not** a new VCS or transport protocol. It is:
+Jul is **Git with a built-in agent**. It's a local CLI tool that adds:
 
-1. A **regular Git remote** (smart HTTP + SSH), and
-2. A **sidecar protocol** (JSON over HTTPS + event stream) that makes the remote "agent-aware"
+- **Rich metadata** on every checkpoint (CI results, coverage, lint, prompts)
+- **Agent-native feedback loop**: checkpoint → get suggestions → act → repeat
+- **Continuous sync**: Every draft pushed to your git remote immediately
+- **Local review agent**: Analyzes code, creates suggestions automatically
 
-This is deliberate: implementing Git's pack protocol from scratch is a yak farm. Instead, Jul leans on standard server components like `git-http-backend`, which supports smart HTTP fetch/push and Git protocol v2.
+```
+Agent (Codex / Claude Code / OpenCode)
+              │
+              ▼
+        jul checkpoint
+              │
+              ▼
+    ┌─────────────────────────┐
+    │  Jul CLI (local)        │
+    │  • Runs tests           │
+    │  • Runs review agent    │
+    │  • Creates attestation  │
+    │  • Syncs to git remote  │
+    └─────────────────────────┘
+              │
+              ▼
+    Rich JSON feedback:
+    {
+      "ci": { "status": "pass", "coverage": 84 },
+      "suggestions": [...],
+      "next_actions": [...]
+    }
+              │
+              ▼
+    Agent acts on feedback, continues
+```
 
-Jul adds:
-- **Sync-by-default**: Every change is continuously backed up to the server
-- **Checkpoints**: Agent-assisted commit messages, clean separation of your work from fixes
-- **Workspaces**: Replace branches as the primary unit of work
-- **Attestations**: CI/coverage/lint as first-class queryable metadata
-- **Suggestions**: Agent-proposed fixes with apply/reject lifecycle
-- **Agent-native queries**: "Last green checkpoint," "interdiff since review," structured context
-- **Local workspaces**: Instant context switching without stash/worktree overhead
+**Jul is NOT:**
+- A new VCS (it's built on Git)
+- A special server (any git remote works: GitHub, GitLab, etc.)
+- A CI service (tests run locally)
+- A remote execution platform (agents run locally)
+
+**Metadata travels with Git** via refs and notes — on hosts that accept custom refs. See Section 5.7 for portability details.
 
 ---
 
@@ -29,25 +55,20 @@ Jul adds:
 
 ### 1.1 Goals
 
-- **Sync-first**: Every change gets backed up to the server continuously
-- **Checkpoint model**: Lock work when ready, agent generates messages, clean history
-- **Workspaces over branches**: Named streams of work, not branch juggling
-- **Agent-native primitives**:
-  - Stable change identity across amend/rewrite
-  - Built-in CI/coverage/lint/compile metadata
-  - Queryable history (file versions, interdiff, trend charts)
-  - Suggestions as first-class objects
-  - Fast local context switching
-- **Git compatibility**: Any Git client can clone/fetch/push published branches
-- **JJ friendliness**: JJ users work normally (JJ's Git backend produces regular commits)
-- **Flexible integration**: Go all-in with Jul, or use Jul as infrastructure behind Git/JJ
+- **Local-first**: Everything runs on your machine
+- **Continuous sync**: Every change pushed to git remote automatically
+- **Checkpoint model**: Lock work, agent generates message, run CI, get suggestions
+- **Agent-native feedback**: Rich JSON responses for agents to act on
+- **Workspaces over branches**: Named streams of work
+- **Rich metadata**: CI/coverage/lint/prompts attached to checkpoints
+- **Git compatibility**: Any git remote works (GitHub, GitLab, etc.)
+- **JJ friendliness**: Works with JJ's git backend
 
 ### 1.2 Non-Goals (v1)
 
-- Replacing Git object storage
-- Inventing a new merge algorithm
-- Silent server-side rewriting of user history (server can *suggest*, not mutate)
-- Multi-user / teams (personal use only for v1)
+- Replacing Git (Jul is built on Git)
+- Server-side execution (everything runs locally)
+- Multi-user / teams (single-player for v1)
 - Code review UI (use external tools)
 - Issue tracking
 
@@ -59,9 +80,13 @@ Jul adds:
 
 | Entity | Description |
 |--------|-------------|
-| **Repo** | A normal Git repository (bare on server, working copy on client) |
-| **Workspace** | A named stream of work. Replaces branches for feature work. Default: `@` |
-| **Draft** | Current working state, continuously synced, not yet locked |
+| **Repo** | A normal Git repository |
+| **Device** | A machine running Jul, identified by device ID (e.g., "swift-tiger") |
+| **Workspace** | A named stream of work. Replaces branches. Default: `@` |
+| **Workspace Ref** | Canonical state (`refs/jul/workspaces/...`) — shared across devices |
+| **Workspace Base** | Per-workspace file (`.jul/workspaces/<ws>/base`) — the semantic lease |
+| **Sync Ref** | Device backup (`refs/jul/sync/<user>/<device>/...`) — always pushes |
+| **Draft** | Ephemeral commit snapshotting working tree (parent = last checkpoint) |
 | **Checkpoint** | A locked unit of work with Change-Id and generated message |
 | **Change-Id** | Stable identifier that survives amend/rebase (`Iab4f3c2d...`) |
 | **Attestation** | CI/test/coverage results attached to a checkpoint |
@@ -70,14 +95,14 @@ Jul adds:
 
 ### 2.2 The Draft → Checkpoint → Promote Model
 
-Jul uses a three-stage model inspired by JJ's "working copy is always a commit":
+Jul uses a three-stage model:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  DRAFT                                                                  │
-│    • Always exists in current workspace                                 │
-│    • Continuously synced to server                                      │
-│    • CI can run on drafts                                               │
+│    • Shadow snapshot of your working tree                               │
+│    • Continuously updated (every save)                                  │
+│    • Synced to remote automatically                                     │
 │    • Has a Change-Id from creation                                      │
 │    • No commit message yet                                              │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -86,6 +111,7 @@ Jul uses a three-stage model inspired by JJ's "working copy is always a commit":
 │  CHECKPOINT                                                             │
 │    • Locked, immutable                                                  │
 │    • Agent generates commit message (or user provides with -m)          │
+│    • Optional: prompt that led to this checkpoint                       │
 │    • CI runs, attestation created                                       │
 │    • Review runs, suggestions created                                   │
 │    • New draft automatically started                                    │
@@ -99,7 +125,7 @@ Jul uses a three-stage model inspired by JJ's "working copy is always a commit":
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key insight**: You're always working in a draft. There's no "uncommitted changes" anxiety. `jul checkpoint` is when you say "this is a logical unit."
+**Key insight**: Your working tree can still be "dirty" relative to HEAD (normal git). But Jul continuously snapshots your dirty state as a draft commit and syncs it. You can always recover. The draft is your safety net, not your workspace. `jul checkpoint` is when you say "this is a logical unit."
 
 ### 2.3 Workspaces Replace Branches
 
@@ -114,7 +140,7 @@ git checkout main && git merge  # Merge
 Jul:
 ```bash
 jul ws new feature-auth         # Create workspace (or use default @)
-# ... edit, auto-synced ...
+# ... edit, sync optional ...
 jul checkpoint                  # Lock with message
 jul promote --to main           # Publish
 ```
@@ -125,18 +151,10 @@ jul promote --to main           # Publish
 - Workspaces are where work happens: `refs/jul/workspaces/<user>/<name>`
 - Default workspace `@` means you don't need to name anything upfront
 
-### 2.4 Change Identity
-
-We need a stable ID that survives checkpoint amends. Jul uses Change-Id (Gerrit-compatible):
-
-- Format: `I` + 40 hex characters
-- Generated when draft is created
-- Preserved across amends within same logical change
-- Stored in commit message trailer: `Change-Id: Iab4f3c2d...`
-
-### 2.5 Integration Modes
+### 2.4 Integration Modes
 
 Jul works at multiple levels. Choose your porcelain:
+All modes work offline; add a remote only when you want sync/collaboration.
 
 #### 2.5.1 Full Jul Mode
 
@@ -144,7 +162,7 @@ Jul is your primary interface.
 
 ```bash
 $ jul configure                         # One-time setup
-$ jul init my-project --create-remote   # Create repo + server remote
+$ jul init my-project --create-remote   # Create repo + server remote (optional)
 # ... edit ...
 $ jul checkpoint                        # Lock + message + CI + review
 $ jul promote --to main                 # Publish
@@ -152,7 +170,7 @@ $ jul promote --to main                 # Publish
 
 #### 2.5.2 Git + Jul (Invisible Infrastructure)
 
-Git is your porcelain. Jul syncs in background via hooks.
+Git is your porcelain. Jul can sync in background via hooks when a remote is configured.
 
 ```bash
 $ git init && jul init --server https://jul.example.com
@@ -165,7 +183,7 @@ $ jul promote --to main                 # When ready
 
 #### 2.5.3 JJ + Jul
 
-JJ handles local workflow. Jul handles server.
+JJ handles local workflow. Jul handles optional remote sync/policy.
 
 ```bash
 $ jj git init --colocate
@@ -186,7 +204,7 @@ $ jul apply 01HX... --json
 $ jul promote --to main --json
 ```
 
-### 2.6 Suggestion Lifecycle
+### 2.5 Suggestion Lifecycle
 
 Suggestions are agent-proposed fixes created after checkpoint:
 
@@ -226,7 +244,7 @@ refs/heads/<branch>     # main, staging, etc.
 refs/tags/<tag>         # Release tags
 ```
 
-These are standard Git refs. Any Git client can interact with them. You never work directly on these—only `jul promote` updates them.
+Standard Git refs. Any Git client can interact with them. Only `jul promote` updates them.
 
 ### 3.2 Workspace Refs
 
@@ -234,182 +252,114 @@ These are standard Git refs. Any Git client can interact with them. You never wo
 refs/jul/workspaces/<user>/<workspace>
 ```
 
+The **canonical** state of a workspace — the "merged truth" shared across devices.
+
 Examples:
 ```
 refs/jul/workspaces/george/@              # Default workspace
 refs/jul/workspaces/george/feature-auth   # Named workspace
-refs/jul/workspaces/george/bugfix-123     # Another named workspace
 ```
 
-- Updated continuously (draft sync) and on checkpoint
-- Force-push is normal and expected
-- Server preserves full history (no GC pruning)
+Updated only when:
+- Sync succeeds (not diverged, force-with-lease passes)
+- Merge completes (after resolving divergence)
 
-### 3.3 Suggestion Refs
+### 3.3 Sync Refs
+
+```
+refs/jul/sync/<user>/<device>/<workspace>
+```
+
+Your **personal backup stream per device** — always pushes, never blocked.
+
+Examples:
+```
+refs/jul/sync/george/swift-tiger/@           # Laptop backup
+refs/jul/sync/george/quiet-mountain/@        # Desktop backup
+refs/jul/sync/george/swift-tiger/feature-auth
+```
+
+**Device ID:**
+- Auto-generated on first `jul init` (e.g., "swift-tiger", "quiet-mountain")
+- Stored in `~/.config/jul/device`
+- Two random words, memorable and unique enough for personal use
+
+**The relationship:**
+- Workspace ref = canonical truth (shared across devices)
+- Sync ref = your backup on THIS device (safe from other devices)
+- When not diverged: workspace = sync (same commit)
+- When diverged: workspace ≠ sync (must merge to reunify)
+
+### 3.4 Suggestion Refs
 
 ```
 refs/jul/suggest/<change_id>/<suggestion_id>
 ```
 
-- Points to suggested commit(s)
+- Points to suggested commit(s) — the actual code changes
 - Immutable once created
-- Can be fetched, inspected, applied by client
+- Can be fetched, inspected, cherry-picked
+- Metadata (reasoning, confidence) stored in notes
 
-### 3.4 Notes Namespaces
+### 3.5 Keep Refs
+
+```
+refs/jul/keep/<workspace>/<change_id>/<sha>
+```
+
+Anchors checkpoints for retention/fetchability. Without a ref, git may GC unreachable commits.
+
+### 3.6 Notes Namespaces
 
 ```
 refs/notes/jul/attestations    # CI/test/coverage results
-refs/notes/jul/review          # Review comments
-refs/notes/jul/meta            # Change-Id mappings, workspace metadata
+refs/notes/jul/review          # Review comments  
+refs/notes/jul/meta            # Change-Id mappings
+refs/notes/jul/suggestions     # Suggestion metadata
+refs/notes/jul/prompts         # Optional: prompts that led to checkpoints
 ```
 
-### 3.5 Complete Ref Layout
+Notes are stored locally and pushed with explicit refspecs.
+
+### 3.7 Complete Ref Layout
 
 ```
 refs/
-├── heads/                           # Promote targets only
+├── heads/                           # Promote targets
 │   ├── main
 │   └── staging
 ├── tags/
 ├── jul/
-│   ├── workspaces/
+│   ├── workspaces/                  # Canonical state (shared truth)
 │   │   └── <user>/
-│   │       ├── @                    # Default workspace
-│   │       └── <named-workspace>    # Named workspaces
-│   └── suggest/
-│       └── <change_id>/
-│           └── <suggestion_id>
+│   │       ├── @
+│   │       └── <named>
+│   ├── sync/                        # Device backups (per-device)
+│   │   └── <user>/
+│   │       └── <device>/
+│   │           ├── @
+│   │           └── <named>
+│   ├── suggest/
+│   │   └── <change_id>/
+│   │       └── <suggestion_id>
+│   └── keep/
+│       └── <workspace>/
+│           └── <change_id>/
+│               └── <sha>
 └── notes/jul/
     ├── attestations
     ├── review
-    └── meta
+    ├── meta
+    ├── suggestions
+    └── prompts
 ```
 
 ---
 
-## 4. Sidecar Protocol: Jul API v1
 
-### 4.1 Transport
+## 4. Policy Model
 
-- **Base URL**: `https://<host>/<repo>.jul/api/v1/...`
-- **Event stream**: Server-Sent Events (SSE) at `/events/stream`
-
-### 4.2 Authentication
-
-```
-Authorization: Bearer <token>
-```
-
-Tokens have scopes: `git:read`, `git:write`, `jul:read`, `jul:write`, `ci:trigger`, `ai:suggest`
-
-### 4.3 Core API Objects
-
-#### Workspace
-
-```json
-{
-  "workspace_id": "george/@",
-  "user": "george",
-  "name": "@",
-  "head_sha": "abc123...",
-  "draft": {
-    "change_id": "Icd5e6f7a...",
-    "files_changed": 3
-  },
-  "checkpoints": [
-    {"change_id": "Iab4f3c2d...", "message": "feat: add auth", "sha": "def456..."}
-  ],
-  "updated_at": "2026-01-19T15:30:00Z"
-}
-```
-
-#### Checkpoint
-
-```json
-{
-  "change_id": "Iab4f3c2d1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
-  "commit_sha": "abc123...",
-  "message": "feat: add user authentication",
-  "author": "george",
-  "status": "locked",
-  "created_at": "2026-01-19T15:30:00Z",
-  "attestation": { ... },
-  "suggestions": [ ... ]
-}
-```
-
-#### Attestation
-
-```json
-{
-  "attestation_id": "01HX7Y8Z...",
-  "change_id": "Iab4f3c2d...",
-  "commit_sha": "abc123...",
-  "status": "pass",
-  "signals": {
-    "lint": {"status": "pass", "warnings": 2},
-    "compile": {"status": "pass"},
-    "test": {"status": "pass", "passed": 48, "failed": 0},
-    "coverage": {"line_pct": 84.2}
-  },
-  "finished_at": "2026-01-19T15:31:00Z"
-}
-```
-
-#### Suggestion
-
-```json
-{
-  "suggestion_id": "01HX7Y9A...",
-  "change_id": "Iab4f3c2d...",
-  "reason": "potential_null_check",
-  "description": "Missing null check on token before validation",
-  "confidence": 0.92,
-  "status": "open",
-  "diff": {
-    "file": "src/auth.py",
-    "additions": 3,
-    "deletions": 1
-  }
-}
-```
-
-### 4.4 Key Endpoints
-
-```
-# Workspaces
-GET  /api/v1/workspaces
-GET  /api/v1/workspaces/<id>
-POST /api/v1/workspaces                    # Create workspace
-POST /api/v1/workspaces/<id>/sync          # Sync draft
-POST /api/v1/workspaces/<id>/checkpoint    # Lock draft
-
-# Checkpoints
-GET  /api/v1/checkpoints/<change_id>
-GET  /api/v1/checkpoints/<change_id>/interdiff
-
-# Promote
-POST /api/v1/promote
-     Body: {"workspace_id": "...", "target": "main", "strategy": "rebase"}
-
-# Suggestions
-GET  /api/v1/suggestions?change_id=...
-GET  /api/v1/suggestions/<id>
-POST /api/v1/suggestions/<id>/apply
-POST /api/v1/suggestions/<id>/reject
-
-# Attestations
-GET  /api/v1/attestations?change_id=...
-
-# Events
-GET  /api/v1/events/stream
-```
-
----
-
-## 5. Policy Model
-
-### 5.1 Promote Policies
+### 4.1 Promote Policies
 
 ```toml
 # .jul/policy.toml
@@ -420,7 +370,7 @@ require_suggestions_addressed = false   # Warn only
 strategy = "rebase"                     # rebase | squash | merge
 ```
 
-### 5.2 Promote Strategies
+### 4.2 Promote Strategies
 
 | Strategy | Behavior |
 |----------|----------|
@@ -430,18 +380,20 @@ strategy = "rebase"                     # rebase | squash | merge
 
 ---
 
-## 6. Git Implementation Details
+## 5. Git Implementation Details
 
-This section addresses the concrete git representation of Jul's concepts.
+This section addresses how Jul concepts map to Git.
 
-### 6.1 Draft Representation
+### 5.1 Draft Representation
 
-**Decision: Drafts are real git commits.**
+**Drafts are real git commits.**
 
 A draft is a commit with:
 - A placeholder message (e.g., `[draft] Iab4f3c2d`)
 - A stable Change-Id in the message trailer
-- Pointed to by `refs/jul/workspaces/<user>/<workspace>`
+- Parent = last checkpoint (always)
+- Always pointed to by this device's sync ref
+- Pointed to by workspace ref only when canonical (not diverged)
 
 ```
 commit abc123
@@ -453,55 +405,262 @@ Date:   Mon Jan 19 15:30:00 2026
     Change-Id: Iab4f3c2d1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b
 ```
 
+**Each sync creates a NEW draft commit:**
+- Same parent (last checkpoint)
+- New tree (current working directory state)
+- Force-updates sync ref
+- Old draft becomes unreachable (ephemeral)
+
+This avoids "infinite WIP commit chain" — there's always exactly one draft commit per workspace, with parent = last checkpoint. Drafts are siblings (same parent), not ancestors of each other.
+
 **Why commits, not sidecar snapshots:**
 - Git tools work (diff, log, bisect)
-- Server receives via normal push
-- JJ/git interop preserved
-- Attestations can attach via notes
+- Push to any git remote
+- JJ interop preserved
+- Attestations attach via notes
 
-**Shadow index to protect user's staging:**
+**Shadow index for non-interference:**
 
-Draft sync must NOT interfere with the user's `git add` state. Use a shadow index:
+Jul uses a shadow index so it doesn't interfere with your normal git staging:
 
 ```bash
-# Draft sync implementation
+# Jul sync implementation
 GIT_INDEX_FILE=.jul/draft-index git add -A
 GIT_INDEX_FILE=.jul/draft-index git write-tree
-# Create commit from tree, update workspace ref
+# Create commit from tree with parent = last checkpoint
+# Force-update sync ref
+# Update workspace ref only if not diverged (via force-with-lease)
 # User's .git/index is untouched
 ```
 
-This allows:
-- User can `git add -p` (selective staging) while draft syncs
-- User's staging is preserved
-- Draft always reflects full working tree
+This means:
+- `git add -p` works normally
+- `git stash` works normally
+- Jul's draft commits are separate from your staged changes
 
-### 6.2 Checkpoint vs Draft
+### 5.2 Checkpoint vs Draft
 
 | Aspect | Draft | Checkpoint |
 |--------|-------|------------|
 | Message | `[draft] WIP` | Agent-generated or user-provided |
-| Mutable | Yes (amended on each sync) | No (immutable after creation) |
-| CI runs | Optional (configurable) | Always |
+| Parent | Last checkpoint | Last checkpoint |
+| Mutable | Yes (replaced on each sync) | No (immutable) |
+| CI runs | Optional | Always |
 | Retention | Ephemeral (no keep-ref) | Keep-ref created |
 | Attestations | Temporary | Permanent |
 
-When `jul checkpoint` runs:
-1. Current draft commit is finalized with real message
-2. A new draft commit is created as child
-3. Keep-ref created for the checkpoint (see 6.4)
+**Checkpoint is a NEW commit, not a rewritten draft:**
 
-### 6.3 Sync Modes
+```
+Before checkpoint:
+  parent ◄── draft (abc123, "[draft] WIP")
+
+After checkpoint:
+  parent ◄── checkpoint (def456, "feat: add auth") ◄── new draft (ghi789, "[draft] WIP")
+```
+
+This keeps checkpoint SHAs stable for attestations.
+
+### 5.3 Sync and Merge
+
+**Two ref types, different scopes:**
+
+```
+refs/jul/workspaces/george/@              ← canonical (shared across devices)
+refs/jul/sync/george/swift-tiger/@        ← this device's backup
+```
+
+**Plus local tracking files (per-workspace):**
+
+```
+.jul/workspaces/@/base              ← SHA of last workspace state we merged
+.jul/workspaces/feature-auth/base  ← Same, for feature-auth workspace
+```
+
+#### How sync works
+
+```bash
+$ jul sync
+Syncing...
+  ✓ Fetched workspace ref
+  ✓ Pushed to sync ref
+  ✓ Workspace ref updated
+```
+
+**The sync algorithm:**
+1. **Fetch** workspace ref → `workspace_remote`
+2. **Push** to device's sync ref with `--force` (always succeeds, it's yours)
+3. **Compare** `workspace_remote` to local `workspace_base` (per-workspace)
+4. **If** `workspace_remote == workspace_base`:
+   - Not diverged, safe to update
+   - Update workspace ref with `--force-with-lease=<workspace_ref>:<workspace_remote>`
+   - Set `workspace_base = new_sha`
+5. **If** `workspace_remote != workspace_base`:
+   - Another device pushed since we last merged
+   - **Try auto-merge:**
+     - Merge base = merge-base of the two draft commits (typically the shared checkpoint)
+     - 3-way merge: merge_base ↔ workspace_remote (theirs) ↔ sync (ours)
+   - **If no conflicts**: 
+     - Update workspace ref with `--force-with-lease=<workspace_ref>:<workspace_remote>`
+     - If lease fails, re-fetch and retry (or fall back to "conflicts pending")
+     - Set `workspace_base = new_sha`
+   - **If conflicts**: mark diverged, defer to `jul merge`
+
+**Why workspace_base matters:** It's the semantic lease — it tracks the last workspace state we incorporated, so we know when we're behind.
+
+**Why lease against workspace_remote:** When updating workspace ref after auto-merge, we guard against "someone else pushed while we were merging." If the lease fails, we re-fetch and try again.
+
+**Why merge-base of drafts:** Since drafts have parent = last checkpoint, the merge-base is the shared checkpoint. This avoids relying on old ephemeral draft commits.
+
+#### Sync with auto-merge (no conflicts)
+
+If another device pushed but the changes don't overlap:
+
+```bash
+$ jul sync
+Syncing...
+  ✓ Fetched workspace ref (another device pushed)
+  ✓ Pushed to sync ref
+  ✓ Auto-merged (no conflicts)
+  ✓ Workspace ref updated
+```
+
+No user action needed. Git's 3-way merge handles it.
+
+#### Sync with conflicts (deferred)
+
+If the changes actually conflict:
+
+```bash
+$ jul sync
+Syncing...
+  ✓ Fetched workspace ref (another device pushed)
+  ✓ Pushed to sync ref (your work is safe!)
+  ⚠ Conflicts detected — merge pending
+  
+Continue working. Run 'jul merge' when ready.
+```
+
+**You keep coding.** Your sync ref keeps updating. Deal with the conflict when you're ready.
+
+#### Merge when ready
+
+```bash
+$ jul merge
+Agent resolving conflicts...
+
+Conflicts resolved:
+  src/auth.py — combined both changes (you added validation, they added caching)
+
+Resolution ready as suggestion [01HX...].
+Accept? [y/n] y
+
+  ✓ Merged
+  ✓ Workspace ref updated
+  ✓ workspace_base updated
+```
+
+**The merge algorithm:**
+1. Merge base = merge-base of workspace ref and sync ref (the shared checkpoint)
+2. 3-way merge: merge_base ↔ workspace (theirs) ↔ sync (ours)
+3. Agent resolves conflicts automatically
+4. Create resolution as suggestion
+5. If accepted: new draft commit (parent = last checkpoint, NOT a 2-parent merge)
+6. Update workspace ref, sync ref, AND `workspace_base`
+
+**V1 constraint:** Both sides must share the same checkpoint base. If checkpoint histories have diverged, manual intervention required.
+
+**The invariants:**
+- Sync ref = this device's backup (always pushes, device-scoped)
+- Workspace ref = canonical state (shared across devices)
+- `workspace_base` = last workspace SHA we incorporated (per-workspace)
+- Diverged only when: auto-merge fails due to actual conflicts
+- Can't promote until divergence is resolved
+
+**For agents (JSON response):**
+
+```json
+{
+  "sync": {
+    "status": "ok",
+    "auto_merged": true,
+    "workspace_updated": true
+  }
+}
+```
+
+Or when conflicts exist:
+
+```json
+{
+  "sync": {
+    "status": "conflicts",
+    "sync_pushed": true,
+    "workspace_updated": false,
+    "conflicts": ["src/auth.py"],
+    "merge_pending": true
+  },
+  "next_actions": ["continue working", "jul merge"]
+}
+```
+
+After `jul merge`:
+
+```json
+{
+  "merge": {
+    "status": "resolved",
+    "suggestion_id": "01HX..."
+  },
+  "suggestion": {
+    "type": "conflict_resolution",
+    "conflicts": [
+      {"file": "src/auth.py", "strategy": "combined"}
+    ]
+  },
+  "next_actions": ["apply 01HX...", "reject 01HX..."]
+}
+```
+
+**This differs from git:**
+- Git: conflict blocks you immediately
+- Jul: no-conflict cases auto-merge; conflicts deferred until you're ready
+
+### 5.4 Sync Modes
 
 Jul supports three sync modes, configurable per-repo or globally:
 
 ```toml
 # ~/.config/jul/config.toml or .jul/config.toml
 [sync]
-mode = "continuous"   # continuous | on-command | explicit
+mode = "on-command"   # on-command | continuous | explicit
 ```
 
-#### Mode 1: `continuous` (default)
+#### Mode 1: `on-command` (default)
+
+JJ-style. Sync happens automatically on every `jul` command.
+
+```bash
+$ jul status      # Syncs draft first, then shows status
+$ jul checkpoint  # Syncs draft, then locks it
+$ jul ws switch   # Syncs draft, then switches
+```
+
+**Implementation:**
+- Every `jul` command starts with "sync current draft"
+- Fetch workspace ref, push to sync ref, update workspace if possible
+- No daemon needed
+- Sync is implicit but predictable
+
+```toml
+[sync]
+mode = "on-command"
+```
+
+**Pros:** No daemon, predictable, sync happens when you're "at the keyboard"
+**Cons:** Stale if you don't run jul commands for a while
+
+#### Mode 2: `continuous`
 
 Dropbox-style. Daemon watches filesystem, syncs automatically.
 
@@ -515,7 +674,8 @@ $ jul sync --daemon &    # Start daemon (or auto-start on jul init)
 **Implementation:**
 - Uses inotify (Linux) / FSEvents (macOS) / ReadDirectoryChangesW (Windows)
 - Debounce: waits for write burst to settle
-- Batches changes, creates draft commit, pushes
+- Runs the same sync algorithm: fetch → push to sync ref → update workspace if not diverged
+- If diverged, daemon keeps pushing to sync ref but doesn't update workspace
 
 **Configuration:**
 ```toml
@@ -525,31 +685,8 @@ debounce_seconds = 2        # Wait for writes to settle
 min_interval_seconds = 5    # Don't sync more often than this
 ```
 
-**Pros:** Never lose work, seamless multi-machine handoff
-**Cons:** Background process, more resource usage
-
-#### Mode 2: `on-command`
-
-JJ-style. Sync happens automatically on every `jul` command.
-
-```bash
-$ jul status      # Syncs draft first, then shows status
-$ jul checkpoint  # Syncs draft, then locks it
-$ jul ws switch   # Syncs draft, then switches
-```
-
-**Implementation:**
-- Every `jul` command starts with "sync current draft if dirty"
-- No daemon needed
-- Sync is implicit but predictable
-
-```toml
-[sync]
-mode = "on-command"
-```
-
-**Pros:** No daemon, predictable, sync happens when you're "at the keyboard"
-**Cons:** Stale if you don't run jul commands for a while
+**Pros:** Never lose work, seamless multi-device handoff
+**Cons:** Background process, more resource usage, more edge cases
 
 #### Mode 3: `explicit`
 
@@ -568,7 +705,7 @@ mode = "explicit"
 **Pros:** Maximum control, no surprises
 **Cons:** Easy to forget, risk of losing work
 
-### 6.4 Continuous Sync Implementation Details
+### 5.4.1 Continuous Sync Implementation Details
 
 For `continuous` mode, the daemon needs careful implementation:
 
@@ -581,6 +718,7 @@ file change → wait 2s → no more changes? → sync
 **Ignore rules (beyond .gitignore):**
 ```
 # .jul/syncignore
+.jul/              # CRITICAL: ignore Jul's own directory
 *.tmp
 *.swp
 *.lock
@@ -593,6 +731,8 @@ __pycache__/
 *.pyc
 .DS_Store
 ```
+
+**CRITICAL: `.jul/**` must always be ignored** or the daemon will sync its own agent workspace, local saves, and indexes in an infinite loop.
 
 **Burst detection:**
 - Large file copies (e.g., `npm install`) generate thousands of events
@@ -621,20 +761,38 @@ func syncDaemon() {
 }
 ```
 
-**Multi-machine handoff:**
-```bash
-# Machine A: daemon running, files syncing continuously
+**Multi-device workflow:**
 
-# Machine B: 
-$ jul sync --pull    # Fetch latest draft from server
-# Working tree updated to match Machine A's state
+On a fresh device:
+```bash
+$ git clone git@github.com:george/myproject.git
+$ cd myproject
+$ jul init                    # Generates device ID (e.g., "quiet-mountain")
+$ jul ws checkout @           # Establishes baseline: sync ref + workspace_base
 ```
 
-### 6.5 Retention and Fetchability
+The checkout establishes your baseline: it sets `workspace_base` and initializes your sync ref. Now `jul sync` knows where you started.
+
+Ongoing work across devices:
+```bash
+# Device A (swift-tiger): daemon running, syncing continuously
+# ... edit files ...
+
+# Device B (quiet-mountain):
+$ jul sync                    # Fetch + auto-merge if needed
+# No conflicts: workspace updated automatically
+# Conflicts: shows warning, run 'jul merge' when ready
+
+$ jul ws checkout @           # If needed: re-materialize working tree
+```
+
+Note: `jul ws checkout` restores working tree + establishes baseline. Staging area (`git add` state) is local to each device and not synced.
+
+### 5.5 Retention and Fetchability
 
 **Problem:** `gc.pruneExpire=never` keeps objects on disk, but doesn't make them fetchable. Unreachable commits can't be fetched by clients unless:
 - (a) They're reachable via refs (keep-refs), or
-- (b) Server allows fetching by SHA (`uploadpack.allowAnySHA1InWant`)
+- (b) Remote allows fetching by SHA (`uploadpack.allowAnySHA1InWant`)
 
 **Solution: Keep-refs at checkpoint boundaries only.**
 
@@ -652,11 +810,11 @@ refs/jul/keep/george/feature/Icd5e6f7a/ghi789
 **Lifecycle:**
 - Created when checkpoint is locked
 - TTL-based expiration (configurable, default 90 days)
-- Expired keep-refs deleted by server maintenance job
+- Expired keep-refs deleted by Jul remote maintenance job (if used)
 - Objects become unreachable after keep-ref deletion, eventually GC'd
 
 ```toml
-# Server config
+# Jul remote config (optional)
 [retention]
 checkpoint_keep_days = 90    # Keep-refs for checkpoints
 draft_keep_days = 0          # No keep-refs for drafts (ephemeral)
@@ -667,6 +825,8 @@ draft_keep_days = 0          # No keep-refs for drafts (ephemeral)
 - Previous draft states are overwritten (force-push)
 - If you need to recover old draft state, that's what checkpoints are for
 
+**Git-only remote note:** keep-refs are just normal refs you can push; retention/GC depends on the host’s policies.
+
 **For personal use with full time-travel:**
 ```toml
 [retention]
@@ -675,7 +835,7 @@ checkpoint_keep_days = -1    # Never expire (infinite)
 
 **Future multi-user consideration:** Don't enable `uploadpack.allowAnySHA1InWant` in multi-tenant scenarios. Keep-refs are the safe path.
 
-### 6.6 Two Classes of Attestations
+### 5.6 Two Classes of Attestations
 
 **Problem:** Rebase/squash changes SHAs. An attestation for checkpoint `abc123` doesn't apply to the rebased commit `xyz789` on main.
 
@@ -729,42 +889,94 @@ main now at xyz789
 }
 ```
 
-### 6.7 Notes Fetch Behavior
+### 5.7 Notes: Storage, Sync, and Portability
 
-Git notes are not fetched by default. Jul remotes include explicit refspecs:
+**Metadata travels with git... mostly.**
+
+Jul stores all metadata as git objects (notes, refs). This means it *can* be synced via git push/pull. However:
+
+- Different hosts have different ref policies (some block custom refs)
+- Size limits vary (GitHub has push size limits)
+- Retention varies (some hosts GC aggressively)
+
+**The right expectation:** Jul metadata syncs on hosts that allow it. If a host blocks some refs, Jul degrades gracefully to local-only for those namespaces. Jul config sets up the refspecs; check `jul doctor` to see what's actually syncing.
+
+**Size limits to prevent repo bloat:**
+
+Continuous sync can balloon your repo if attestations contain full logs or coverage reports. Rules:
+
+| Data | Storage | Size Limit |
+|------|---------|------------|
+| Attestation summary | Notes | ≤ 16 KB |
+| Suggestion metadata | Notes | ≤ 16 KB |
+| Full CI logs | Local only (`.jul/logs/`) | No limit |
+| Coverage reports | Local only (`.jul/coverage/`) | No limit |
+| Suggestion patches | Commits | No limit (git handles) |
+
+Notes store summaries; big artifacts stay local by default.
+
+**Refspec configuration:**
+
+Git notes are not fetched by default. Jul configures explicit refspecs:
 
 ```ini
-[remote "jul"]
-    url = https://jul.example.com/my-project.git
-    fetch = +refs/heads/*:refs/remotes/jul/*
-    fetch = +refs/jul/workspaces/*:refs/remotes/jul/workspaces/*
+[remote "origin"]
+    url = git@github.com:george/myproject.git
+    fetch = +refs/heads/*:refs/remotes/origin/*
+    fetch = +refs/jul/*:refs/jul/*
     fetch = +refs/notes/jul/*:refs/notes/jul/*
 ```
 
-**Single-writer rule:**
-- `refs/notes/jul/attestations/*` — Server writes only
-- `refs/notes/jul/meta` — Server writes only
-- Clients only read notes, never push to notes refs
+**Single-writer rule per namespace:**
 
-This avoids note-merge conflicts entirely.
+Notes refs can have non-fast-forward conflicts. Avoid with clear ownership:
 
-### 6.8 Summary: Git Object Model
+| Namespace | Writer | Content |
+|-----------|--------|---------|
+| `refs/notes/jul/meta` | Client | Change-Id mappings |
+| `refs/notes/jul/attestations` | CI runner | Test results (summaries only) |
+| `refs/notes/jul/review` | Review agent | Review comments |
+| `refs/notes/jul/suggestions` | Review agent | Suggestion metadata |
+| `refs/notes/jul/prompts` | Client | Prompt metadata |
+
+**Suggestions storage:**
+
+Suggestions have two parts:
+- **Patch commits**: `refs/jul/suggest/<change_id>/<suggestion_id>` — actual code
+- **Metadata**: `refs/notes/jul/suggestions` — reasoning, confidence, status
+
+Commits carry the heavy diffs; notes stay small.
+
+**Prompts privacy:**
+
+Prompts often contain secrets. By default, prompts are local-only:
+
+```toml
+[prompts]
+storage = "local"   # local | sync
+```
+
+`local`: stored in notes but never pushed
+`sync`: pushed to remote (opt-in only)
+
+### 5.8 Summary: Git Object Model
 
 ```
                             refs/heads/main
                                    │
                                    ▼
-           ┌─────────── xyz789 (published, rebased) ◄─── published attestation
+           ┌─────────── xyz789 (published, rebased) ◄─── attestation
            │
            │   refs/jul/keep/george/@/Iab4f.../def456
            │                        │
            │                        ▼
-           │           def456 (checkpoint, immutable) ◄─── checkpoint attestation
+           │           def456 (checkpoint, immutable) ◄─── attestation
            │               │
-           │               │   refs/jul/workspaces/george/@
+           │               │   refs/jul/workspaces/george/@         ◄─ canonical
+           │               │   refs/jul/sync/george/swift-tiger/@   ◄─ this device
            │               │              │
            │               │              ▼
-           │               └──── ghi789 (draft, mutable)
+           │               └──── ghi789 (draft, ephemeral)
            │                       │
            │                       └── [draft] WIP
            │                           Change-Id: Icd5e...
@@ -777,57 +989,27 @@ This avoids note-merge conflicts entirely.
 
 **Ref purposes:**
 - `refs/heads/*` — Promote targets (main, staging)
-- `refs/jul/workspaces/*` — Current draft per workspace
+- `refs/jul/workspaces/<user>/<ws>` — Canonical draft (shared across devices)
+- `refs/jul/sync/<user>/<device>/<ws>` — This device's backup (never clobbered)
 - `refs/jul/keep/*` — Checkpoint retention anchors
-- `refs/jul/suggest/*` — Agent suggestion commits
-- `refs/notes/jul/*` — Metadata (attestations, mappings)
+- `refs/jul/suggest/*` — Suggestion patch commits
+- `refs/notes/jul/*` — Metadata (attestations, review, suggestions, prompts)
+
+**Local state (per workspace):**
+- `.jul/workspaces/<ws>/base` — SHA of last workspace state we merged (the semantic lease)
+
+**Invariants:**
+- `workspace_remote == workspace_base` → not diverged, update workspace directly
+- `workspace_remote != workspace_base` → try auto-merge; only defer if actual conflicts
+- `jul ws checkout` establishes baseline (sync ref + workspace_base)
+- Can't promote until divergence is resolved
 
 ---
 
-## 7. Server Architecture
 
-### 7.1 Components
+## 6. CLI Design (`jul`)
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Jul Server                                │
-├─────────────────────────────────────────────────────────────────────┤
-│  Git Service     │  API Service    │  CI Runner    │  Review Agent  │
-│  (git-http-      │  (REST + SSE)   │  (job queue)  │  (configured   │
-│   backend)       │                 │               │   provider)    │
-├─────────────────────────────────────────────────────────────────────┤
-│                           Core Service                              │
-│  • Workspace management                                             │
-│  • Checkpoint lifecycle                                             │
-│  • Suggestion management                                            │
-│  • Event bus                                                        │
-├─────────────────────────────────────────────────────────────────────┤
-│  Git Storage     │  SQLite         │  Artifacts                     │
-│  (bare repos)    │  (indexes)      │  (local/S3)                    │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### 7.2 Retention Configuration
-
-Per Section 6.4, the server manages keep-refs for checkpoint retention:
-
-```toml
-# /etc/jul/server.toml
-[retention]
-checkpoint_keep_days = 90    # Keep-refs expire after 90 days
-run_maintenance_hours = 3    # Run cleanup at 3 AM
-```
-
-Maintenance job:
-1. Find expired keep-refs
-2. Delete refs
-3. Run `git gc` (objects now unreachable will be pruned per gc config)
-
----
-
-## 8. CLI Design (`jul`)
-
-### 8.1 Setup Commands
+### 6.1 Setup Commands
 
 #### `jul configure`
 
@@ -837,7 +1019,7 @@ Interactive setup wizard for global configuration.
 $ jul configure
 Jul Configuration
 ─────────────────
-Server URL: https://jul.example.com
+Remote URL (optional): https://jul.example.com
 Username: george
 Create remote by default? [Y/n]: Y
 
@@ -852,7 +1034,7 @@ Configuration saved to ~/.config/jul/config.toml
 ```
 
 Creates:
-- `~/.config/jul/config.toml` — Server, user defaults, init preferences
+- `~/.config/jul/config.toml` — Remote, user defaults, init preferences
 - `~/.config/jul/agents.toml` — Agent provider settings
 
 #### `jul init`
@@ -860,7 +1042,7 @@ Creates:
 Initialize a repository with Jul.
 
 ```bash
-# New project (creates local + remote)
+# New project (creates local, optional remote)
 $ jul init my-project --create-remote
 Created remote: https://jul.example.com/my-project.git
 Initialized local repository
@@ -876,33 +1058,109 @@ Workspace '@' ready
 
 What it does:
 1. `git init` (if new)
-2. Add remote with Jul refspecs
-3. Install hooks (post-commit for auto-sync)
+2. Add remote with Jul refspecs (if configured)
+3. Install hooks (post-commit for auto-sync, if configured)
 4. Create default workspace `@`
 5. Start first draft
 
-### 8.2 Core Workflow Commands
+**Remote selection rules (when no explicit `remote.name` configured):**
+- If `origin` exists → use it
+- Else if exactly one remote exists → use it
+- Else if multiple remotes exist and no `origin` → require `jul remote set <name>`
+- Else (no remotes) → work locally (no push/fetch)
+
+Example:
+```bash
+$ git clone git@github.com:george/myproject.git
+$ jul init
+Using remote 'origin' (git@github.com:george/myproject.git)
+
+$ jul init
+Multiple remotes found: upstream, github, personal
+Run 'jul remote set <name>' to choose one.
+```
+
+#### `jul remote`
+
+Configure which git remote Jul uses for sync.
+
+```bash
+$ jul remote set origin
+Now using remote 'origin' for sync.
+
+$ jul remote show
+origin (git@github.com:george/myproject.git)
+```
+
+### 6.2 Core Workflow Commands
 
 #### `jul sync`
 
-Save current state to draft.
+Fetch, push to device's sync ref, update workspace (auto-merge if needed).
 
 ```bash
 $ jul sync
-Syncing draft...
-  3 files changed
-Synced to refs/jul/workspaces/george/@
+Syncing...
+  ✓ Fetched workspace ref
+  ✓ Pushed to sync ref
+  ✓ Workspace ref updated
+  ✓ workspace_base updated
 ```
 
-Usually runs automatically via hook or daemon. Manual sync is rarely needed.
+If another device pushed but changes don't conflict:
+```bash
+$ jul sync
+Syncing...
+  ✓ Fetched workspace ref (another device pushed)
+  ✓ Pushed to sync ref
+  ✓ Auto-merged (no conflicts)
+  ✓ Workspace ref updated
+```
+
+If changes actually conflict:
+```bash
+$ jul sync
+Syncing...
+  ✓ Fetched workspace ref (another device pushed)
+  ✓ Pushed to sync ref (your work is safe!)
+  ⚠ Conflicts detected — merge pending
+  
+Continue working. Run 'jul merge' when ready.
+```
 
 ```bash
-# Run as daemon (watches filesystem)
+# Run as daemon (watches filesystem, syncs automatically)
 $ jul sync --daemon
 Watching for changes...
   15:30:01 synced (2 files)
   15:30:45 synced (1 file)
 ```
+
+Flags:
+- `--daemon` — Run as background watcher (continuous mode)
+- `--json` — JSON output
+
+#### `jul merge`
+
+Resolve diverged state. Agent handles conflicts automatically.
+
+```bash
+$ jul merge
+Agent resolving conflicts...
+
+Conflicts resolved:
+  src/auth.py — combined both changes
+
+Resolution ready as suggestion [01HX...].
+Accept? [y/n] y
+
+  ✓ Merged
+  ✓ Workspace ref updated
+  ✓ workspace_base updated
+```
+
+Flags:
+- `--json` — JSON output
 
 #### `jul checkpoint`
 
@@ -933,6 +1191,8 @@ New draft Icd5e... started.
 
 Flags:
 - `-m "message"` — Provide message (skip agent)
+- `--amend` — Amend previous checkpoint instead of creating new one
+- `--prompt "..."` — Store the prompt that led to this checkpoint (optional metadata)
 - `--no-review` — Skip review
 - `--json` — JSON output
 
@@ -1006,7 +1266,7 @@ Flags:
 - `--auto` — Auto-checkpoint draft first if needed
 - `--json` — JSON output
 
-### 8.3 Workspace Commands
+### 6.3 Workspace Commands
 
 #### `jul ws new`
 
@@ -1024,11 +1284,51 @@ Switch to another workspace.
 
 ```bash
 $ jul ws switch feature-auth
+Saving current workspace '@'...
+  ✓ Working tree saved
+  ✓ Staged changes saved
+Restoring 'feature-auth'...
+  ✓ Working tree restored
+  ✓ workspace_base updated
 Switched to workspace 'feature-auth'
-Draft: Ief6a... (clean)
 ```
 
-No dirty state concerns—current draft is already synced.
+**What happens:**
+1. Auto-saves current workspace (working tree + staging area) via `jul local save`
+2. Syncs current draft to remote
+3. Fetches target workspace's canonical state
+4. Restores target workspace's saved state (working tree + staging area)
+5. Updates `workspace_base` for target workspace to the fetched canonical SHA
+
+This makes "no dirty state concerns" actually true — your uncommitted work is preserved per-workspace.
+
+#### `jul ws checkout`
+
+Fetch and materialize a workspace's draft into the working tree. Establishes this device's baseline for future syncs.
+
+```bash
+$ jul ws checkout @
+Fetching workspace '@'...
+  ✓ Workspace ref: abc123
+  ✓ Working tree updated
+  ✓ Sync ref initialized
+  ✓ workspace_base set
+```
+
+**What happens:**
+1. Fetch workspace ref from remote
+2. Materialize working tree to match
+3. Initialize this device's sync ref to the same commit
+4. Set `workspace_base` to the fetched SHA
+
+This establishes the baseline: checkout sets up base + sync ref, so future `jul sync` commands know where they started.
+
+Use this when:
+- Setting up a fresh device
+- Pulling in another device's latest work
+- Recovering after `git reset` or other working tree changes
+
+Note: Only restores working tree. Staging area is local to each device and not synced.
 
 #### `jul ws list`
 
@@ -1062,7 +1362,7 @@ Deleted.
 
 Can't delete current workspace.
 
-### 8.4 Suggestion Commands
+### 6.4 Suggestion Commands
 
 #### `jul suggestions`
 
@@ -1132,7 +1432,7 @@ $ jul reject 01HX7Y9B -m "covered by integration tests"
 Rejected.
 ```
 
-### 8.5 Review Command
+### 6.5 Review Command
 
 #### `jul review`
 
@@ -1150,34 +1450,120 @@ Run 'jul suggestions' to see details.
 
 Useful before checkpoint to catch issues early.
 
-### 8.6 Resolve Command
+### 6.6 Merge Command
 
-#### `jul resolve`
+#### `jul merge`
 
-Agent-assisted merge conflict resolution.
+Resolve diverged state with remote. Agent handles conflicts automatically.
 
 ```bash
-$ git merge feature-branch
-CONFLICT: src/auth.py
+$ jul merge
+Fetching remote...
+Agent resolving conflicts...
 
-$ jul resolve
-Analyzing conflicts...
-  src/auth.py: 3-way merge conflict
+Conflicts resolved:
+  src/auth.py — combined both changes (local validation + remote caching)
+  src/config.py — kept remote, applied local additions
 
-Invoking agent (opencode)...
+Resolution ready as suggestion [01HX...].
+Accept? [y/n] y
 
-Proposed resolution:
-  src/auth.py: +15 -8
-  "Both branches add validation. Combined preserving both checks."
-
-Apply? [y/n/edit] y
-Resolved src/auth.py
-
-$ git add src/auth.py
-$ git commit
+  ✓ Merged and synced
 ```
 
-### 8.7 Query Commands
+The resolution is a suggestion, so you can:
+- Accept it (`y` or `jul apply 01HX...`)
+- Reject it and resolve manually (`n` or `jul reject 01HX...`)
+- See the diff first (`jul show 01HX...`)
+
+With `--json` for agents:
+```json
+{
+  "merge": {
+    "status": "resolved",
+    "suggestion_id": "01HX...",
+    "conflicts": [
+      {"file": "src/auth.py", "strategy": "combined"},
+      {"file": "src/config.py", "strategy": "both"}
+    ]
+  },
+  "next_actions": ["apply 01HX...", "reject 01HX..."]
+}
+```
+
+### 6.7 History and Diff Commands
+
+#### `jul log`
+
+Show checkpoint history.
+
+```bash
+$ jul log
+
+Icd5e... (2h ago) "fix: null check on token"
+        Author: george
+        ✓ CI passed
+
+Iab4f... (4h ago) "feat: add JWT validation"
+        Author: george
+        ✓ CI passed, 1 suggestion
+
+Ief6a... (1d ago) "initial project structure"
+        Author: george
+        ✓ CI passed
+```
+
+Flags:
+- `--limit <n>` — Show last n checkpoints
+- `--change-id <id>` — Filter by Change-Id
+- `--json` — JSON output
+
+#### `jul diff`
+
+Show diff between checkpoints or against draft.
+
+```bash
+# Diff current draft against last checkpoint
+$ jul diff
+
+# Diff between two checkpoints
+$ jul diff Iab4f... Icd5e...
+
+# Diff specific checkpoint against its parent
+$ jul diff Iab4f...
+```
+
+Flags:
+- `--stat` — Show diffstat only
+- `--name-only` — Show changed filenames only
+- `--json` — JSON output
+
+#### `jul show`
+
+Show details of a checkpoint or suggestion.
+
+```bash
+$ jul show Iab4f...
+
+Checkpoint: Iab4f...
+Message: "feat: add JWT validation with refresh tokens"
+Author: george
+Date: Mon Jan 19 15:30:00 2026
+Change-Id: Iab4f3c2d1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b
+
+Attestation:
+  ✓ lint: pass
+  ✓ compile: pass
+  ✓ test: pass (48/48)
+  ✓ coverage: 84%
+
+Suggestions: 1 pending
+
+Files changed:
+  M src/auth.py (+42 -8)
+  A src/jwt_utils.py (+128)
+  M tests/test_auth.py (+67 -12)
+```
 
 #### `jul query`
 
@@ -1195,7 +1581,7 @@ Icd5e... (1d ago) "refactor: extract auth utils"
 
 #### `jul reflog`
 
-Show workspace history.
+Show workspace history (including draft syncs).
 
 ```bash
 $ jul reflog --limit=10
@@ -1207,7 +1593,7 @@ Iab4f... checkpoint "feat: add JWT validation" (4h ago)
 Ief6a... checkpoint "initial structure" (1d ago)
 ```
 
-### 8.8 Local Workspaces (Client-Side)
+### 6.8 Local Workspaces (Client-Side)
 
 Local workspaces enable instant context switching for uncommitted work.
 
@@ -1256,28 +1642,25 @@ Deleted.
 
 ---
 
-## 9. Configuration
+## 7. Configuration
 
-### 9.1 Global Config
+### 7.1 Global Config
 
 ```toml
 # ~/.config/jul/config.toml
 
-[server]
-url = "https://jul.example.com"
-user = "george"
+[user]
+name = "george"
+
+[remote]
+name = "origin"                               # Default remote name
+url = "git@github.com:george/myproject.git"   # Any git remote (optional override)
 
 [workspace]
 default_name = "@"
 
-[init]
-create_remote = true
-
 [sync]
-mode = "continuous"              # continuous | on-command | explicit
-debounce_seconds = 2             # For continuous mode
-min_interval_seconds = 5         # For continuous mode
-auto_start_daemon = true         # Start daemon on jul init
+mode = "on-command"              # on-command | continuous | explicit
 
 [checkpoint]
 auto_message = true              # Agent generates message
@@ -1287,20 +1670,28 @@ default_target = "main"
 strategy = "rebase"              # rebase | squash | merge
 
 [ci]
-run_on_draft = true              # CI runs on draft syncs
-run_on_checkpoint = true
+run_on_checkpoint = true         # Run tests on checkpoint
+run_on_draft = false             # Run tests on draft sync
 
 [review]
 enabled = true
-run_on_checkpoint = true         # Review after checkpoint
-run_on_draft = false             # Manual only
+run_on_checkpoint = true
 min_confidence = 70
 
-[apply]
-auto_checkpoint = false          # jul apply also checkpoints
+[prompts]
+storage = "local"                # local | sync
 ```
 
-### 9.2 Agent Config
+### 7.2 Device Config
+
+```
+# ~/.config/jul/device
+swift-tiger
+```
+
+Auto-generated on first `jul init`. Two random words (adjective-noun). Used for device-scoped sync refs.
+
+### 7.3 Agent Config
 
 ```toml
 # ~/.config/jul/agents.toml
@@ -1321,7 +1712,7 @@ command = "codex"
 protocol = "jul-agent-v1"
 ```
 
-### 9.3 Repo Config
+### 7.4 Repo Config
 
 ```toml
 # .jul/config.toml (per-repo)
@@ -1334,7 +1725,7 @@ name = "feature-auth"            # Override default
 # First checkpoint without config triggers setup wizard
 ```
 
-### 9.4 Policy Config
+### 7.5 Policy Config
 
 ```toml
 # .jul/policy.toml (per-repo)
@@ -1351,14 +1742,14 @@ min_coverage_pct = 0
 
 ---
 
-## 10. Agent Integration
+## 8. Agent Integration
 
 Jul is designed for two types of agents:
 
 1. **External agents** (Codex, Claude Code, etc.) — Build your application, use Jul for feedback
 2. **Internal agent** (configured provider) — Reviews your code, generates suggestions
 
-### 9.1 External Agent Integration
+### 8.1 External Agent Integration
 
 External agents use Jul as infrastructure. The key principle: **every command returns structured feedback that agents can act on.**
 
@@ -1492,7 +1883,7 @@ while response["ci"]["status"] == "fail":
 jul("promote --to main")
 ```
 
-### 9.2 Internal Agent (Review Agent)
+### 8.2 Internal Agent (Review Agent)
 
 The internal agent is your configured provider (opencode, codex, etc.). It runs review and generates suggestions.
 
@@ -1601,7 +1992,7 @@ User sees: "⚠ 1 suggestion created"
     └── jul reject 01HX7Y9A → mark rejected
 ```
 
-### 9.3 Agent Protocol (v1)
+### 8.3 Agent Protocol (v1)
 
 Communication with internal agent via stdin/stdout JSON.
 
@@ -1642,7 +2033,7 @@ Communication with internal agent via stdin/stdout JSON.
 }
 ```
 
-### 9.4 Agent Actions
+### 8.4 Agent Actions
 
 | Action | Triggered by | Agent workspace | Purpose |
 |--------|--------------|-----------------|---------|
@@ -1651,7 +2042,7 @@ Communication with internal agent via stdin/stdout JSON.
 | `resolve_conflict` | `jul resolve` | Yes | 3-way merge resolution |
 | `setup_ci` | First checkpoint | No | Auto-configure CI (future) |
 
-### 9.5 Configuration
+### 8.5 Configuration
 
 ```toml
 # ~/.config/jul/agents.toml
@@ -1675,15 +2066,19 @@ enable_exec = true              # Agent can run tests
 max_iterations = 5              # Max edit-test cycles per review
 ```
 
-### 9.6 Structured Output
+### 8.6 Structured Output
 
 All commands support `--json` for external agent consumption:
 
 ```bash
 $ jul status --json
+$ jul sync --json
+$ jul merge --json
 $ jul checkpoint --json  
+$ jul log --json
+$ jul diff --json
+$ jul show <id> --json
 $ jul suggestions --json
-$ jul show 01HX... --json
 $ jul apply 01HX... --json
 $ jul reject 01HX... --json
 $ jul review --json
@@ -1694,9 +2089,9 @@ Every response includes `next_actions` suggesting what the agent might do next.
 
 ---
 
-## 11. Example Workflows
+## 9. Example Workflows
 
-### 10.1 Full Jul Flow
+### 9.1 Full Jul Flow
 
 ```bash
 # Setup (once)
@@ -1717,7 +2112,7 @@ $ jul promote --to main
   Promoted 2 checkpoints
 ```
 
-### 10.2 Git + Jul Flow
+### 9.2 Git + Jul Flow
 
 ```bash
 # Setup
@@ -1732,7 +2127,7 @@ $ jul status
 $ jul promote --to main
 ```
 
-### 10.3 Agent-Driven Flow
+### 9.3 Agent-Driven Flow
 
 ```bash
 # Agent queries state
@@ -1751,45 +2146,65 @@ $ jul promote --to main --json
 
 ---
 
-## 12. Deployment
+## 10. Git Remote Compatibility
 
-### 11.1 Server Requirements
+Jul works with any git remote. However, some features work better with a Jul-optimized server.
 
-- Linux (Ubuntu 22.04+)
-- Git 2.30+
-- Go 1.22+ (for jul binaries)
-- nginx (reverse proxy)
-
-### 11.2 Quick Start
+### 10.1 Any Git Remote (GitHub, GitLab, etc.)
 
 ```bash
-# Install
-curl -fsSL https://jul.example.com/install.sh | bash
-
-# Initialize server
-jul-server init /var/jul
-
-# Create first repo
-jul-server create-repo my-project
-
-# Run
-jul-server run
+$ jul init myproject
+$ git remote add origin git@github.com:george/myproject.git
+$ jul sync
 ```
+
+**What works:**
+- Draft/checkpoint sync (via refs)
+- Notes sync (with explicit refspecs)
+- Suggestions (stored as commits)
+- Everything local (CI, review, attestations)
+
+**Limitations depend on host:**
+- Some hosts may reject custom refs
+- Some hosts may GC unreachable commits
+- Size limits vary
+
+Use `jul doctor` to check what's syncing.
+
+### 10.2 Jul-Optimized Server (Future)
+
+A git server optimized for Jul compatibility would provide:
+
+- Guaranteed ref acceptance (all jul/* refs)
+- Keep-ref retention (no premature GC)
+- Optimized for continuous sync patterns
+- Optional: server-side indexing for fast queries
+
+This is future work. For v1, any git remote works.
 
 ---
 
-## 13. Glossary
+## 11. Glossary
 
 | Term | Definition |
 |------|------------|
 | **Attestation** | CI/test/coverage results attached to a checkpoint |
-| **Change-Id** | Stable identifier (`Iab4f...`) preserved across amends |
+| **Change-Id** | Stable identifier (`Iab4f...`) for a checkpoint |
 | **Checkpoint** | Locked unit of work with message and Change-Id |
-| **Draft** | Current working state, continuously synced, not yet locked |
+| **Device ID** | Random word pair (e.g., "swift-tiger") identifying this machine |
+| **Draft** | Ephemeral commit snapshotting working tree (parent = last checkpoint) |
+| **Keep-ref** | Ref that anchors a checkpoint for retention |
 | **Local Workspace** | Client-side saved state for fast context switching |
-| **Promote** | Policy-checked move of checkpoints to a target branch |
+| **Merge** | Agent-assisted resolution when sync has actual conflicts |
+| **Promote** | Move checkpoints to a target branch (main) |
+| **Prompt** | Optional metadata: the instruction that led to a checkpoint |
+| **Shadow Index** | Separate index file so Jul doesn't interfere with git staging |
 | **Suggestion** | Agent-proposed fix with apply/reject lifecycle |
-| **Workspace** | Named stream of work (replaces branches for feature work) |
+| **Sync** | Fetch, push to sync ref, auto-merge if no conflicts, defer if conflicts |
+| **Sync Ref** | Device's backup stream (`refs/jul/sync/<user>/<device>/...`) |
+| **Workspace** | Named stream of work (replaces branches) |
+| **Workspace Base** | Per-workspace file (`.jul/workspaces/<ws>/base`) tracking last merged SHA |
+| **Workspace Ref** | Canonical state (`refs/jul/workspaces/...`) — shared across devices |
 
 ---
 
@@ -1797,12 +2212,12 @@ jul-server run
 
 | Alternative | Why Jul is different |
 |-------------|---------------------|
-| **GitHub/GitLab** | No continuous sync, no checkpoint model, CI is bolted on |
+| **GitHub/GitLab** | No continuous sync, no checkpoint model, no agent feedback loop |
 | **Gerrit** | Change-centric but complex, not agent-native |
-| **JJ alone** | Great local UX but needs server for backup/CI/sharing |
-| **Git + hooks** | No queryable attestations, no suggestions, no workspaces |
+| **JJ** | Great local UX but no built-in CI/review/suggestions |
+| **Git + hooks** | No rich metadata, no suggestions, no agent integration |
 
-Jul combines: Continuous sync + Checkpoint model + Workspaces + Agent-native suggestions + Queryable attestations.
+Jul = Git + continuous sync + checkpoints + local CI/review + agent-native feedback loop.
 
 ---
 
@@ -1812,10 +2227,21 @@ Jul combines: Continuous sync + Checkpoint model + Workspaces + Agent-native sug
 |-----------|----------------|
 | `git checkout -b feature` | `jul ws new feature` |
 | `git add . && git commit` | `jul checkpoint` |
-| `git commit --amend` | Edit draft, `jul checkpoint` |
-| `git push` | Automatic (sync) |
-| `git merge` | `jul promote --to main` |
+| `git commit --amend` | `jul checkpoint --amend` |
+| `git push` | `jul sync` (automatic in on-command mode) |
+| `git pull` | `jul sync` (includes fetch) |
+| `git fetch` | Included in `jul sync` |
+| Merge conflicts | `jul merge` (agent resolves) |
+| `git merge main` | `jul promote --to main` |
 | `git stash` | `jul local save` |
+| `git stash pop` | `jul local restore` |
+| `git log` | `jul log` |
+| `git diff` | `jul diff` |
+| `git show <commit>` | `jul show <checkpoint>` |
+| `git status` | `jul status` |
+| `git branch` | `jul ws list` |
+| `git switch <branch>` | `jul ws switch <workspace>` |
+| `git checkout <branch>` | `jul ws checkout <workspace>` |
 
 ---
 

@@ -9,22 +9,32 @@ import (
 )
 
 type WizardConfig struct {
-	BaseURL      string
-	User         string
-	Workspace    string
-	Agent        string
-	CreateRemote bool
+	RemoteURL  string
+	RemoteName string
+	User       string
+	Workspace  string
+	Agent      string
 }
 
 func RunWizard() (WizardConfig, error) {
 	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Print("Jul server URL (e.g. http://localhost:8000): ")
-	baseURL, err := reader.ReadString('\n')
+	fmt.Print("Remote URL (optional, leave blank for local-only): ")
+	remoteURL, err := reader.ReadString('\n')
 	if err != nil {
 		return WizardConfig{}, err
 	}
-	baseURL = strings.TrimSpace(baseURL)
+	remoteURL = strings.TrimSpace(remoteURL)
+
+	fmt.Print("Remote name (default: origin): ")
+	remoteName, err := reader.ReadString('\n')
+	if err != nil {
+		return WizardConfig{}, err
+	}
+	remoteName = strings.TrimSpace(remoteName)
+	if remoteName == "" {
+		remoteName = "origin"
+	}
 
 	fmt.Print("Username: ")
 	user, err := reader.ReadString('\n')
@@ -50,28 +60,12 @@ func RunWizard() (WizardConfig, error) {
 	}
 	agent = strings.TrimSpace(agent)
 
-	fmt.Print("Create remote repo by default? [Y/n]: ")
-	createRemoteRaw, err := reader.ReadString('\n')
-	if err != nil {
-		return WizardConfig{}, err
-	}
-	createRemoteRaw = strings.TrimSpace(createRemoteRaw)
-	createRemote := true
-	if createRemoteRaw != "" {
-		switch strings.ToLower(createRemoteRaw) {
-		case "y", "yes", "true":
-			createRemote = true
-		case "n", "no", "false":
-			createRemote = false
-		}
-	}
-
 	return WizardConfig{
-		BaseURL:      baseURL,
-		User:         user,
-		Workspace:    workspace,
-		Agent:        agent,
-		CreateRemote: createRemote,
+		RemoteURL:  remoteURL,
+		RemoteName: remoteName,
+		User:       user,
+		Workspace:  workspace,
+		Agent:      agent,
 	}, nil
 }
 
@@ -84,13 +78,16 @@ func WriteUserConfig(cfg WizardConfig) error {
 		return err
 	}
 
-	content := "[client]\n"
-	content = "[server]\n"
-	if cfg.BaseURL != "" {
-		content += fmt.Sprintf("url = %q\n", cfg.BaseURL)
-	}
+	content := "[user]\n"
 	if cfg.User != "" {
-		content += fmt.Sprintf("user = %q\n", cfg.User)
+		content += fmt.Sprintf("name = %q\n", cfg.User)
+	}
+	content += "\n[remote]\n"
+	if cfg.RemoteName != "" {
+		content += fmt.Sprintf("name = %q\n", cfg.RemoteName)
+	}
+	if cfg.RemoteURL != "" {
+		content += fmt.Sprintf("url = %q\n", cfg.RemoteURL)
 	}
 	content += "\n[workspace]\n"
 	if cfg.Workspace != "" {
@@ -100,8 +97,6 @@ func WriteUserConfig(cfg WizardConfig) error {
 	if cfg.Agent != "" {
 		content += fmt.Sprintf("provider = %q\n", cfg.Agent)
 	}
-	content += "\n[init]\n"
-	content += fmt.Sprintf("create_remote = %t\n", cfg.CreateRemote)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 

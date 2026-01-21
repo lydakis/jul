@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
+	remotesel "github.com/lydakis/jul/cli/internal/remote"
 )
 
 func newInitCommand() Command {
@@ -21,11 +21,10 @@ func newInitCommand() Command {
 		Run: func(args []string) int {
 			fs := flag.NewFlagSet("init", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
-			server := fs.String("server", "", "Jul server base URL")
-			workspace := fs.String("workspace", "", "Workspace id (user/name)")
-			remote := fs.String("remote", "jul", "Remote name to configure")
-			createRemote := fs.Bool("create-remote", false, "Force server repo creation")
-			noCreate := fs.Bool("no-create", false, "Skip server repo creation")
+			server := fs.String("server", "", "Git remote base URL (optional)")
+			workspace := fs.String("workspace", "", "Workspace name (e.g. @)")
+			remote := fs.String("remote", "", "Remote name to configure")
+			createRemote := fs.Bool("create-remote", false, "Create or update remote using --server (no API calls)")
 			noHooks := fs.Bool("no-hooks", false, "Skip hook installation")
 			_ = fs.Parse(args)
 
@@ -51,45 +50,18 @@ func newInitCommand() Command {
 				return 1
 			}
 
-			baseURL := strings.TrimSpace(*server)
-			if baseURL == "" {
-				baseURL = config.BaseURL()
+			if err := ensureJulDir(repoRoot); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to initialize .jul directory: %v\n", err)
+				return 1
 			}
-			baseURL = strings.TrimRight(baseURL, "/")
-
-			shouldCreateRemote := config.CreateRemoteDefault()
-			if *createRemote {
-				shouldCreateRemote = true
-			}
-			if *noCreate {
-				shouldCreateRemote = false
+			if _, err := config.DeviceID(); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to create device id: %v\n", err)
+				return 1
 			}
 
-			var cloneURL string
-			if baseURL != "" && shouldCreateRemote {
-				cli := client.New(baseURL)
-				created, err := cli.CreateRepo(repoName)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "failed to create repo on server: %v\n", err)
-					return 1
-				}
-				cloneURL = created.CloneURL
-			}
-
-			if baseURL != "" {
-				if err := runGit(repoRoot, "config", "jul.baseurl", baseURL); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to set jul.baseurl: %v\n", err)
-					return 1
-				}
-			}
-
-			wsID := strings.TrimSpace(*workspace)
-			if wsID == "" {
-				wsID = config.WorkspaceID()
-			}
-			if wsID != "" {
-				if err := runGit(repoRoot, "config", "jul.workspace", wsID); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to set jul.workspace: %v\n", err)
+			if wsName := strings.TrimSpace(*workspace); wsName != "" {
+				if err := config.SetRepoConfigValue("workspace", "name", wsName); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to set workspace name: %v\n", err)
 					return 1
 				}
 			}
@@ -98,29 +70,35 @@ func newInitCommand() Command {
 				return 1
 			}
 
-			if baseURL != "" && strings.TrimSpace(*remote) != "" {
-				remoteName := strings.TrimSpace(*remote)
-				remoteURL := cloneURL
-				if remoteURL == "" {
-					remoteURL = buildRemoteURL(baseURL, repoName)
-				}
-				if err := runGit(repoRoot, "config", fmt.Sprintf("remote.%s.url", remoteName), remoteURL); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to set remote url: %v\n", err)
+			remoteName := strings.TrimSpace(*remote)
+			if remoteName != "" {
+				if err := config.SetRepoConfigValue("remote", "name", remoteName); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to set remote name: %v\n", err)
 					return 1
 				}
-				_ = runGit(repoRoot, "config", "--unset-all", fmt.Sprintf("remote.%s.fetch", remoteName))
-				refspecs := []string{
-					"+refs/heads/*:refs/remotes/" + remoteName + "/*",
-					"+refs/jul/workspaces/*:refs/jul/workspaces/*",
-					"+refs/jul/suggest/*:refs/jul/suggest/*",
-					"+refs/notes/jul/*:refs/notes/jul/*",
+			}
+
+			if strings.TrimSpace(*server) != "" && *createRemote {
+				remoteName = strings.TrimSpace(*remote)
+				if remoteName == "" {
+					remoteName = "origin"
 				}
-				for _, refspec := range refspecs {
-					if err := runGit(repoRoot, "config", "--add", fmt.Sprintf("remote.%s.fetch", remoteName), refspec); err != nil {
-						fmt.Fprintf(os.Stderr, "failed to add refspec: %v\n", err)
-						return 1
-					}
+				remoteURL := buildRemoteURL(*server, repoName)
+				if err := configureRemoteURL(repoRoot, remoteName, remoteURL); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to configure remote: %v\n", err)
+					return 1
 				}
+			}
+
+			selected, err := remotesel.Resolve()
+			if err == nil {
+				if err := ensureJulRefspecs(repoRoot, selected.Name); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to configure remote refspecs: %v\n", err)
+					return 1
+				}
+				fmt.Fprintf(os.Stdout, "Using remote %q (%s)\n", selected.Name, selected.URL)
+			} else if err == remotesel.ErrMultipleRemote {
+				fmt.Fprintln(os.Stdout, "Multiple remotes found; run 'jul remote set <name>' to choose one.")
 			}
 
 			if !*noHooks {
@@ -156,4 +134,18 @@ func buildRemoteURL(baseURL, repoName string) string {
 		return base + "/" + name
 	}
 	return base + "/" + name + ".git"
+}
+
+func configureRemoteURL(repoRoot, remoteName, remoteURL string) error {
+	if strings.TrimSpace(remoteName) == "" || strings.TrimSpace(remoteURL) == "" {
+		return fmt.Errorf("remote name and url required")
+	}
+	if gitutil.RemoteExists(remoteName) {
+		return runGit(repoRoot, "remote", "set-url", remoteName, remoteURL)
+	}
+	return runGit(repoRoot, "remote", "add", remoteName, remoteURL)
+}
+
+func ensureJulDir(repoRoot string) error {
+	return os.MkdirAll(filepath.Join(repoRoot, ".jul"), 0o755)
 }

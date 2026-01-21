@@ -1,31 +1,35 @@
 # Jul Build Tracker
 
-## Current Focus
+## Current Focus (v0.3 Pivot: Local-First)
+- [x] Local sync engine: shadow-index draft commits + `refs/jul/sync/<user>/<device>/<ws>`
+- [x] Device ID + `workspace_base` tracking per workspace
+- [x] Remote selection rules (origin fallback) + `jul remote set/show`
+- [x] Update `jul init` and config to local-first defaults (`[remote]`, `[user]`)
+
+## Next Up
+- [ ] Checkpoint semantics: new checkpoint commit + new draft + keep-ref
+- [ ] Workspace ref lease + auto-merge flow (`jul sync`, `jul merge`)
+- [ ] Local metadata in notes (attestations, suggestions, review, prompts)
+- [ ] Agent sandbox + review pipeline (internal agent)
+- [ ] `jul ws checkout` + local workspace save/restore integration
+- [ ] Query/log/diff/show over local metadata
+- [ ] Update smoke tests: local-only, Git remote, Jul-remote (optional)
+
+## Completed (pre-pivot groundwork)
 - [x] Monorepo scaffold (CLI/server/web/infra)
 - [x] Go server skeleton + storage + SSE
 - [x] Go CLI skeleton + server calls
 - [x] Basic tests (storage + server + CLI parsing)
-
-## Next Up
-- [x] Add git hooks for auto-sync (post-commit)
-- [x] Add keep-refs handling on server side (workspace reflog)
-- [x] Add smoke tests (server + CLI + git repo)
-- [x] Add promotion policy checks + actual ref updates
-- [x] Add attestation ingestion from CI runner
-- [x] Add JSON output modes to CLI commands (`changes`, `sync`)
-- [x] Add CI trigger endpoint + query API
+- [x] Git hooks for auto-sync (post-commit)
+- [x] Keep-refs handling on server side (workspace reflog)
+- [x] Smoke tests (server + CLI + git repo)
+- [x] Promotion policy checks + ref updates
+- [x] Attestation ingestion from CI runner
+- [x] JSON output modes to CLI commands (`changes`, `sync`)
+- [x] CI trigger endpoint + query API
 - [x] Mirror attestations into git notes
-
-## Later
 - [x] Suggestions API + refs
 - [x] Query endpoints (advanced filters)
-- [ ] CLI-only bootstrap (`jul init` done, `jul clone` pending)
 - [x] CLI config wizard (agent/provider selection, default server, workspace)
-- [ ] Agent-backed suggestions/review flow (auto-suggest on sync/CI) - config stub in place
 - [x] Align CLI config format with v0.2 spec (server/workspace/init sections)
-- [ ] Implement draft → checkpoint → promote flow (v0.2) - checkpoint endpoint + CLI added
-- [ ] Workspace commands (jul ws, default @) - list/set/switch/rename/delete done
-- [ ] Checkpoint APIs + queries (v0.2)
-- [ ] Publish prompts for outstanding suggestions
-- [ ] Notes namespaces
-- [ ] Web UI
+- [x] Workspace commands (`jul ws` list/set/switch/rename/delete)

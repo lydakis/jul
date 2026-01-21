@@ -4,7 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"strconv"
+	"path/filepath"
 	"strings"
 )
 
@@ -38,33 +38,39 @@ func BaseURL() string {
 
 func WorkspaceID() string {
 	if value := strings.TrimSpace(os.Getenv(EnvWorkspace)); value != "" {
+		if strings.Contains(value, "/") {
+			return value
+		}
+		user := UserName()
+		if user != "" {
+			return user + "/" + value
+		}
 		return value
 	}
-	if cfg := userConfigValue("workspace.id"); cfg != "" {
+	if cfg := configValue("workspace.id"); cfg != "" {
 		return cfg
 	}
-	if cfg := userConfigValue("workspace"); cfg != "" {
+	if cfg := configValue("workspace"); cfg != "" {
 		return cfg
 	}
-	if cfg := userConfigValue("client.workspace"); cfg != "" {
+	if cfg := configValue("client.workspace"); cfg != "" {
 		return cfg
 	}
 	if cfg := gitConfigValue("jul.workspace"); cfg != "" {
 		return cfg
 	}
-	if cfg := userConfigValue("workspace.default_name"); cfg != "" {
-		user := ServerUser()
-		if user == "" {
-			user = usernameFallback()
-		}
-		if user != "" {
-			return user + "/" + cfg
-		}
+	user := UserName()
+	workspace := WorkspaceName()
+	if user == "" {
+		user = usernameFallback()
 	}
-
-	user := usernameFallback()
-	host := hostnameFallback()
-	return user + "/" + host
+	if workspace == "" {
+		workspace = "@"
+	}
+	if user == "" {
+		return workspace
+	}
+	return user + "/" + workspace
 }
 
 func RepoName() string {
@@ -78,35 +84,16 @@ func RepoName() string {
 }
 
 func DefaultAgent() string {
-	if cfg := userConfigValue("agent.provider"); cfg != "" {
+	if cfg := configValue("agent.provider"); cfg != "" {
 		return cfg
 	}
-	if cfg := userConfigValue("agent"); cfg != "" {
+	if cfg := configValue("agent"); cfg != "" {
 		return cfg
 	}
-	if cfg := userConfigValue("client.agent"); cfg != "" {
+	if cfg := configValue("client.agent"); cfg != "" {
 		return cfg
 	}
 	return ""
-}
-
-func CreateRemoteDefault() bool {
-	if cfg := userConfigValue("init.create_remote"); cfg != "" {
-		if parsed, err := strconv.ParseBool(cfg); err == nil {
-			return parsed
-		}
-	}
-	if cfg := userConfigValue("create_remote"); cfg != "" {
-		if parsed, err := strconv.ParseBool(cfg); err == nil {
-			return parsed
-		}
-	}
-	if cfg := userConfigValue("client.create_remote"); cfg != "" {
-		if parsed, err := strconv.ParseBool(cfg); err == nil {
-			return parsed
-		}
-	}
-	return true
 }
 
 func ServerUser() string {
@@ -114,6 +101,43 @@ func ServerUser() string {
 		return cfg
 	}
 	if cfg := userConfigValue("user"); cfg != "" {
+		return cfg
+	}
+	return ""
+}
+
+func UserName() string {
+	if cfg := configValue("user.name"); cfg != "" {
+		return cfg
+	}
+	if cfg := configValue("user"); cfg != "" {
+		return cfg
+	}
+	if cfg := ServerUser(); cfg != "" {
+		return cfg
+	}
+	return usernameFallback()
+}
+
+func WorkspaceName() string {
+	if cfg := configValue("workspace.name"); cfg != "" {
+		return cfg
+	}
+	if cfg := configValue("workspace.default_name"); cfg != "" {
+		return cfg
+	}
+	return "@"
+}
+
+func RemoteName() string {
+	if cfg := configValue("remote.name"); cfg != "" {
+		return cfg
+	}
+	return ""
+}
+
+func RemoteURL() string {
+	if cfg := configValue("remote.url"); cfg != "" {
 		return cfg
 	}
 	return ""
@@ -156,6 +180,29 @@ func userConfigValue(key string) string {
 	return config[key]
 }
 
+func repoConfigValue(key string) string {
+	path, err := repoConfigPath()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	config := parseUserConfig(string(data))
+	return config[key]
+}
+
+func configValue(key string) string {
+	if cfg := repoConfigValue(key); cfg != "" {
+		return cfg
+	}
+	if cfg := userConfigValue(key); cfg != "" {
+		return cfg
+	}
+	return ""
+}
+
 func parseUserConfig(raw string) map[string]string {
 	config := map[string]string{}
 	section := ""
@@ -183,4 +230,21 @@ func parseUserConfig(raw string) map[string]string {
 		config[fullKey] = value
 	}
 	return config
+}
+
+func repoConfigPath() (string, error) {
+	root, err := repoTopLevel()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, ".jul", "config.toml"), nil
+}
+
+func repoTopLevel() (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
