@@ -176,7 +176,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		return CheckpointResult{}, err
 	}
 
-	keepRef := fmt.Sprintf("refs/jul/keep/%s/%s/%s", workspace, changeID, checkpointSHA)
+	keepRef := keepRefPath(user, workspace, changeID, checkpointSHA)
 	if err := gitutil.UpdateRef(keepRef, checkpointSHA); err != nil {
 		return CheckpointResult{}, err
 	}
@@ -231,7 +231,9 @@ func Checkpoint(message string) (CheckpointResult, error) {
 				return res, err
 			}
 		}
-		_ = pushRef(syncRes.RemoteName, checkpointSHA, keepRef, true)
+		if err := pushRef(syncRes.RemoteName, checkpointSHA, keepRef, true); err != nil {
+			return res, err
+		}
 	}
 
 	return res, nil
@@ -289,6 +291,23 @@ func ensureChangeID(message, changeID string) string {
 		return message
 	}
 	return strings.TrimSpace(message) + "\n\nChange-Id: " + changeID + "\n"
+}
+
+func keepRefPath(user, workspace, changeID, checkpointSHA string) string {
+	parts := []string{"refs/jul/keep"}
+	if strings.TrimSpace(user) != "" {
+		parts = append(parts, user)
+	}
+	if strings.TrimSpace(workspace) != "" {
+		parts = append(parts, workspace)
+	}
+	if strings.TrimSpace(changeID) != "" {
+		parts = append(parts, changeID)
+	}
+	if strings.TrimSpace(checkpointSHA) != "" {
+		parts = append(parts, checkpointSHA)
+	}
+	return strings.Join(parts, "/")
 }
 
 func fetchRef(remoteName, ref string) error {
