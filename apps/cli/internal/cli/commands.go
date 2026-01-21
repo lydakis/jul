@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
+	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
@@ -113,25 +113,15 @@ func newStatusCommand() Command {
 				info.RepoName = repoName
 			}
 
-			cli := client.New(config.BaseURL())
 			wsID := config.WorkspaceID()
-			workspace, err := cli.GetWorkspace(wsID)
-			if err != nil {
-				if httpErr, ok := err.(*client.HTTPError); ok && httpErr.Status == http.StatusNotFound {
-					workspace = client.Workspace{}
-				} else {
-					fmt.Fprintf(os.Stderr, "failed to fetch workspace: %v\n", err)
-					return 1
-				}
-			}
-
-			att, err := cli.GetAttestation(info.SHA)
+			att, err := metadata.GetAttestation(info.SHA)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to fetch attestation: %v\n", err)
 				return 1
 			}
 
-			payload := output.BuildStatusPayload(wsID, info.RepoName, info.Branch, info.SHA, info.ChangeID, workspace, att)
+			payload := output.BuildStatusPayload(wsID, info.RepoName, info.Branch, info.SHA, info.ChangeID, client.Workspace{}, att)
+			payload.SyncStatus = "local"
 			if err := output.RenderStatus(os.Stdout, payload, *jsonOut); err != nil {
 				fmt.Fprintf(os.Stderr, "failed to render status: %v\n", err)
 				return 1

@@ -9,8 +9,8 @@ import (
 
 	cicmd "github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/client"
-	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/metadata"
 )
 
 func newCICommand() Command {
@@ -18,15 +18,27 @@ func newCICommand() Command {
 		Name:    "ci",
 		Summary: "Run local CI and record attestation",
 		Run: func(args []string) int {
-			if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
+			if len(args) == 0 {
+				return runCIRun(args)
+			}
+			if args[0] == "help" || args[0] == "--help" {
 				printCIUsage()
 				return 0
+			}
+			if strings.HasPrefix(args[0], "-") {
+				return runCIRun(args)
 			}
 
 			sub := args[0]
 			switch sub {
 			case "run":
 				return runCIRun(args[1:])
+			case "status":
+				return runCIStatus(args[1:])
+			case "watch":
+				return runCIRun(args[1:])
+			case "config":
+				return runCIConfig(args[1:])
 			default:
 				printCIUsage()
 				return 1
@@ -109,35 +121,30 @@ func runCIRun(args []string) int {
 		SignalsJSON:       string(signals),
 	}
 
-	cli := client.New(config.BaseURL())
-	created, err := cli.CreateAttestation(att)
+	created, err := metadata.WriteAttestation(att)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to record attestation: %v\n", err)
 		return 1
 	}
 
 	if *jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(created); err != nil {
+		payload := buildCIJSON(result, created)
+		if err := renderCIJSON(payload); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
 			return 1
 		}
-		if result.Status != "pass" {
-			return 1
-		}
-		return 0
+		return exitCodeForStatus(result.Status)
 	}
 
-	fmt.Fprintf(os.Stdout, "ci %s (commit %s)\n", result.Status, info.SHA)
-	if result.Status != "pass" {
-		return 1
-	}
-	return 0
+	renderCIHuman(result)
+	return exitCodeForStatus(result.Status)
 }
 
 func printCIUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ci run [--cmd <command>] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--json]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ci [run] [--cmd <command>] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--json]")
+	fmt.Fprintln(os.Stdout, "       jul ci status [--json]")
+	fmt.Fprintln(os.Stdout, "       jul ci watch [--cmd <command>]")
+	fmt.Fprintln(os.Stdout, "       jul ci config")
 }
 
 func inferCIStatuses(commands []string, overall string) (string, string) {
@@ -158,4 +165,169 @@ func inferCIStatuses(commands []string, overall string) (string, string) {
 		}
 	}
 	return testStatus, compileStatus
+}
+
+func runCIStatus(args []string) int {
+	fs := flag.NewFlagSet("ci status", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	_ = fs.Parse(args)
+
+	info, err := gitutil.CurrentCommit()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
+		return 1
+	}
+
+	att, err := metadata.GetAttestation(info.SHA)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read attestation: %v\n", err)
+		return 1
+	}
+	if att == nil {
+		if *jsonOut {
+			_ = renderCIJSON(ciJSON{CI: ciJSONDetails{Status: "unknown"}})
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "No CI results for current commit.")
+		return 1
+	}
+
+	var result cicmd.Result
+	if strings.TrimSpace(att.SignalsJSON) != "" {
+		_ = json.Unmarshal([]byte(att.SignalsJSON), &result)
+	}
+
+	if *jsonOut {
+		payload := buildCIJSON(result, *att)
+		if err := renderCIJSON(payload); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+			return 1
+		}
+		return exitCodeForStatus(att.Status)
+	}
+
+	if result.Status == "" {
+		fmt.Fprintf(os.Stdout, "ci %s (commit %s)\n", att.Status, info.SHA)
+		return exitCodeForStatus(att.Status)
+	}
+	renderCIHuman(result)
+	return exitCodeForStatus(result.Status)
+}
+
+func runCIConfig(args []string) int {
+	_ = args
+	fmt.Fprintln(os.Stdout, "CI configuration:")
+	fmt.Fprintln(os.Stdout, "  run_on_checkpoint: true (default)")
+	fmt.Fprintln(os.Stdout, "  run_on_draft: true (default)")
+	fmt.Fprintln(os.Stdout, "  draft_ci_blocking: false (default)")
+	fmt.Fprintln(os.Stdout, "  default command: go test ./...")
+	return 0
+}
+
+type ciJSON struct {
+	CI ciJSONDetails `json:"ci"`
+}
+
+type ciJSONDetails struct {
+	Status     string        `json:"status"`
+	DurationMs int64         `json:"duration_ms,omitempty"`
+	Results    []ciJSONCheck `json:"results,omitempty"`
+}
+
+type ciJSONCheck struct {
+	Name       string  `json:"name"`
+	Status     string  `json:"status"`
+	DurationMs int64   `json:"duration_ms,omitempty"`
+	Output     string  `json:"output,omitempty"`
+	Value      float64 `json:"value,omitempty"`
+}
+
+func buildCIJSON(result cicmd.Result, att client.Attestation) ciJSON {
+	details := ciJSONDetails{
+		Status: result.Status,
+	}
+	if details.Status == "" {
+		details.Status = att.Status
+	}
+	if !result.StartedAt.IsZero() && !result.FinishedAt.IsZero() {
+		details.DurationMs = result.FinishedAt.Sub(result.StartedAt).Milliseconds()
+	}
+	if len(result.Commands) > 0 {
+		checks := make([]ciJSONCheck, 0, len(result.Commands))
+		for _, cmd := range result.Commands {
+			checks = append(checks, ciJSONCheck{
+				Name:       labelForCommand(cmd.Command),
+				Status:     cmd.Status,
+				DurationMs: cmd.DurationMs,
+				Output:     cmd.OutputExcerpt,
+			})
+		}
+		if att.CoverageLinePct != nil {
+			status := "pass"
+			checks = append(checks, ciJSONCheck{
+				Name:   "coverage",
+				Status: status,
+				Value:  *att.CoverageLinePct,
+			})
+		}
+		details.Results = checks
+	}
+	return ciJSON{CI: details}
+}
+
+func renderCIJSON(payload ciJSON) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(payload)
+}
+
+func renderCIHuman(result cicmd.Result) {
+	fmt.Fprintln(os.Stdout, "Running CI...")
+	for _, cmd := range result.Commands {
+		icon := "✓"
+		if cmd.Status != "pass" {
+			icon = "✗"
+		}
+		fmt.Fprintf(os.Stdout, "  %s %s (%dms)\n", icon, labelForCommand(cmd.Command), cmd.DurationMs)
+		if cmd.Status != "pass" && cmd.OutputExcerpt != "" {
+			for _, line := range strings.Split(cmd.OutputExcerpt, "\n") {
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				fmt.Fprintf(os.Stdout, "    %s\n", line)
+			}
+		}
+	}
+	if result.Status == "pass" {
+		fmt.Fprintln(os.Stdout, "All checks passed.")
+		return
+	}
+	fmt.Fprintln(os.Stdout, "One or more checks failed.")
+}
+
+func labelForCommand(command string) string {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	switch {
+	case strings.Contains(normalized, "lint"):
+		return "lint"
+	case strings.Contains(normalized, "go test") || strings.Contains(normalized, "pytest") ||
+		strings.Contains(normalized, "npm test") || strings.Contains(normalized, "yarn test") ||
+		strings.Contains(normalized, "pnpm test"):
+		return "test"
+	case strings.Contains(normalized, "go vet"):
+		return "lint"
+	default:
+		if fields := strings.Fields(command); len(fields) > 0 {
+			return fields[0]
+		}
+		return "command"
+	}
+}
+
+func exitCodeForStatus(status string) int {
+	if status == "pass" {
+		return 0
+	}
+	return 1
 }

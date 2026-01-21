@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/lydakis/jul/cli/internal/client"
-	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/notes"
 )
 
 func newQueryCommand() Command {
@@ -76,8 +77,7 @@ func newQueryCommand() Command {
 				untilFilter = &parsed
 			}
 
-			cli := client.New(config.BaseURL())
-			results, err := cli.Query(client.QueryFilters{
+			results, err := localQuery(client.QueryFilters{
 				Tests:       strings.TrimSpace(*tests),
 				Compiles:    compilesFilter,
 				CoverageMin: coverageMinFilter,
@@ -133,4 +133,126 @@ func firstLine(message string) string {
 	}
 	lines := strings.Split(message, "\n")
 	return lines[0]
+}
+
+func localQuery(filters client.QueryFilters) ([]client.QueryResult, error) {
+	args := []string{"log", "--date=iso-strict", "--format=%H%x1f%an%x1f%ad%x1f%B%x1e"}
+	if strings.TrimSpace(filters.Author) != "" {
+		args = append(args, "--author", strings.TrimSpace(filters.Author))
+	}
+	if filters.Since != nil {
+		args = append(args, "--since", filters.Since.Format(time.RFC3339))
+	}
+	if filters.Until != nil {
+		args = append(args, "--until", filters.Until.Format(time.RFC3339))
+	}
+
+	out, err := gitutil.Git(args...)
+	if err != nil {
+		return nil, err
+	}
+	records := strings.Split(strings.TrimSpace(out), "\x1e")
+	results := make([]client.QueryResult, 0, len(records))
+
+	limit := filters.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	for _, record := range records {
+		record = strings.TrimSpace(record)
+		if record == "" {
+			continue
+		}
+		fields := strings.SplitN(record, "\x1f", 4)
+		if len(fields) < 4 {
+			continue
+		}
+		sha := strings.TrimSpace(fields[0])
+		author := strings.TrimSpace(fields[1])
+		dateRaw := strings.TrimSpace(fields[2])
+		message := strings.TrimSpace(fields[3])
+
+		createdAt, _ := time.Parse(time.RFC3339, dateRaw)
+		changeID := gitutil.ExtractChangeID(message)
+		if changeID == "" {
+			changeID = gitutil.FallbackChangeID(sha)
+		}
+
+		var att client.Attestation
+		found, err := notes.ReadJSON(notes.RefAttestationsCheckpoint, sha, &att)
+		if err != nil {
+			return nil, err
+		}
+
+		res := client.QueryResult{
+			CommitSHA: sha,
+			ChangeID:  changeID,
+			Author:    author,
+			Message:   message,
+			CreatedAt: createdAt,
+		}
+		if found {
+			res.AttestationStatus = att.Status
+			res.TestStatus = att.TestStatus
+			res.CompileStatus = att.CompileStatus
+			res.CoverageLinePct = att.CoverageLinePct
+			res.CoverageBranchPct = att.CoverageBranchPct
+		}
+
+		if !matchQueryFilters(res, att, found, filters) {
+			continue
+		}
+
+		results = append(results, res)
+		if len(results) >= limit {
+			break
+		}
+	}
+	return results, nil
+}
+
+func matchQueryFilters(res client.QueryResult, att client.Attestation, hasAtt bool, filters client.QueryFilters) bool {
+	if filters.ChangeID != "" && res.ChangeID != filters.ChangeID {
+		return false
+	}
+	if filters.Tests != "" {
+		if !hasAtt {
+			return false
+		}
+		status := att.TestStatus
+		if status == "" {
+			status = att.Status
+		}
+		if status != filters.Tests {
+			return false
+		}
+	}
+	if filters.Compiles != nil {
+		if !hasAtt {
+			return false
+		}
+		status := att.CompileStatus
+		if status == "" {
+			status = att.Status
+		}
+		want := "fail"
+		if *filters.Compiles {
+			want = "pass"
+		}
+		if status != want {
+			return false
+		}
+	}
+	if filters.CoverageMin != nil {
+		if !hasAtt || att.CoverageLinePct == nil || *att.CoverageLinePct < *filters.CoverageMin {
+			return false
+		}
+	}
+	if filters.CoverageMax != nil {
+		if !hasAtt || att.CoverageLinePct == nil || *att.CoverageLinePct > *filters.CoverageMax {
+			return false
+		}
+	}
+	return true
 }

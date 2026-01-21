@@ -628,7 +628,21 @@ After `jul merge`:
 
 ### 5.4 Sync Modes
 
-Jul supports three sync modes, configurable per-repo or globally:
+**Local-first:** Jul works with or without a remote.
+
+Without a remote configured:
+```bash
+$ jul sync
+Syncing...
+  ✓ Draft committed
+  ✓ Workspace ref updated
+  
+(No remote configured — working locally)
+```
+
+Everything works locally: drafts, checkpoints, workspaces, attestations. The sync just doesn't push/fetch. Add a remote later via `jul remote set` when you're ready.
+
+**With a remote configured:** Jul syncs to the remote using one of three modes:
 
 ```toml
 # ~/.config/jul/config.toml or .jul/config.toml
@@ -843,20 +857,59 @@ checkpoint_keep_days = -1    # Never expire (infinite)
 
 | Attestation Type | Attached To | Purpose |
 |------------------|-------------|---------|
+| **Draft** | Current draft SHA | Continuous feedback, ephemeral |
 | **Checkpoint** | Original checkpoint SHA | Pre-integration CI, review |
 | **Published** | Post-rebase SHA on target | Final verification on main |
 
+**Draft attestations (continuous CI):**
+
+By default, CI runs in the background every time the workspace ref updates:
+
+```bash
+$ jul sync
+Syncing...
+  ✓ Workspace ref updated
+  ⚡ CI running in background...
+
+# Later, or immediately if fast:
+$ jul status
+Draft Iab4f... (2 files changed)
+  ✓ lint: pass
+  ✓ test: pass (48/48)
+  ✓ coverage: 84%
+```
+
+Draft attestations are:
+- **Non-blocking** — you keep working, results appear when ready
+- **Ephemeral** — overwritten on each sync (not kept in history)
+- **Stored separately** — `refs/notes/jul/attestations/draft` (not mixed with checkpoint attestations)
+
+This gives agents continuous feedback: "Am I breaking anything?" without waiting for checkpoint.
+
+```toml
+[ci]
+run_on_draft = true           # Default: run CI on every draft sync
+run_on_checkpoint = true      # Always run on checkpoint
+draft_ci_blocking = false     # Default: non-blocking background run
+```
+
 **Storage:**
 ```
+refs/notes/jul/attestations/draft        # Ephemeral, current draft only
 refs/notes/jul/attestations/checkpoint   # Keyed by original SHA
 refs/notes/jul/attestations/published    # Keyed by published SHA
 ```
 
 **Workflow:**
 ```
+draft sync
+    │
+    ├── CI runs (background) → draft attestation (ephemeral)
+    │
+    ▼
 checkpoint Iab4f... (sha: abc123)
     │
-    ├── CI runs → checkpoint attestation for abc123
+    ├── CI runs → checkpoint attestation for abc123 (permanent)
     │
     ▼
 jul promote --to main --rebase
@@ -1042,69 +1095,79 @@ Creates:
 Initialize a repository with Jul.
 
 ```bash
-# New project (creates local, optional remote)
-$ jul init my-project --create-remote
-Created remote: https://jul.example.com/my-project.git
-Initialized local repository
-Workspace '@' ready
-
-# Existing repo
-$ cd existing-project
-$ jul init --server https://jul.example.com
-Configured Jul remote
-Installed hooks
-Workspace '@' ready
-```
-
-What it does:
-1. `git init` (if new)
-2. Add remote with Jul refspecs (if configured)
-3. Install hooks (post-commit for auto-sync, if configured)
-4. Create default workspace `@`
-5. Start first draft
-
-**Remote selection rules (when no explicit `remote.name` configured):**
-- If `origin` exists → use it
-- Else if exactly one remote exists → use it
-- Else if multiple remotes exist and no `origin` → require `jul remote set <name>`
-- Else (no remotes) → work locally (no push/fetch)
-
-Example:
-```bash
-$ git clone git@github.com:george/myproject.git
+# In a cloned repo (origin exists)
+$ cd my-project
 $ jul init
 Using remote 'origin' (git@github.com:george/myproject.git)
+Device ID: swift-tiger
+Workspace '@' ready
 
+# In a repo with multiple remotes (no origin)
 $ jul init
 Multiple remotes found: upstream, github, personal
 Run 'jul remote set <name>' to choose one.
+Device ID: swift-tiger
+Workspace '@' ready (local only)
+
+# Fresh repo (no remotes)
+$ jul init
+No remote configured. Working locally.
+Device ID: swift-tiger
+Workspace '@' ready
 ```
+
+**Remote selection logic:**
+1. If `origin` exists → use it
+2. If no `origin` but exactly one remote → use that
+3. If no `origin` and multiple remotes → require explicit `jul remote set`
+4. If no remotes → work locally
+
+What it does:
+1. `git init` (if new)
+2. Generate device ID (e.g., "swift-tiger") → `~/.config/jul/device`
+3. Select remote (if available)
+4. Add Jul refspecs to remote (if configured)
+5. Create default workspace `@`
+6. Start first draft
 
 #### `jul remote`
 
-Configure which git remote Jul uses for sync.
+View or set the git remote used for sync.
 
 ```bash
-$ jul remote set origin
-Now using remote 'origin' for sync.
+# View current remote
+$ jul remote
+Using 'origin' (git@github.com:george/myproject.git)
 
-$ jul remote show
-origin (git@github.com:george/myproject.git)
+# Set remote
+$ jul remote set upstream
+Now using 'upstream' for sync.
+
+# Clear remote (work locally)
+$ jul remote clear
+Remote cleared. Working locally.
 ```
 
 ### 6.2 Core Workflow Commands
 
 #### `jul sync`
 
-Fetch, push to device's sync ref, update workspace (auto-merge if needed).
+Sync current draft. With a remote: fetch, push, auto-merge. Without: local only.
 
 ```bash
+# With remote configured
 $ jul sync
 Syncing...
   ✓ Fetched workspace ref
   ✓ Pushed to sync ref
   ✓ Workspace ref updated
   ✓ workspace_base updated
+
+# Without remote (local only)
+$ jul sync
+Syncing...
+  ✓ Draft committed
+  ✓ Workspace ref updated (local)
 ```
 
 If another device pushed but changes don't conflict:
@@ -1491,7 +1554,75 @@ With `--json` for agents:
 }
 ```
 
-### 6.7 History and Diff Commands
+### 6.7 CI Command
+
+#### `jul ci`
+
+Run CI and show results.
+
+```bash
+$ jul ci
+Running CI...
+  ✓ lint: pass (1.2s)
+  ✓ test: pass (8.4s) — 48/48
+  ✓ coverage: 84%
+
+All checks passed.
+```
+
+If tests fail:
+```bash
+$ jul ci
+Running CI...
+  ✓ lint: pass (1.2s)
+  ✗ test: fail (6.1s) — 45/48
+    FAIL tests/test_auth.py::test_token_refresh
+    FAIL tests/test_auth.py::test_expired_token
+    FAIL tests/test_jwt.py::test_invalid_signature
+  ⚠ coverage: 79% (below 80% threshold)
+
+3 checks failed.
+```
+
+**Subcommands:**
+
+```bash
+$ jul ci              # Run CI now, wait for results
+$ jul ci status       # Show latest results (don't re-run)
+$ jul ci watch        # Run and stream output
+$ jul ci config       # Show CI configuration
+```
+
+**For agents (JSON):**
+
+```bash
+$ jul ci --json
+```
+
+```json
+{
+  "ci": {
+    "status": "pass",
+    "duration_ms": 9600,
+    "results": [
+      {"name": "lint", "status": "pass", "duration_ms": 1200},
+      {"name": "test", "status": "pass", "duration_ms": 8400, "passed": 48, "failed": 0},
+      {"name": "coverage", "status": "pass", "value": 84, "threshold": 80}
+    ]
+  }
+}
+```
+
+**Difference from background CI:**
+- Background CI runs automatically on sync (non-blocking)
+- `jul ci` runs explicitly and waits for results (blocking)
+
+Use `jul ci` when you want to explicitly verify before checkpointing:
+```bash
+$ jul ci && jul checkpoint   # Only checkpoint if CI passes
+```
+
+### 6.8 History and Diff Commands
 
 #### `jul log`
 
@@ -1593,7 +1724,7 @@ Iab4f... checkpoint "feat: add JWT validation" (4h ago)
 Ief6a... checkpoint "initial structure" (1d ago)
 ```
 
-### 6.8 Local Workspaces (Client-Side)
+### 6.9 Local Workspaces (Client-Side)
 
 Local workspaces enable instant context switching for uncommitted work.
 
@@ -1652,10 +1783,6 @@ Deleted.
 [user]
 name = "george"
 
-[remote]
-name = "origin"                               # Default remote name
-url = "git@github.com:george/myproject.git"   # Any git remote (optional override)
-
 [workspace]
 default_name = "@"
 
@@ -1670,8 +1797,9 @@ default_target = "main"
 strategy = "rebase"              # rebase | squash | merge
 
 [ci]
-run_on_checkpoint = true         # Run tests on checkpoint
-run_on_draft = false             # Run tests on draft sync
+run_on_checkpoint = true         # Always run CI on checkpoint
+run_on_draft = true              # Run CI on draft sync (background)
+draft_ci_blocking = false        # Draft CI doesn't block sync
 
 [review]
 enabled = true
@@ -1717,13 +1845,23 @@ protocol = "jul-agent-v1"
 ```toml
 # .jul/config.toml (per-repo)
 
+[remote]
+name = "origin"                  # Git remote to use for sync
+                                 # Default: "origin" if exists, else only remote, else none
+
 [workspace]
-name = "feature-auth"            # Override default
+name = "feature-auth"            # Override default workspace name
 
 [ci]
 # Agent-assisted CI setup (future)
 # First checkpoint without config triggers setup wizard
 ```
+
+**Remote selection (auto-detected on `jul init`):**
+1. If `origin` exists → use it
+2. If no `origin` but exactly one remote → use that
+3. If multiple remotes and no `origin` → must set explicitly via `jul remote set`
+4. If no remotes → work locally (no `[remote]` section)
 
 ### 7.5 Policy Config
 
@@ -2188,11 +2326,12 @@ This is future work. For v1, any git remote works.
 
 | Term | Definition |
 |------|------------|
-| **Attestation** | CI/test/coverage results attached to a checkpoint |
+| **Attestation** | CI/test/coverage results attached to a commit (draft, checkpoint, or published) |
 | **Change-Id** | Stable identifier (`Iab4f...`) for a checkpoint |
 | **Checkpoint** | Locked unit of work with message and Change-Id |
 | **Device ID** | Random word pair (e.g., "swift-tiger") identifying this machine |
 | **Draft** | Ephemeral commit snapshotting working tree (parent = last checkpoint) |
+| **Draft Attestation** | Ephemeral CI results for current draft (overwritten on each sync) |
 | **Keep-ref** | Ref that anchors a checkpoint for retention |
 | **Local Workspace** | Client-side saved state for fast context switching |
 | **Merge** | Agent-assisted resolution when sync has actual conflicts |

@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/metadata"
 )
 
 func newSuggestionsCommand() Command {
@@ -25,8 +25,7 @@ func newSuggestionsCommand() Command {
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			cli := client.New(config.BaseURL())
-			results, err := cli.ListSuggestions(strings.TrimSpace(*changeID), strings.TrimSpace(*status), *limit)
+			results, err := metadata.ListSuggestions(strings.TrimSpace(*changeID), strings.TrimSpace(*status), *limit)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to list suggestions: %v\n", err)
 				return 1
@@ -82,15 +81,14 @@ func newSuggestCommand() Command {
 				return 1
 			}
 
-			cli := client.New(config.BaseURL())
-			created, err := cli.CreateSuggestion(client.SuggestionCreateRequest{
+			created, err := metadata.CreateSuggestion(metadata.SuggestionCreate{
 				ChangeID:           "",
 				BaseCommitSHA:      strings.TrimSpace(baseResolved),
 				SuggestedCommitSHA: strings.TrimSpace(*suggestedSHA),
+				CreatedBy:          config.UserName(),
 				Reason:             strings.TrimSpace(*reason),
 				Description:        strings.TrimSpace(*description),
 				Confidence:         *confidence,
-				Repo:               config.RepoName(),
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to create suggestion: %v\n", err)
@@ -128,8 +126,14 @@ func newSuggestionActionCommand(name, action string) Command {
 				return 1
 			}
 
-			cli := client.New(config.BaseURL())
-			updated, err := cli.UpdateSuggestionStatus(id, action)
+			status := action
+			if action == "accept" {
+				status = "accepted"
+			}
+			if action == "reject" {
+				status = "rejected"
+			}
+			updated, err := metadata.UpdateSuggestionStatus(id, status)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to update suggestion: %v\n", err)
 				return 1

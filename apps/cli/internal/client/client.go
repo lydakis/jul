@@ -75,6 +75,7 @@ type Attestation struct {
 	StartedAt         time.Time `json:"started_at"`
 	FinishedAt        time.Time `json:"finished_at"`
 	SignalsJSON       string    `json:"signals_json"`
+	CreatedAt         time.Time `json:"created_at,omitempty"`
 }
 
 type ReflogEntry struct {

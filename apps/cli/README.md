@@ -43,7 +43,7 @@ go run ./cmd/jul sync --json
 go run ./cmd/jul changes --json
 
 # Run local CI and record attestation
-go run ./cmd/jul ci run --cmd "go test ./..." --coverage-line 82.5
+go run ./cmd/jul ci --cmd "go test ./..." --coverage-line 82.5
 
 # Query recent passing commits with coverage
 go run ./cmd/jul query --tests pass --compiles true --coverage-min 80 --limit 5
