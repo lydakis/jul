@@ -82,6 +82,9 @@ func newSyncCommand() Command {
 				fmt.Fprintln(os.Stdout, "  ⚠ Workspace diverged — run 'jul merge' when ready")
 				return 0
 			}
+			if res.AutoMerged {
+				fmt.Fprintln(os.Stdout, "  ✓ Auto-merged (no conflicts)")
+			}
 			if res.WorkspaceUpdated {
 				fmt.Fprintln(os.Stdout, "  ✓ Workspace ref updated")
 			}

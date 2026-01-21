@@ -23,7 +23,7 @@ func CreateDraftCommit(parentSHA, changeID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	message := draftMessage(changeID)
+	message := DraftMessage(changeID)
 	commitSHA, err := commitTree(repoRoot, treeSHA, parentSHA, message)
 	if err != nil {
 		return "", err
@@ -31,11 +31,20 @@ func CreateDraftCommit(parentSHA, changeID string) (string, error) {
 	return commitSHA, nil
 }
 
-func draftMessage(changeID string) string {
+func DraftMessage(changeID string) string {
 	if strings.TrimSpace(changeID) == "" {
 		return "[draft] WIP"
 	}
 	return fmt.Sprintf("[draft] WIP\n\nChange-Id: %s\n", changeID)
+}
+
+func CreateDraftCommitFromTree(treeSHA, parentSHA, changeID string) (string, error) {
+	repoRoot, err := RepoTopLevel()
+	if err != nil {
+		return "", err
+	}
+	message := DraftMessage(changeID)
+	return commitTree(repoRoot, treeSHA, parentSHA, message)
 }
 
 func writeTree(repoRoot, indexPath string) (string, error) {

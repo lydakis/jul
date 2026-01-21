@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
@@ -20,6 +22,7 @@ type Result struct {
 	RemoteName       string
 	RemotePushed     bool
 	Diverged         bool
+	AutoMerged       bool
 	RemoteProblem    string
 }
 
@@ -104,7 +107,34 @@ func Sync() (Result, error) {
 		return res, nil
 	}
 	if workspaceRemote != "" && baseSHA != "" && workspaceRemote != baseSHA {
-		res.Diverged = true
+		mergedSHA, merged, err := autoMerge(repoRoot, workspaceRemote, draftSHA, changeID)
+		if err != nil {
+			return res, err
+		}
+		if !merged {
+			res.Diverged = true
+			return res, nil
+		}
+		if err := gitutil.UpdateRef(syncRef, mergedSHA); err != nil {
+			return res, err
+		}
+		if err := gitutil.UpdateRef(workspaceRef, mergedSHA); err != nil {
+			return res, err
+		}
+		if err := writeWorkspaceBase(repoRoot, workspace, mergedSHA); err != nil {
+			return res, err
+		}
+		res.DraftSHA = mergedSHA
+		res.WorkspaceUpdated = true
+		res.AutoMerged = true
+		if rerr == nil {
+			if err := pushRef(remote.Name, mergedSHA, syncRef, true); err != nil {
+				return res, err
+			}
+			if err := pushWorkspace(remote.Name, mergedSHA, workspaceRef, workspaceRemote); err != nil {
+				return res, err
+			}
+		}
 		return res, nil
 	}
 
@@ -268,8 +298,16 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 		if sha, err := gitutil.ResolveRef(baseRef); err == nil {
 			if msg, err := gitutil.CommitMessage(sha); err == nil {
 				changeID = gitutil.ExtractChangeID(msg)
+				if isDraftMessage(msg) {
+					if parent, err := gitutil.ParentOf(sha); err == nil {
+						parentSHA = parent
+					} else {
+						parentSHA = sha
+					}
+				} else {
+					parentSHA = sha
+				}
 			}
-			parentSHA = sha
 		}
 	}
 	if changeID == "" && parentSHA != "" {
@@ -310,11 +348,90 @@ func keepRefPath(user, workspace, changeID, checkpointSHA string) string {
 	return strings.Join(parts, "/")
 }
 
+func isDraftMessage(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	return strings.HasPrefix(trimmed, "[draft]")
+}
+
+func autoMerge(repoRoot, workspaceRemote, draftSHA, changeID string) (string, bool, error) {
+	mergeBase, err := gitutil.MergeBase(workspaceRemote, draftSHA)
+	if err != nil {
+		return "", false, err
+	}
+	treeSHA, conflicts, err := mergeTree(repoRoot, mergeBase, workspaceRemote, draftSHA)
+	if err != nil {
+		return "", false, err
+	}
+	if conflicts {
+		return "", false, nil
+	}
+	mergedSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, mergeBase, changeID)
+	if err != nil {
+		return "", false, err
+	}
+	return mergedSHA, true, nil
+}
+
+func mergeTree(repoRoot, baseSHA, theirsSHA, oursSHA string) (string, bool, error) {
+	julDir := filepath.Join(repoRoot, ".jul")
+	if err := os.MkdirAll(julDir, 0o755); err != nil {
+		return "", false, err
+	}
+	indexPath := filepath.Join(julDir, fmt.Sprintf("merge-index-%d", time.Now().UnixNano()))
+	env := map[string]string{
+		"GIT_INDEX_FILE": indexPath,
+	}
+	defer func() { _ = os.Remove(indexPath) }()
+
+	_, _ = gitWithEnv(repoRoot, env, "read-tree", "-m", baseSHA, oursSHA, theirsSHA)
+	conflicts, err := hasConflicts(repoRoot, env)
+	if err != nil {
+		return "", false, err
+	}
+	if conflicts {
+		return "", true, nil
+	}
+	treeSHA, err := gitWithEnv(repoRoot, env, "write-tree")
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := gitWithEnv(repoRoot, env, "checkout-index", "-a", "-f"); err != nil {
+		return "", false, err
+	}
+	return treeSHA, false, nil
+}
+
+func hasConflicts(repoRoot string, env map[string]string) (bool, error) {
+	out, err := gitWithEnv(repoRoot, env, "ls-files", "-u")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+func gitWithEnv(dir string, env map[string]string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), flattenEnv(env)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git -C %s %s failed: %s", dir, strings.Join(args, " "), strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func flattenEnv(env map[string]string) []string {
+	out := make([]string, 0, len(env))
+	for key, value := range env {
+		out = append(out, fmt.Sprintf("%s=%s", key, value))
+	}
+	return out
+}
+
 func fetchRef(remoteName, ref string) error {
 	if strings.TrimSpace(remoteName) == "" || strings.TrimSpace(ref) == "" {
 		return nil
 	}
-	_, err := gitutil.Git("fetch", remoteName, ref+":"+ref)
+	_, err := gitutil.Git("fetch", remoteName, "+"+ref+":"+ref)
 	return err
 }
 
