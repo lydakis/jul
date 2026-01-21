@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -36,7 +37,7 @@ func newCICommand() Command {
 			case "status":
 				return runCIStatus(args[1:])
 			case "watch":
-				return runCIRun(args[1:])
+				return runCIWatch(args[1:])
 			case "config":
 				return runCIConfig(args[1:])
 			default:
@@ -48,6 +49,14 @@ func newCICommand() Command {
 }
 
 func runCIRun(args []string) int {
+	return runCIRunWithStream(args, nil)
+}
+
+func runCIWatch(args []string) int {
+	return runCIRunWithStream(args, os.Stdout)
+}
+
+func runCIRunWithStream(args []string, stream io.Writer) int {
 	fs := flag.NewFlagSet("ci run", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	var commands stringList
@@ -71,7 +80,7 @@ func runCIRun(args []string) int {
 
 	workdir := info.TopLevel
 	if workdir == "" {
-		if top, err := gitutil.RepoTopLevel(); err == nil {
+		if top, topErr := gitutil.RepoTopLevel(); topErr == nil {
 			workdir = top
 		}
 	}
@@ -80,7 +89,13 @@ func runCIRun(args []string) int {
 		return 1
 	}
 
-	result, err := cicmd.RunCommands(cmds, workdir)
+	var result cicmd.Result
+	if stream != nil && !*jsonOut {
+		fmt.Fprintln(os.Stdout, "Running CI (streaming)...")
+		result, err = cicmd.RunCommandsStreaming(cmds, workdir, stream)
+	} else {
+		result, err = cicmd.RunCommands(cmds, workdir)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ci run failed: %v\n", err)
 		return 1
@@ -264,11 +279,17 @@ func buildCIJSON(result cicmd.Result, att client.Attestation) ciJSON {
 			})
 		}
 		if att.CoverageLinePct != nil {
-			status := "pass"
 			checks = append(checks, ciJSONCheck{
-				Name:   "coverage",
-				Status: status,
+				Name:   "coverage_line",
+				Status: "pass",
 				Value:  *att.CoverageLinePct,
+			})
+		}
+		if att.CoverageBranchPct != nil {
+			checks = append(checks, ciJSONCheck{
+				Name:   "coverage_branch",
+				Status: "pass",
+				Value:  *att.CoverageBranchPct,
 			})
 		}
 		details.Results = checks

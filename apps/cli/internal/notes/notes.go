@@ -3,6 +3,7 @@ package notes
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -18,7 +19,9 @@ const (
 	RefPrompts                = "refs/notes/jul/prompts"
 )
 
-const maxNoteSize = 16 * 1024
+const MaxNoteSize = 16 * 1024
+
+var ErrNoteTooLarge = errors.New("note exceeds max size")
 
 type Entry struct {
 	ObjectSHA string
@@ -33,8 +36,8 @@ func AddJSON(ref, objectSHA string, payload any) error {
 	if err != nil {
 		return err
 	}
-	if len(data) > maxNoteSize {
-		return fmt.Errorf("note exceeds %d bytes", maxNoteSize)
+	if len(data) > MaxNoteSize {
+		return fmt.Errorf("%w: %d bytes", ErrNoteTooLarge, len(data))
 	}
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
