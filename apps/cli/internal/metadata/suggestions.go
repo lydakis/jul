@@ -69,6 +69,7 @@ func CreateSuggestion(req SuggestionCreate) (client.Suggestion, error) {
 }
 
 func ListSuggestions(changeID, status string, limit int) ([]client.Suggestion, error) {
+	status = normalizeSuggestionStatus(status)
 	entries, err := notes.List(notes.RefSuggestions)
 	if err != nil {
 		return nil, err
@@ -83,6 +84,7 @@ func ListSuggestions(changeID, status string, limit int) ([]client.Suggestion, e
 		if !found {
 			continue
 		}
+		sug.Status = normalizeSuggestionStatus(sug.Status)
 		if sug.SuggestedCommitSHA == "" {
 			sug.SuggestedCommitSHA = entry.ObjectSHA
 		}
@@ -109,7 +111,7 @@ func UpdateSuggestionStatus(id, status, resolution string) (client.Suggestion, e
 	if strings.TrimSpace(id) == "" {
 		return client.Suggestion{}, errors.New("suggestion id required")
 	}
-	status = strings.TrimSpace(status)
+	status = normalizeSuggestionStatus(status)
 	if status == "" {
 		return client.Suggestion{}, errors.New("status required")
 	}
@@ -130,6 +132,7 @@ func UpdateSuggestionStatus(id, status, resolution string) (client.Suggestion, e
 		if sug.SuggestionID != id {
 			continue
 		}
+		sug.Status = normalizeSuggestionStatus(sug.Status)
 		sug.Status = status
 		if resolution != "" {
 			sug.ResolutionMessage = resolution
@@ -170,10 +173,22 @@ func GetSuggestionByID(id string) (client.Suggestion, bool, error) {
 		if sug.SuggestionID != id {
 			continue
 		}
+		sug.Status = normalizeSuggestionStatus(sug.Status)
 		if sug.SuggestedCommitSHA == "" {
 			sug.SuggestedCommitSHA = entry.ObjectSHA
 		}
 		return sug, true, nil
 	}
 	return client.Suggestion{}, false, nil
+}
+
+func normalizeSuggestionStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "open":
+		return "pending"
+	case "accepted":
+		return "applied"
+	default:
+		return strings.TrimSpace(status)
+	}
 }

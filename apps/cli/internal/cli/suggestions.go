@@ -39,6 +39,12 @@ func newSuggestionsCommand() Command {
 			}
 
 			statusFilter := strings.TrimSpace(*status)
+			switch statusFilter {
+			case "open":
+				statusFilter = "pending"
+			case "accepted":
+				statusFilter = "applied"
+			}
 			listStatus := statusFilter
 			if statusFilter == "all" {
 				listStatus = ""

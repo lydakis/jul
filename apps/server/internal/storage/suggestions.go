@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -25,6 +26,7 @@ func (s *Store) CreateSuggestion(ctx context.Context, sug Suggestion) (Suggestio
 	if sug.Status == "" {
 		sug.Status = "pending"
 	}
+	sug.Status = normalizeSuggestionStatus(sug.Status)
 	if sug.Reason == "" {
 		sug.Reason = "unspecified"
 	}
@@ -91,6 +93,7 @@ func (s *Store) ListSuggestions(ctx context.Context, changeID, status string, li
 }
 
 func (s *Store) UpdateSuggestionStatus(ctx context.Context, suggestionID, status string, resolvedAt time.Time) (Suggestion, error) {
+	status = normalizeSuggestionStatus(status)
 	var resolved any
 	if !resolvedAt.IsZero() {
 		resolved = resolvedAt.Format(timeFormat)
@@ -133,5 +136,17 @@ func scanSuggestion(row suggestionScanner) (Suggestion, error) {
 	if resolvedAt.Valid {
 		sug.ResolvedAt = parseTime(resolvedAt.String)
 	}
+	sug.Status = normalizeSuggestionStatus(sug.Status)
 	return sug, nil
+}
+
+func normalizeSuggestionStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "open":
+		return "pending"
+	case "accepted":
+		return "applied"
+	default:
+		return strings.TrimSpace(status)
+	}
 }
