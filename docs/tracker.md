@@ -7,7 +7,7 @@
 - [x] Update `jul init` and config to local-first defaults (`[remote]`, `[user]`)
 
 ## Next Up
-- [ ] Checkpoint semantics: new checkpoint commit + new draft + keep-ref
+- [x] Checkpoint semantics: new checkpoint commit + new draft + keep-ref
 - [ ] Workspace ref lease + auto-merge flow (`jul sync`, `jul merge`)
 - [ ] Local metadata in notes (attestations, suggestions, review, prompts)
 - [ ] Agent sandbox + review pipeline (internal agent)

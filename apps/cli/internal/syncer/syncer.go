@@ -23,6 +23,20 @@ type Result struct {
 	RemoteProblem    string
 }
 
+type CheckpointResult struct {
+	CheckpointSHA    string
+	DraftSHA         string
+	ChangeID         string
+	WorkspaceRef     string
+	SyncRef          string
+	KeepRef          string
+	WorkspaceUpdated bool
+	RemoteName       string
+	RemotePushed     bool
+	Diverged         bool
+	RemoteProblem    string
+}
+
 func Sync() (Result, error) {
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
@@ -109,6 +123,120 @@ func Sync() (Result, error) {
 	return res, nil
 }
 
+func Checkpoint(message string) (CheckpointResult, error) {
+	syncRes, err := Sync()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	if syncRes.Diverged && strings.Contains(syncRes.RemoteProblem, "baseline") {
+		return CheckpointResult{}, errors.New(syncRes.RemoteProblem)
+	}
+
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
+
+	draftSHA := syncRes.DraftSHA
+	if draftSHA == "" {
+		return CheckpointResult{}, fmt.Errorf("draft sha missing")
+	}
+
+	draftMessage, _ := gitutil.CommitMessage(draftSHA)
+	changeID := gitutil.ExtractChangeID(draftMessage)
+	if changeID == "" {
+		if generated, err := gitutil.NewChangeID(); err == nil {
+			changeID = generated
+		}
+	}
+
+	if strings.TrimSpace(message) == "" {
+		message = "checkpoint"
+	}
+	message = ensureChangeID(message, changeID)
+
+	treeSHA, err := gitutil.TreeOf(draftSHA)
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	parentSHA, _ := gitutil.ParentOf(draftSHA)
+	checkpointSHA, err := gitutil.CommitTree(treeSHA, parentSHA, message)
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+
+	keepRef := fmt.Sprintf("refs/jul/keep/%s/%s/%s", workspace, changeID, checkpointSHA)
+	if err := gitutil.UpdateRef(keepRef, checkpointSHA); err != nil {
+		return CheckpointResult{}, err
+	}
+
+	newChangeID, err := gitutil.NewChangeID()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	newDraftSHA, err := gitutil.CreateDraftCommit(checkpointSHA, newChangeID)
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
+		return CheckpointResult{}, err
+	}
+
+	res := CheckpointResult{
+		CheckpointSHA: checkpointSHA,
+		DraftSHA:      newDraftSHA,
+		ChangeID:      changeID,
+		WorkspaceRef:  workspaceRef,
+		SyncRef:       syncRef,
+		KeepRef:       keepRef,
+		RemoteName:    syncRes.RemoteName,
+		RemotePushed:  syncRes.RemotePushed,
+		Diverged:      syncRes.Diverged,
+		RemoteProblem: syncRes.RemoteProblem,
+	}
+
+	if !syncRes.Diverged {
+		if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+			return res, err
+		}
+		res.WorkspaceUpdated = true
+		if err := writeWorkspaceBase(repoRoot, workspace, newDraftSHA); err != nil {
+			return res, err
+		}
+	}
+
+	if syncRes.RemoteName != "" {
+		workspaceRemote := ""
+		_ = fetchRef(syncRes.RemoteName, workspaceRef)
+		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
+			workspaceRemote = sha
+		}
+		if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+			return res, err
+		}
+		res.RemotePushed = true
+		if res.WorkspaceUpdated {
+			if err := pushWorkspace(syncRes.RemoteName, newDraftSHA, workspaceRef, workspaceRemote); err != nil {
+				return res, err
+			}
+		}
+		_ = pushRef(syncRes.RemoteName, checkpointSHA, keepRef, true)
+	}
+
+	return res, nil
+}
+
 func workspaceParts() (string, string) {
 	id := strings.TrimSpace(config.WorkspaceID())
 	parts := strings.SplitN(id, "/", 2)
@@ -151,6 +279,16 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 		}
 	}
 	return parentSHA, changeID
+}
+
+func ensureChangeID(message, changeID string) string {
+	if changeID == "" {
+		return message
+	}
+	if gitutil.ExtractChangeID(message) != "" {
+		return message
+	}
+	return strings.TrimSpace(message) + "\n\nChange-Id: " + changeID + "\n"
 }
 
 func fetchRef(remoteName, ref string) error {
