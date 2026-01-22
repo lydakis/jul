@@ -1039,6 +1039,14 @@ sync_draft_attestations = false  # Default: local-only (avoid multi-device confl
 3. `jul ci status` reports: (a) latest completed SHA, (b) whether it matches current draft
 4. If results are for old draft: show with warning "⚠ results for old draft"
 
+**Run types and visibility:**
+- **Background draft CI (sync‑triggered)**: one at a time, coalesced per device. Visible via `jul ci status` (current draft + running PID).
+- **Foreground CI (`jul ci` / `jul ci watch`)**: runs immediately and streams output; results are recorded for the target SHA.
+- **Checkpoint CI (`jul checkpoint`)**: runs after a checkpoint and writes an attestation note for that checkpoint.
+- **Manual CI (`jul ci --target/--change`)**: attaches to the requested revision; does not replace draft CI unless it targets the draft SHA.
+
+**Multiple runs:** Draft CI is single‑flight per device (latest draft wins). Manual/foreground runs can be started while draft CI is idle, but if they target the draft SHA they will supersede the previous draft result.
+
 ```bash
 $ jul status
 Draft Iab4f... (3 files changed)
@@ -1810,6 +1818,7 @@ $ jul ci --change Iab4f3c2d...  # Attach results to latest checkpoint for a chan
 $ jul ci status       # Show latest results (don't re-run)
 $ jul ci watch        # Run and stream output
 $ jul ci config       # Show CI configuration
+$ jul ci config --show  # Show resolved commands (file or inferred)
 $ jul ci cancel       # Cancel in-progress background CI
 ```
 
