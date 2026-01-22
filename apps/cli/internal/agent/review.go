@@ -353,9 +353,15 @@ func buildReviewAttachment(req ReviewRequest) string {
 }
 
 func writeReviewAttachment(workdir, content string) (string, error) {
-	dir := workdir
-	if strings.TrimSpace(dir) == "" {
-		dir = "."
+	dir := os.TempDir()
+	if strings.TrimSpace(workdir) != "" {
+		parent := filepath.Dir(workdir)
+		if parent != "" && parent != "." && parent != string(filepath.Separator) {
+			dir = filepath.Join(parent, "attachments")
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
 	}
 	file, err := os.CreateTemp(dir, "jul-review-*.txt")
 	if err != nil {

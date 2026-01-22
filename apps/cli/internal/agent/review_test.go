@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -68,5 +70,20 @@ func TestReviewPromptKeepsDiffInAttachment(t *testing.T) {
 	}
 	if strings.Contains(prompt, "diff --git") || strings.Contains(prompt, "file.txt") {
 		t.Fatalf("did not expect diff or file content in prompt")
+	}
+}
+
+func TestWriteReviewAttachmentOutsideWorktree(t *testing.T) {
+	tmp := t.TempDir()
+	workdir := filepath.Join(tmp, "worktree")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("failed to create workdir: %v", err)
+	}
+	path, err := writeReviewAttachment(workdir, "content")
+	if err != nil {
+		t.Fatalf("failed to write attachment: %v", err)
+	}
+	if strings.HasPrefix(path, workdir+string(filepath.Separator)) {
+		t.Fatalf("expected attachment outside worktree, got %s", path)
 	}
 }
