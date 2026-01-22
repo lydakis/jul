@@ -6,7 +6,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/cli"
 )
 
-const version = "0.0.1"
+var version = "0.0.1"
 
 func main() {
 	app := &cli.App{
