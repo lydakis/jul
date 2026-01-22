@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/lydakis/jul/cli/internal/agent"
 	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/notes"
 	"github.com/lydakis/jul/cli/internal/output"
+	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
@@ -23,6 +28,7 @@ func newCheckpointCommand() Command {
 			fs.SetOutput(os.Stdout)
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			message := fs.String("m", "", "Checkpoint message")
+			prompt := fs.String("prompt", "", "Store prompt metadata")
 			noCI := fs.Bool("no-ci", false, "Skip CI run")
 			noReview := fs.Bool("no-review", false, "Skip review")
 			_ = fs.Parse(args)
@@ -31,6 +37,26 @@ func newCheckpointCommand() Command {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "checkpoint failed: %v\n", err)
 				return 1
+			}
+
+			if strings.TrimSpace(*prompt) != "" {
+				note := metadata.PromptNote{
+					CommitSHA: res.CheckpointSHA,
+					ChangeID:  res.ChangeID,
+					Source:    "checkpoint",
+					Prompt:    strings.TrimSpace(*prompt),
+				}
+				if err := metadata.WritePrompt(note); err != nil {
+					if errors.Is(err, notes.ErrNoteTooLarge) {
+						fmt.Fprintln(os.Stderr, "prompt note too large; skipping")
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to store prompt note: %v\n", err)
+					}
+				} else if config.PromptsSyncEnabled() {
+					if err := pushPromptNotes(); err != nil {
+						fmt.Fprintf(os.Stderr, "failed to push prompt notes: %v\n", err)
+					}
+				}
 			}
 
 			ciExit := 0
@@ -72,4 +98,21 @@ func newCheckpointCommand() Command {
 			return 0
 		},
 	}
+}
+
+func pushPromptNotes() error {
+	remote, err := remotesel.Resolve()
+	if err != nil {
+		if err == remotesel.ErrNoRemote {
+			return nil
+		}
+		return err
+	}
+	root, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return err
+	}
+	ref := notes.RefPrompts
+	_, err = gitutil.Git("-C", root, "push", remote.Name, fmt.Sprintf("%s:%s", ref, ref))
+	return err
 }

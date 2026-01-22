@@ -19,6 +19,7 @@ type Status struct {
 	AttestationStatus  string              `json:"attestation_status,omitempty"`
 	SuggestionsPending int                 `json:"suggestions_pending"`
 	Draft              *DraftStatus        `json:"draft,omitempty"`
+	DraftCI            *CIStatusDetails    `json:"draft_ci,omitempty"`
 	Checkpoints        []CheckpointSummary `json:"checkpoints,omitempty"`
 	PromoteStatus      *PromoteStatus      `json:"promote_status,omitempty"`
 }
@@ -80,6 +81,10 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 		draftLine = fmt.Sprintf("%s (clean)", draftLine)
 	}
 	fmt.Fprintf(w, "Draft: %s\n", draftLine)
+
+	if status.DraftCI != nil {
+		renderDraftCI(w, status.DraftCI, opts, draft.CommitSHA)
+	}
 	fmt.Fprintln(w, "")
 
 	if len(status.Checkpoints) > 0 {
@@ -115,5 +120,43 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 			statusLine = " (up to date)"
 		}
 		fmt.Fprintf(w, "Promote target: %s%s\n", status.PromoteStatus.Target, statusLine)
+	}
+}
+
+func renderDraftCI(w io.Writer, ci *CIStatusDetails, opts Options, draftSHA string) {
+	if ci == nil {
+		return
+	}
+	if ci.RunningSHA != "" && ci.RunningSHA == draftSHA {
+		icon := statusIconColored("running", opts)
+		if icon == "" {
+			icon = "⚡ "
+		}
+		fmt.Fprintf(w, "  %sCI running for current draft...\n", icon)
+	}
+	if ci.CompletedSHA != "" && !ci.ResultsCurrent {
+		warn := statusIconColored("warning", opts)
+		if warn == "" {
+			warn = statusIcon("warning", opts)
+		}
+		fmt.Fprintf(w, "  %sCI results for previous draft (%s)\n", warn, shortID(ci.CompletedSHA, 6))
+	}
+	if len(ci.Results) == 0 && ci.Status != "" && ci.Status != "unknown" {
+		icon := statusIconColored(ci.Status, opts)
+		if icon == "" {
+			icon = statusIcon(ci.Status, opts)
+		}
+		fmt.Fprintf(w, "  %sCI %s\n", icon, statusText(ci.Status, opts))
+	}
+	for _, check := range ci.Results {
+		icon := statusIconColored(check.Status, opts)
+		if icon == "" {
+			icon = statusIcon(check.Status, opts)
+		}
+		line := fmt.Sprintf("  %s%s", icon, check.Name)
+		if check.Value > 0 {
+			line += fmt.Sprintf(" (%.0f%%)", check.Value)
+		}
+		fmt.Fprintln(w, line)
 	}
 }

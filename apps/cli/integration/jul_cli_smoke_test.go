@@ -44,7 +44,7 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "show-ref", syncRes.WorkspaceRef)
 
 	// Checkpoint locally (keep-ref)
-	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
+	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--prompt", "write a checkpoint", "--no-ci", "--no-review", "--json")
 	var checkpointRes struct {
 		CheckpointSHA string `json:"CheckpointSHA"`
 		KeepRef       string `json:"KeepRef"`
@@ -56,6 +56,10 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 		t.Fatalf("expected keep ref and checkpoint sha")
 	}
 	runCmd(t, repo, nil, "git", "show-ref", checkpointRes.KeepRef)
+	promptNote := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/prompts", "show", checkpointRes.CheckpointSHA)
+	if !strings.Contains(promptNote, "write a checkpoint") {
+		t.Fatalf("expected prompt note, got %s", promptNote)
+	}
 
 	agentPath := filepath.Join(t.TempDir(), "agent.sh")
 	agentScript := `#!/bin/sh

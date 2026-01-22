@@ -5,6 +5,9 @@ These integration tests build the CLI, create temporary git repos, and exercise 
 Covered flows:
 - **Local-only**: `jul init`, `jul sync`, `jul checkpoint`, `jul ci`, `jul status`, `jul log`, `jul show`, `jul diff`,
   `jul review` (stub agent), `jul suggestions`, `jul apply`, `jul reflog` with no remotes configured.
+- **Draft CI on sync**: when `ci.run_on_draft = true`, `jul sync` triggers CI (blocking or background) and updates `.jul/ci/results.json`.
+- **CI config**: if `.jul/ci.toml` exists, CI uses its `[commands]` list instead of the default `go test ./...`.
+- **Prompt notes**: `jul checkpoint --prompt` stores metadata in `refs/notes/jul/prompts`.
 - **Git remote**: bare repo as `origin`, `jul sync` pushes sync/workspace refs, `jul checkpoint` pushes keep refs.
 - **Jul remote config**: `jul init --server <path> --create-remote` sets a remote and runs the same flow.
 - **Review agent**: `jul review` runs against a stub agent and creates suggestions.

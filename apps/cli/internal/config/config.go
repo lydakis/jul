@@ -200,6 +200,17 @@ func ReviewMinConfidence() float64 {
 	return configFloat("review.min_confidence", 0)
 }
 
+func PromptsStorage() string {
+	if cfg := configValue("prompts.storage"); cfg != "" {
+		return cfg
+	}
+	return "local"
+}
+
+func PromptsSyncEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(PromptsStorage()), "sync")
+}
+
 func hostnameFallback() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {

@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	cicmd "github.com/lydakis/jul/cli/internal/ci"
@@ -78,7 +77,11 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 
 	cmds := []string(commands)
 	if len(cmds) == 0 {
-		cmds = []string{"go test ./..."}
+		if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
+			cmds = cfg.Commands
+		} else {
+			cmds = []string{"go test ./..."}
+		}
 	}
 
 	if targetSHA == "" {
@@ -291,7 +294,14 @@ func runCIConfig(args []string) int {
 	fmt.Fprintf(os.Stdout, "  run_on_checkpoint: %t\n", config.CIRunOnCheckpoint())
 	fmt.Fprintf(os.Stdout, "  run_on_draft: %t\n", config.CIRunOnDraft())
 	fmt.Fprintf(os.Stdout, "  draft_ci_blocking: %t\n", config.CIDraftBlocking())
-	fmt.Fprintln(os.Stdout, "  default command: go test ./...")
+	if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
+		fmt.Fprintln(os.Stdout, "  commands (.jul/ci.toml):")
+		for _, cmd := range cfg.Commands {
+			fmt.Fprintf(os.Stdout, "    - %s\n", cmd)
+		}
+	} else {
+		fmt.Fprintln(os.Stdout, "  default command: go test ./...")
+	}
 	return 0
 }
 
@@ -306,11 +316,7 @@ func runCICancel(args []string) int {
 		fmt.Fprintln(os.Stdout, "No running CI job.")
 		return 0
 	}
-	proc, err := os.FindProcess(running.PID)
-	if err == nil {
-		_ = proc.Signal(syscall.SIGTERM)
-	}
-	_ = cicmd.ClearRunning()
+	_ = cancelRunningCI(running)
 	fmt.Fprintf(os.Stdout, "Cancelled CI run for %s\n", running.CommitSHA)
 	return 0
 }

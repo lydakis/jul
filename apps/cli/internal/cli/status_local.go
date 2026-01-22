@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	cicmd "github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
@@ -104,6 +105,7 @@ func buildLocalStatus() (output.Status, error) {
 		ChangeID:     changeID,
 		FilesChanged: filesChanged,
 	}
+	status.DraftCI = buildDraftCIStatus(draftSHA)
 
 	checkpoints, err := listCheckpoints()
 	if err != nil {
@@ -128,6 +130,69 @@ func buildLocalStatus() (output.Status, error) {
 	status.Checkpoints = summaries
 	status.PromoteStatus = buildPromoteStatus(checkpoints)
 	return status, nil
+}
+
+func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
+	completed, err := cicmd.ReadCompleted()
+	if err != nil {
+		return nil
+	}
+	running, _ := cicmd.ReadRunning()
+	if completed == nil && running == nil {
+		return nil
+	}
+	status := "unknown"
+	resultsCurrent := false
+	if completed != nil {
+		resultsCurrent = completed.CommitSHA == draftSHA
+		if resultsCurrent {
+			status = completed.Result.Status
+		} else {
+			status = "stale"
+		}
+	}
+	if running != nil && running.CommitSHA == draftSHA {
+		status = "running"
+	}
+	details := &output.CIStatusDetails{
+		Status:          status,
+		CurrentDraftSHA: draftSHA,
+		ResultsCurrent:  resultsCurrent,
+	}
+	if completed != nil {
+		details.CompletedSHA = completed.CommitSHA
+		if !completed.Result.StartedAt.IsZero() && !completed.Result.FinishedAt.IsZero() {
+			details.DurationMs = completed.Result.FinishedAt.Sub(completed.Result.StartedAt).Milliseconds()
+		}
+		checks := make([]output.CICheck, 0, len(completed.Result.Commands))
+		for _, cmd := range completed.Result.Commands {
+			checks = append(checks, output.CICheck{
+				Name:       output.LabelForCommand(cmd.Command),
+				Status:     cmd.Status,
+				DurationMs: cmd.DurationMs,
+				Output:     cmd.OutputExcerpt,
+			})
+		}
+		if completed.CoverageLinePct != nil {
+			checks = append(checks, output.CICheck{
+				Name:   "coverage_line",
+				Status: "pass",
+				Value:  *completed.CoverageLinePct,
+			})
+		}
+		if completed.CoverageBranchPct != nil {
+			checks = append(checks, output.CICheck{
+				Name:   "coverage_branch",
+				Status: "pass",
+				Value:  *completed.CoverageBranchPct,
+			})
+		}
+		details.Results = checks
+	}
+	if running != nil {
+		details.RunningSHA = running.CommitSHA
+	}
+	return details
 }
 
 func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {

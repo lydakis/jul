@@ -68,10 +68,18 @@ func newSyncCommand() Command {
 					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
 					return 1
 				}
+				ciExit := maybeRunDraftCI(res, true)
+				if ciExit != 0 {
+					return ciExit
+				}
 				return 0
 			}
 
 			output.RenderSync(os.Stdout, res, output.DefaultOptions())
+			ciExit := maybeRunDraftCI(res, false)
+			if ciExit != 0 {
+				return ciExit
+			}
 			return 0
 		},
 	}
