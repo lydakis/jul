@@ -1,6 +1,6 @@
 # Smoke Tests
 
-These integration tests build the CLI, create temporary git repos, and exercise Jul’s local-first flows end-to-end. They focus on draft/checkpoint behavior and remote ref updates without requiring server APIs.
+These integration tests build the CLI, create temporary git repos, and exercise Jul’s local-first flows end-to-end. Local smoke tests live under `apps/cli`, while remote smoke tests live under `apps/server`.
 
 Covered flows:
 - **Local-only**: `jul init`, `jul sync`, `jul checkpoint`, `jul ci`, `jul status`, `jul log`, `jul show`, `jul diff`,
@@ -13,12 +13,13 @@ Covered flows:
 ## Run
 
 ```bash
-cd apps/server
-
+# Local-only smoke tests
+cd apps/cli
 go test ./integration -run Smoke
 
-# or run the full server suite including integration
-go test ./...
+# Remote-only smoke tests
+cd apps/server
+go test ./integration -run Smoke
 ```
 
 ## Notes

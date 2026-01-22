@@ -12,7 +12,8 @@
 - Server run: `cd apps/server && go run ./cmd/jul-server --addr :8000 --db ./data/jul.db`
 - Unit tests (CLI): `cd apps/cli && go test ./...`
 - Unit tests (Server): `cd apps/server && go test ./...`
-- Smoke tests: `cd apps/server && go test ./integration -run Smoke`
+- Smoke tests (local-only): `cd apps/cli && go test ./integration -run Smoke`
+- Smoke tests (remote): `cd apps/server && go test ./integration -run Smoke`
 - Format: `gofmt -w $(rg --files -g '*.go' apps/cli apps/server)`
 
 ## Coding Style & Naming Conventions
