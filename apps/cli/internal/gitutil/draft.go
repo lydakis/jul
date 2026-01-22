@@ -48,14 +48,37 @@ func CreateDraftCommitFromTree(treeSHA, parentSHA, changeID string) (string, err
 }
 
 func writeTree(repoRoot, indexPath string) (string, error) {
+	excludePath, err := writeTempExcludes(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(excludePath)
+
 	if err := runGitWithEnv(repoRoot, map[string]string{
 		"GIT_INDEX_FILE": indexPath,
-	}, "add", "-A", "--", ".", ":(exclude).jul"); err != nil {
+	}, "-c", "core.excludesfile="+excludePath, "add", "-A", "--", "."); err != nil {
 		return "", err
 	}
 	return gitWithEnv(repoRoot, map[string]string{
 		"GIT_INDEX_FILE": indexPath,
 	}, "write-tree")
+}
+
+func writeTempExcludes(repoRoot string) (string, error) {
+	file, err := os.CreateTemp(repoRoot, ".jul-exclude-")
+	if err != nil {
+		return "", err
+	}
+	if _, err := file.WriteString(".jul/\n"); err != nil {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(file.Name())
+		return "", err
+	}
+	return file.Name(), nil
 }
 
 func commitTree(repoRoot, treeSHA, parentSHA, message string) (string, error) {
