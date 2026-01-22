@@ -93,7 +93,24 @@ func newStatusCommand() Command {
 			fs := flag.NewFlagSet("status", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
 			jsonOut := fs.Bool("json", false, "Output JSON")
+			porcelain := fs.Bool("porcelain", false, "Output git status porcelain")
 			_ = fs.Parse(args)
+
+			if *porcelain {
+				if *jsonOut {
+					fmt.Fprintln(os.Stderr, "cannot combine --json with --porcelain")
+					return 1
+				}
+				out, err := gitutil.Git("status", "--porcelain")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "failed to read git status: %v\n", err)
+					return 1
+				}
+				if strings.TrimSpace(out) != "" {
+					fmt.Fprintln(os.Stdout, out)
+				}
+				return 0
+			}
 
 			status, err := buildLocalStatus()
 			if err != nil {

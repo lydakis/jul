@@ -21,6 +21,9 @@
 - [x] Local reflog + status summaries from refs/notes
 - [x] CI config wiring for draft/background runs (run_on_draft, draft_ci_blocking)
 - [x] Align `jul status --json` and human output with new spec (draft/checkpoint summaries)
+- [x] Status shows working tree like git + porcelain option
+- [x] Skip auto draft CI when no `.jul/ci.toml` configured
+- [x] Clarify draft file counts relative to checkpoint base
 - [x] Add `jul review` (internal agent, worktree isolation)
 - [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
 - [x] GoReleaser + Homebrew packaging (bundle OpenCode)

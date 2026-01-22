@@ -95,7 +95,13 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 	}
 	draftLine := shortID(draftID, 6)
 	if draft.FilesChanged > 0 {
-		draftLine = fmt.Sprintf("%s (%d files changed)", draftLine, draft.FilesChanged)
+		suffix := ""
+		if status.LastCheckpoint != nil {
+			suffix = " since checkpoint"
+		} else {
+			suffix = " since repo start"
+		}
+		draftLine = fmt.Sprintf("%s (%d files changed%s)", draftLine, draft.FilesChanged, suffix)
 	} else if draft.FilesChanged == 0 {
 		draftLine = fmt.Sprintf("%s (clean)", draftLine)
 	}
@@ -162,6 +168,14 @@ func renderDraftCI(w io.Writer, ci *CIStatusDetails, opts Options, draftSHA stri
 			warn = statusIcon("warning", opts)
 		}
 		fmt.Fprintf(w, "  %sCI results for previous draft (%s)\n", warn, shortID(ci.CompletedSHA, 6))
+		if ci.Status != "" && ci.Status != "unknown" && ci.Status != "stale" {
+			icon := statusIconColored(ci.Status, opts)
+			if icon == "" {
+				icon = statusIcon(ci.Status, opts)
+			}
+			fmt.Fprintf(w, "  %sLast CI: %s\n", icon, statusText(ci.Status, opts))
+		}
+		return
 	}
 	if len(ci.Results) == 0 && ci.Status != "" && ci.Status != "unknown" {
 		icon := statusIconColored(ci.Status, opts)

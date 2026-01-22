@@ -20,6 +20,14 @@ func maybeRunDraftCI(res syncer.Result, jsonOut bool) int {
 	if !config.CIRunOnDraft() || strings.TrimSpace(res.DraftSHA) == "" {
 		return 0
 	}
+	if cfg, ok, err := cicmd.LoadConfig(); err != nil {
+		if !jsonOut {
+			fmt.Fprintf(os.Stderr, "failed to read ci config: %v\n", err)
+		}
+		return 0
+	} else if !ok || len(cfg.Commands) == 0 {
+		return 0
+	}
 
 	if running, err := cicmd.ReadRunning(); err == nil && running != nil {
 		if strings.TrimSpace(running.CommitSHA) == strings.TrimSpace(res.DraftSHA) {
