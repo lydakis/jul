@@ -124,7 +124,7 @@ func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewReques
 
 	prompt := buildReviewPrompt(tempFile)
 	cmdPath := provider.Command
-	args := []string{"run", "--format", "json", "--file", tempFile, prompt}
+	args := []string{"run", "--format", "json", "--file", tempFile, "--", prompt}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	cmd.Dir = req.WorkspacePath
 	cmd.Env = append(os.Environ(),

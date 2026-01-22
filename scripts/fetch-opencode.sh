@@ -12,10 +12,10 @@ BASE_URL="https://github.com/anomalyco/opencode/releases/download/v${VERSION}"
 DEST_ROOT="${ROOT_DIR}/dist/opencode"
 
 PLATFORMS=(
-  "darwin amd64 x64"
-  "darwin arm64 arm64"
-  "linux amd64 x64"
-  "linux arm64 arm64"
+  "darwin amd64 x64 zip"
+  "darwin arm64 arm64 zip"
+  "linux amd64 x64 tar.gz"
+  "linux arm64 arm64 tar.gz"
 )
 
 mkdir -p "${DEST_ROOT}"
@@ -24,16 +24,21 @@ for entry in "${PLATFORMS[@]}"; do
   os="$(echo "${entry}" | awk '{print $1}')"
   goarch="$(echo "${entry}" | awk '{print $2}')"
   assetarch="$(echo "${entry}" | awk '{print $3}')"
-  asset="opencode-${os}-${assetarch}.zip"
+  ext="$(echo "${entry}" | awk '{print $4}')"
+  asset="opencode-${os}-${assetarch}.${ext}"
   url="${BASE_URL}/${asset}"
   out_dir="${DEST_ROOT}/${os}_${goarch}"
-  tmp_zip="${out_dir}/${asset}"
+  tmp_file="${out_dir}/${asset}"
 
   mkdir -p "${out_dir}"
   echo "Downloading ${url}"
-  curl -fsSL -o "${tmp_zip}" "${url}"
-  unzip -q -o "${tmp_zip}" -d "${out_dir}"
-  rm -f "${tmp_zip}"
+  curl -fsSL -o "${tmp_file}" "${url}"
+  if [[ "${ext}" == "zip" ]]; then
+    unzip -q -o "${tmp_file}" -d "${out_dir}"
+  else
+    tar -xzf "${tmp_file}" -C "${out_dir}"
+  fi
+  rm -f "${tmp_file}"
 
   if [[ -f "${out_dir}/opencode" ]]; then
     chmod +x "${out_dir}/opencode"

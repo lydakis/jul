@@ -127,7 +127,7 @@ func WriteAgentConfig(defaultProvider string) error {
 	content += "bundled = true\n"
 	content += "protocol = \"jul-agent-v1\"\n"
 	content += "mode = \"prompt\"\n"
-	content += "headless = \"opencode run --format json --file $ATTACHMENT $PROMPT\"\n"
+	content += "headless = \"opencode run --format json --file $ATTACHMENT -- $PROMPT\"\n"
 	content += "timeout_seconds = 300\n"
 	content += "\n[providers.codex]\n"
 	content += "command = \"codex\"\n"
