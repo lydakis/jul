@@ -57,7 +57,12 @@ func Sync() (Result, error) {
 	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
 
 	parentSHA, changeID := resolveDraftBase(workspaceRef, syncRef)
-	draftSHA, err := gitutil.CreateDraftCommit(parentSHA, changeID)
+	treeSHA, err := gitutil.DraftTree()
+	if err != nil {
+		return Result{}, err
+	}
+	existingDraft := resolveExistingDraft(syncRef, workspaceRef)
+	draftSHA, err := reuseOrCreateDraft(treeSHA, parentSHA, changeID, existingDraft)
 	if err != nil {
 		return Result{}, err
 	}
@@ -321,6 +326,35 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 		}
 	}
 	return parentSHA, changeID
+}
+
+func resolveExistingDraft(syncRef, workspaceRef string) string {
+	if gitutil.RefExists(syncRef) {
+		if sha, err := gitutil.ResolveRef(syncRef); err == nil {
+			return sha
+		}
+	}
+	if gitutil.RefExists(workspaceRef) {
+		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
+			return sha
+		}
+	}
+	return ""
+}
+
+func reuseOrCreateDraft(treeSHA, parentSHA, changeID, existingDraft string) (string, error) {
+	if existingDraft != "" {
+		msg, err := gitutil.CommitMessage(existingDraft)
+		if err == nil && isDraftMessage(msg) {
+			parent, _ := gitutil.ParentOf(existingDraft)
+			if strings.TrimSpace(parentSHA) == strings.TrimSpace(parent) {
+				if baseTree, err := gitutil.TreeOf(existingDraft); err == nil && baseTree == treeSHA {
+					return existingDraft, nil
+				}
+			}
+		}
+	}
+	return gitutil.CreateDraftCommitFromTree(treeSHA, parentSHA, changeID)
 }
 
 func ensureChangeID(message, changeID string) string {

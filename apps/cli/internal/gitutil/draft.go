@@ -14,21 +14,12 @@ func CreateDraftCommit(parentSHA, changeID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	julDir := filepath.Join(repoRoot, ".jul")
-	if err := os.MkdirAll(julDir, 0o755); err != nil {
-		return "", err
-	}
-	indexPath := filepath.Join(julDir, "draft-index")
-	treeSHA, err := writeTree(repoRoot, indexPath)
+	treeSHA, err := DraftTree()
 	if err != nil {
 		return "", err
 	}
 	message := DraftMessage(changeID)
-	commitSHA, err := commitTree(repoRoot, treeSHA, parentSHA, message)
-	if err != nil {
-		return "", err
-	}
-	return commitSHA, nil
+	return commitTree(repoRoot, treeSHA, parentSHA, message)
 }
 
 func DraftMessage(changeID string) string {
@@ -45,6 +36,19 @@ func CreateDraftCommitFromTree(treeSHA, parentSHA, changeID string) (string, err
 	}
 	message := DraftMessage(changeID)
 	return commitTree(repoRoot, treeSHA, parentSHA, message)
+}
+
+func DraftTree() (string, error) {
+	repoRoot, err := RepoTopLevel()
+	if err != nil {
+		return "", err
+	}
+	julDir := filepath.Join(repoRoot, ".jul")
+	if err := os.MkdirAll(julDir, 0o755); err != nil {
+		return "", err
+	}
+	indexPath := filepath.Join(julDir, "draft-index")
+	return writeTree(repoRoot, indexPath)
 }
 
 func writeTree(repoRoot, indexPath string) (string, error) {
@@ -65,7 +69,7 @@ func writeTree(repoRoot, indexPath string) (string, error) {
 }
 
 func writeTempExcludes(repoRoot string) (string, error) {
-	file, err := os.CreateTemp(repoRoot, ".jul-exclude-")
+	file, err := os.CreateTemp("", "jul-exclude-")
 	if err != nil {
 		return "", err
 	}
