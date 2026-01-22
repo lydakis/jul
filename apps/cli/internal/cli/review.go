@@ -15,26 +15,8 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
-
-type reviewOutput struct {
-	Review      reviewSummary       `json:"review"`
-	Suggestions []client.Suggestion `json:"suggestions,omitempty"`
-	NextActions []nextAction        `json:"next_actions,omitempty"`
-}
-
-type reviewSummary struct {
-	Status    string `json:"status"`
-	BaseSHA   string `json:"base_sha,omitempty"`
-	ChangeID  string `json:"change_id,omitempty"`
-	Created   int    `json:"suggestions_created"`
-	Timestamp string `json:"timestamp"`
-}
-
-type nextAction struct {
-	Action  string `json:"action"`
-	Command string `json:"command"`
-}
 
 func newReviewCommand() Command {
 	return Command{
@@ -53,7 +35,7 @@ func newReviewCommand() Command {
 			}
 
 			if *jsonOut {
-				out := reviewOutput{
+				out := output.ReviewOutput{
 					Review:      summary,
 					Suggestions: created,
 				}
@@ -69,32 +51,26 @@ func newReviewCommand() Command {
 				return 0
 			}
 
-			fmt.Fprintf(os.Stdout, "Running review on %s...\n", summary.BaseSHA)
-			if summary.Created == 0 {
-				fmt.Fprintln(os.Stdout, "  ✓ No suggestions created")
-				return 0
-			}
-			fmt.Fprintf(os.Stdout, "  ⚠ %d suggestion(s) created\n\n", summary.Created)
-			fmt.Fprintln(os.Stdout, "Run 'jul suggestions' to see details.")
+			output.RenderReview(os.Stdout, summary)
 			return 0
 		},
 	}
 }
 
-func runReview() ([]client.Suggestion, reviewSummary, error) {
+func runReview() ([]client.Suggestion, output.ReviewSummary, error) {
 	baseSHA, changeID, err := reviewBase()
 	if err != nil {
-		return nil, reviewSummary{}, err
+		return nil, output.ReviewSummary{}, err
 	}
 
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
-		return nil, reviewSummary{}, err
+		return nil, output.ReviewSummary{}, err
 	}
 
 	worktree, err := agent.EnsureWorktree(repoRoot, baseSHA)
 	if err != nil {
-		return nil, reviewSummary{}, err
+		return nil, output.ReviewSummary{}, err
 	}
 
 	diff := reviewDiff(baseSHA)
@@ -115,29 +91,29 @@ func runReview() ([]client.Suggestion, reviewSummary, error) {
 
 	provider, err := agent.ResolveProvider()
 	if err != nil {
-		return nil, reviewSummary{}, err
+		return nil, output.ReviewSummary{}, err
 	}
 
 	resp, err := agent.RunReview(context.Background(), provider, req)
 	if err != nil {
-		return nil, reviewSummary{}, err
+		return nil, output.ReviewSummary{}, err
 	}
 
 	seeds, err := collectReviewSuggestions(worktree, baseSHA, resp)
 	if err != nil {
-		return nil, reviewSummary{}, err
+		return nil, output.ReviewSummary{}, err
 	}
 
 	created, err := storeReviewSuggestions(baseSHA, changeID, seeds)
 	if err != nil {
-		return nil, reviewSummary{}, err
+		return nil, output.ReviewSummary{}, err
 	}
 
 	if err := writeReviewNote(baseSHA, changeID, resp); err != nil {
-		return nil, reviewSummary{}, err
+		return nil, output.ReviewSummary{}, err
 	}
 
-	summary := reviewSummary{
+	summary := output.ReviewSummary{
 		Status:    strings.TrimSpace(resp.Status),
 		BaseSHA:   baseSHA,
 		ChangeID:  changeID,
@@ -417,21 +393,21 @@ func passesConfidence(min, value float64) bool {
 	return value >= min
 }
 
-func buildSuggestionActions(suggestions []client.Suggestion) []nextAction {
-	actions := make([]nextAction, 0, len(suggestions))
+func buildSuggestionActions(suggestions []client.Suggestion) []output.NextAction {
+	actions := make([]output.NextAction, 0, len(suggestions))
 	for _, sug := range suggestions {
 		if sug.SuggestionID == "" {
 			continue
 		}
-		actions = append(actions, nextAction{
+		actions = append(actions, output.NextAction{
 			Action:  "apply",
 			Command: fmt.Sprintf("jul apply %s --json", sug.SuggestionID),
 		})
-		actions = append(actions, nextAction{
+		actions = append(actions, output.NextAction{
 			Action:  "reject",
 			Command: fmt.Sprintf("jul reject %s --json", sug.SuggestionID),
 		})
-		actions = append(actions, nextAction{
+		actions = append(actions, output.NextAction{
 			Action:  "show",
 			Command: fmt.Sprintf("jul show %s --json", sug.SuggestionID),
 		})

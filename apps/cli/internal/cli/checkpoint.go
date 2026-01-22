@@ -10,6 +10,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/agent"
 	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
@@ -64,7 +65,7 @@ func newCheckpointCommand() Command {
 				return 0
 			}
 
-			fmt.Fprintf(os.Stdout, "checkpoint %s (%s)\n", res.CheckpointSHA, res.ChangeID)
+			output.RenderCheckpoint(os.Stdout, res)
 			if ciExit != 0 {
 				return ciExit
 			}

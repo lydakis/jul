@@ -6,23 +6,17 @@ import (
 	"time"
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
-type reflogEntry struct {
-	CommitSHA string `json:"commit_sha"`
-	Kind      string `json:"kind"`
-	Message   string `json:"message,omitempty"`
-	When      string `json:"when,omitempty"`
-}
-
-func localReflogEntries(limit int) ([]reflogEntry, error) {
+func localReflogEntries(limit int) ([]output.ReflogEntry, error) {
 	user, workspace := workspaceParts()
 	if workspace == "" {
 		workspace = "@"
 	}
 	ref := workspaceRef(user, workspace)
 	if !gitutil.RefExists(ref) {
-		return []reflogEntry{}, nil
+		return []output.ReflogEntry{}, nil
 	}
 
 	args := []string{"reflog", "show", "--date=iso-strict", "--format=%H%x1f%gs%x1f%cd", ref}
@@ -34,7 +28,7 @@ func localReflogEntries(limit int) ([]reflogEntry, error) {
 		return nil, err
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	entries := make([]reflogEntry, 0, len(lines))
+	entries := make([]output.ReflogEntry, 0, len(lines))
 	for _, line := range lines {
 		parts := strings.SplitN(line, "\x1f", 3)
 		if len(parts) < 3 {
@@ -55,7 +49,7 @@ func localReflogEntries(limit int) ([]reflogEntry, error) {
 			msg = reflogMsg
 		}
 		when = normalizeWhen(when)
-		entries = append(entries, reflogEntry{
+		entries = append(entries, output.ReflogEntry{
 			CommitSHA: sha,
 			Kind:      kind,
 			Message:   msg,

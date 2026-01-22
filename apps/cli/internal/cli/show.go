@@ -4,26 +4,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
-	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
-
-type showPayload struct {
-	Type        string              `json:"type"`
-	CommitSHA   string              `json:"commit_sha,omitempty"`
-	ChangeID    string              `json:"change_id,omitempty"`
-	Message     string              `json:"message,omitempty"`
-	Author      string              `json:"author,omitempty"`
-	When        string              `json:"when,omitempty"`
-	Attestation *client.Attestation `json:"attestation,omitempty"`
-	Suggestion  *client.Suggestion  `json:"suggestion,omitempty"`
-	DiffStat    string              `json:"diffstat,omitempty"`
-}
 
 func newShowCommand() Command {
 	return Command{
@@ -57,27 +44,27 @@ func newShowCommand() Command {
 				return 0
 			}
 
-			renderShowPayload(os.Stdout, payload)
+			output.RenderShow(os.Stdout, payload)
 			return 0
 		},
 	}
 }
 
-func buildShowPayload(id string) (showPayload, error) {
+func buildShowPayload(id string) (output.ShowResult, error) {
 	if suggestion, ok, err := metadata.GetSuggestionByID(id); err == nil && ok {
 		diffstat := diffStat(suggestion.BaseCommitSHA, suggestion.SuggestedCommitSHA)
-		return showPayload{
+		return output.ShowResult{
 			Type:       "suggestion",
 			Suggestion: &suggestion,
 			DiffStat:   diffstat,
 		}, nil
 	} else if err != nil {
-		return showPayload{}, err
+		return output.ShowResult{}, err
 	}
 
 	sha, err := gitutil.Git("rev-parse", id)
 	if err != nil {
-		return showPayload{}, fmt.Errorf("failed to resolve %s", id)
+		return output.ShowResult{}, fmt.Errorf("failed to resolve %s", id)
 	}
 	message, _ := gitutil.CommitMessage(sha)
 	author, _ := gitutil.Git("log", "-1", "--format=%an", sha)
@@ -89,7 +76,7 @@ func buildShowPayload(id string) (showPayload, error) {
 
 	att, _ := metadata.GetAttestation(sha)
 	diffstat := diffStatParent(sha)
-	return showPayload{
+	return output.ShowResult{
 		Type:        "checkpoint",
 		CommitSHA:   sha,
 		ChangeID:    changeID,
@@ -99,46 +86,6 @@ func buildShowPayload(id string) (showPayload, error) {
 		Attestation: att,
 		DiffStat:    diffstat,
 	}, nil
-}
-
-func renderShowPayload(w io.Writer, payload showPayload) {
-	if payload.Type == "suggestion" && payload.Suggestion != nil {
-		fmt.Fprintf(w, "Suggestion: %s\n", payload.Suggestion.SuggestionID)
-		fmt.Fprintf(w, "Change-Id: %s\n", payload.Suggestion.ChangeID)
-		fmt.Fprintf(w, "Status: %s\n", payload.Suggestion.Status)
-		fmt.Fprintf(w, "Reason: %s\n", payload.Suggestion.Reason)
-		if payload.Suggestion.Description != "" {
-			fmt.Fprintf(w, "Description: %s\n", payload.Suggestion.Description)
-		}
-		fmt.Fprintf(w, "Base: %s\n", payload.Suggestion.BaseCommitSHA)
-		fmt.Fprintf(w, "Suggested: %s\n", payload.Suggestion.SuggestedCommitSHA)
-		if payload.DiffStat != "" {
-			fmt.Fprintln(w, "\nFiles changed:")
-			fmt.Fprintln(w, payload.DiffStat)
-		}
-		return
-	}
-
-	fmt.Fprintf(w, "Checkpoint: %s\n", payload.CommitSHA)
-	if payload.Message != "" {
-		fmt.Fprintf(w, "Message: %q\n", firstLine(payload.Message))
-	}
-	if payload.Author != "" {
-		fmt.Fprintf(w, "Author: %s\n", payload.Author)
-	}
-	if payload.When != "" {
-		fmt.Fprintf(w, "Date: %s\n", payload.When)
-	}
-	if payload.ChangeID != "" {
-		fmt.Fprintf(w, "Change-Id: %s\n", payload.ChangeID)
-	}
-	if payload.Attestation != nil {
-		fmt.Fprintf(w, "\nAttestation: %s\n", payload.Attestation.Status)
-	}
-	if payload.DiffStat != "" {
-		fmt.Fprintln(w, "\nFiles changed:")
-		fmt.Fprintln(w, payload.DiffStat)
-	}
 }
 
 func diffStat(from, to string) string {

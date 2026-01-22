@@ -10,27 +10,9 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
-
-type applyResult struct {
-	SuggestionID string        `json:"suggestion_id"`
-	Applied      bool          `json:"applied"`
-	FilesChanged []string      `json:"files_changed,omitempty"`
-	Draft        applyDraft    `json:"draft,omitempty"`
-	Checkpoint   string        `json:"checkpoint_sha,omitempty"`
-	NextActions  []applyAction `json:"next_actions,omitempty"`
-}
-
-type applyDraft struct {
-	ChangeID     string `json:"change_id,omitempty"`
-	FilesChanged int    `json:"files_changed"`
-}
-
-type applyAction struct {
-	Action  string `json:"action"`
-	Command string `json:"command"`
-}
 
 func newApplyCommand() Command {
 	return Command{
@@ -99,7 +81,7 @@ func newApplyCommand() Command {
 				return 1
 			}
 
-			res := applyResult{
+			res := output.ApplyResult{
 				SuggestionID: id,
 				Applied:      true,
 				FilesChanged: filesChanged,
@@ -119,7 +101,7 @@ func newApplyCommand() Command {
 				res.Draft = buildApplyDraft(checkpointRes.DraftSHA)
 			}
 			if !*checkpoint {
-				res.NextActions = []applyAction{
+				res.NextActions = []output.ApplyAction{
 					{Action: "checkpoint", Command: "jul checkpoint --json"},
 				}
 			}
@@ -134,10 +116,7 @@ func newApplyCommand() Command {
 				return 0
 			}
 
-			fmt.Fprintln(os.Stdout, "Applied to draft.")
-			if res.Checkpoint != "" {
-				fmt.Fprintf(os.Stdout, "Checkpointed as %s\n", res.Checkpoint)
-			}
+			output.RenderApply(os.Stdout, res)
 			return 0
 		},
 	}
@@ -172,10 +151,10 @@ func applyPatch(patch string, force bool) error {
 	return nil
 }
 
-func buildApplyDraft(draftSHA string) applyDraft {
+func buildApplyDraft(draftSHA string) output.ApplyDraft {
 	sha := strings.TrimSpace(draftSHA)
 	if sha == "" {
-		return applyDraft{}
+		return output.ApplyDraft{}
 	}
 	msg, _ := gitutil.CommitMessage(sha)
 	changeID := gitutil.ExtractChangeID(msg)
@@ -183,7 +162,7 @@ func buildApplyDraft(draftSHA string) applyDraft {
 		changeID = gitutil.FallbackChangeID(sha)
 	}
 	filesChanged := draftFilesChanged(sha)
-	return applyDraft{
+	return output.ApplyDraft{
 		ChangeID:     changeID,
 		FilesChanged: filesChanged,
 	}

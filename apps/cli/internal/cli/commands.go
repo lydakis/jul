@@ -71,28 +71,7 @@ func newSyncCommand() Command {
 				return 0
 			}
 
-			fmt.Fprintln(os.Stdout, "Syncing...")
-			fmt.Fprintf(os.Stdout, "  ✓ Draft committed (%s)\n", res.DraftSHA)
-			if res.RemoteName == "" {
-				fmt.Fprintln(os.Stdout, "  ✓ Workspace ref updated (local)")
-				if res.RemoteProblem != "" {
-					fmt.Fprintf(os.Stdout, "  (%s)\n", res.RemoteProblem)
-				} else {
-					fmt.Fprintln(os.Stdout, "  (No remote configured)")
-				}
-				return 0
-			}
-			fmt.Fprintf(os.Stdout, "  ✓ Sync ref pushed (%s)\n", res.SyncRef)
-			if res.Diverged {
-				fmt.Fprintln(os.Stdout, "  ⚠ Workspace diverged — run 'jul merge' when ready")
-				return 0
-			}
-			if res.AutoMerged {
-				fmt.Fprintln(os.Stdout, "  ✓ Auto-merged (no conflicts)")
-			}
-			if res.WorkspaceUpdated {
-				fmt.Fprintln(os.Stdout, "  ✓ Workspace ref updated")
-			}
+			output.RenderSync(os.Stdout, res)
 			return 0
 		},
 	}
@@ -155,22 +134,7 @@ func newReflogCommand() Command {
 				}
 				return 0
 			}
-
-			if len(entries) == 0 {
-				fmt.Fprintln(os.Stdout, "No reflog entries.")
-				return 0
-			}
-			for _, entry := range entries {
-				if entry.Kind == "draft" {
-					fmt.Fprintf(os.Stdout, "        └─ draft sync (%s)\n", entry.When)
-					continue
-				}
-				msg := entry.Message
-				if msg == "" {
-					msg = "checkpoint"
-				}
-				fmt.Fprintf(os.Stdout, "%s checkpoint \"%s\" (%s)\n", entry.CommitSHA, msg, entry.When)
-			}
+			output.RenderReflog(os.Stdout, entries)
 			return 0
 		},
 	}

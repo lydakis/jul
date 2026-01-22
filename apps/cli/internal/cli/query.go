@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/notes"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 func newQueryCommand() Command {
@@ -103,25 +104,7 @@ func newQueryCommand() Command {
 				return 0
 			}
 
-			if len(results) == 0 {
-				fmt.Fprintln(os.Stdout, "No results.")
-				return 0
-			}
-			for _, res := range results {
-				line := firstLine(res.Message)
-				status := res.TestStatus
-				if status == "" {
-					status = res.AttestationStatus
-				}
-				if status == "" {
-					status = "unknown"
-				}
-				coverage := ""
-				if res.CoverageLinePct != nil {
-					coverage = fmt.Sprintf(", %.1f%% coverage", *res.CoverageLinePct)
-				}
-				fmt.Fprintf(os.Stdout, "%s %s (%s%s)\n", res.CommitSHA, strings.TrimSpace(line), status, coverage)
-			}
+			output.RenderQuery(os.Stdout, results)
 			return 0
 		},
 	}

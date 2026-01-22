@@ -9,13 +9,8 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
-
-type diffPayload struct {
-	From string `json:"from,omitempty"`
-	To   string `json:"to,omitempty"`
-	Diff string `json:"diff,omitempty"`
-}
 
 func newDiffCommand() Command {
 	return Command{
@@ -43,7 +38,7 @@ func newDiffCommand() Command {
 			}
 
 			if *jsonOut {
-				payload := diffPayload{From: from, To: to, Diff: diffOut}
+				payload := output.DiffResult{From: from, To: to, Diff: diffOut}
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
 				if err := enc.Encode(payload); err != nil {
@@ -53,7 +48,7 @@ func newDiffCommand() Command {
 				return 0
 			}
 
-			fmt.Fprintln(os.Stdout, diffOut)
+			output.RenderDiff(os.Stdout, output.DiffResult{From: from, To: to, Diff: diffOut})
 			return 0
 		},
 	}

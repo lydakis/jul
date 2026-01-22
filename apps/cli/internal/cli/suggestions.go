@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 func newSuggestionsCommand() Command {
@@ -76,42 +77,13 @@ func newSuggestionsCommand() Command {
 				}
 				return 0
 			}
-			if len(results) == 0 {
-				fmt.Fprintln(os.Stdout, "No suggestions.")
-				return 0
-			}
-			if currentChangeID != "" {
-				header := "Pending"
-				if statusFilter != "" && statusFilter != "pending" && statusFilter != "stale" {
-					header = strings.ToUpper(statusFilter[:1]) + statusFilter[1:]
-				}
-				if currentCheckpointSHA != "" && currentMessage != "" {
-					fmt.Fprintf(os.Stdout, "%s for %s (%s) %q:\n\n", header, currentChangeID, currentCheckpointSHA, currentMessage)
-				} else {
-					fmt.Fprintf(os.Stdout, "%s for %s:\n\n", header, currentChangeID)
-				}
-			}
-			for _, sug := range results {
-				confidence := formatConfidence(sug.Confidence)
-				stale := currentCheckpointSHA != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != currentCheckpointSHA
-				staleMark := "✓"
-				if stale {
-					staleMark = "⚠ stale"
-				}
-				fmt.Fprintf(os.Stdout, "[%s] %s %s %s\n", sug.SuggestionID, sug.Reason, confidence, staleMark)
-				if stale && currentCheckpointSHA != "" {
-					fmt.Fprintf(os.Stdout, "             Created for %s, current is %s\n", sug.BaseCommitSHA, currentCheckpointSHA)
-				} else if sug.BaseCommitSHA != "" {
-					fmt.Fprintf(os.Stdout, "             base %s\n", sug.BaseCommitSHA)
-				}
-				if sug.Description != "" {
-					fmt.Fprintf(os.Stdout, "             %s\n", sug.Description)
-				}
-			}
-			fmt.Fprintln(os.Stdout, "\nActions:")
-			fmt.Fprintln(os.Stdout, "  jul show <id>      Show diff")
-			fmt.Fprintln(os.Stdout, "  jul apply <id>     Apply to draft")
-			fmt.Fprintln(os.Stdout, "  jul reject <id>    Reject")
+			output.RenderSuggestions(os.Stdout, output.SuggestionsView{
+				ChangeID:          currentChangeID,
+				Status:            statusFilter,
+				CheckpointSHA:     currentCheckpointSHA,
+				CheckpointMessage: currentMessage,
+				Suggestions:       results,
+			})
 			return 0
 		},
 	}
@@ -171,7 +143,7 @@ func newSuggestCommand() Command {
 				return 0
 			}
 
-			fmt.Fprintf(os.Stdout, "suggestion %s created\n", created.SuggestionID)
+			output.RenderSuggestionCreated(os.Stdout, created)
 			return 0
 		},
 	}
@@ -216,19 +188,8 @@ func newSuggestionActionCommand(name, action string) Command {
 				return 0
 			}
 
-			fmt.Fprintf(os.Stdout, "%s %s\n", name, updated.SuggestionID)
+			output.RenderSuggestionUpdated(os.Stdout, name, updated)
 			return 0
 		},
 	}
-}
-
-func formatConfidence(value float64) string {
-	if value <= 0 {
-		return ""
-	}
-	percent := value
-	if value <= 1 {
-		percent = value * 100
-	}
-	return fmt.Sprintf("(%.0f%%)", percent)
 }
