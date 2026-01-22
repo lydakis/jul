@@ -329,7 +329,8 @@ func autoCommitWorktree(worktree, message string) (string, error) {
 	if err != nil || !dirty {
 		return "", err
 	}
-	if err := gitDir(worktree, nil, "add", "-A"); err != nil {
+	// Avoid staging agent context artifacts if they somehow end up in the worktree.
+	if err := gitDir(worktree, nil, "add", "-A", "--", ".", ":(exclude)jul-review-*.txt"); err != nil {
 		return "", err
 	}
 	env := map[string]string{

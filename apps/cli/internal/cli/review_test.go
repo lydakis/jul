@@ -50,6 +50,36 @@ func TestReviewRootCommitDiff(t *testing.T) {
 	}
 }
 
+func TestAutoCommitWorktreeSkipsReviewAttachment(t *testing.T) {
+	repo := t.TempDir()
+	runGitTest(t, repo, "init")
+	runGitTest(t, repo, "config", "user.name", "Test User")
+	runGitTest(t, repo, "config", "user.email", "test@example.com")
+
+	if err := os.WriteFile(filepath.Join(repo, "keep.txt"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("write keep file failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "jul-review-123.txt"), []byte("context\n"), 0o644); err != nil {
+		t.Fatalf("write attachment file failed: %v", err)
+	}
+
+	commit, err := autoCommitWorktree(repo, "agent: review")
+	if err != nil {
+		t.Fatalf("autoCommitWorktree failed: %v", err)
+	}
+	if strings.TrimSpace(commit) == "" {
+		t.Fatalf("expected commit sha")
+	}
+
+	paths := runGitOutputTest(t, repo, "show", "--pretty=format:", "--name-only", "HEAD")
+	if strings.Contains(paths, "jul-review-123.txt") {
+		t.Fatalf("attachment file should not be committed: %s", paths)
+	}
+	if !strings.Contains(paths, "keep.txt") {
+		t.Fatalf("expected keep.txt to be committed: %s", paths)
+	}
+}
+
 func runGitTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
