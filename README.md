@@ -29,4 +29,8 @@ docs/                  # Design docs (specs, notes)
 - Smoke tests: `docs/smoke-tests.md`
 - Coverage: `./scripts/coverage.sh` (writes `coverage.out` in each app)
 
+## Releases
+
+- GoReleaser + Homebrew: `docs/release.md`
+
 Note: Module paths in `go.mod` may need to be updated once the repo remote is set.
