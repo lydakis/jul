@@ -16,7 +16,7 @@ type SuggestionsView struct {
 	Suggestions       []client.Suggestion
 }
 
-func RenderSuggestions(w io.Writer, view SuggestionsView) {
+func RenderSuggestions(w io.Writer, view SuggestionsView, opts Options) {
 	if len(view.Suggestions) == 0 {
 		fmt.Fprintln(w, "No suggestions.")
 		return
@@ -32,12 +32,20 @@ func RenderSuggestions(w io.Writer, view SuggestionsView) {
 			fmt.Fprintf(w, "%s for %s:\n\n", header, view.ChangeID)
 		}
 	}
+	passMark := statusIconColored("pass", opts)
+	if passMark == "" {
+		passMark = statusIcon("pass", opts)
+	}
+	warnMark := statusIconColored("warning", opts)
+	if warnMark == "" {
+		warnMark = statusIcon("warning", opts)
+	}
 	for _, sug := range view.Suggestions {
 		confidence := formatConfidence(sug.Confidence)
 		stale := view.CheckpointSHA != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != view.CheckpointSHA
-		staleMark := "✓"
+		staleMark := strings.TrimSpace(passMark)
 		if stale {
-			staleMark = "⚠ stale"
+			staleMark = strings.TrimSpace(warnMark) + " stale"
 		}
 		fmt.Fprintf(w, "[%s] %s %s %s\n", sug.SuggestionID, sug.Reason, confidence, staleMark)
 		if stale && view.CheckpointSHA != "" {

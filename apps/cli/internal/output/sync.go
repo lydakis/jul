@@ -7,11 +7,19 @@ import (
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
-func RenderSync(w io.Writer, res syncer.Result) {
+func RenderSync(w io.Writer, res syncer.Result, opts Options) {
 	fmt.Fprintln(w, "Syncing...")
-	fmt.Fprintf(w, "  ✓ Draft committed (%s)\n", res.DraftSHA)
+	ok := statusIconColored("pass", opts)
+	if ok == "" {
+		ok = statusIcon("pass", opts)
+	}
+	warn := statusIconColored("warning", opts)
+	if warn == "" {
+		warn = statusIcon("warning", opts)
+	}
+	fmt.Fprintf(w, "  %sDraft committed (%s)\n", ok, res.DraftSHA)
 	if res.RemoteName == "" {
-		fmt.Fprintln(w, "  ✓ Workspace ref updated (local)")
+		fmt.Fprintf(w, "  %sWorkspace ref updated (local)\n", ok)
 		if res.RemoteProblem != "" {
 			fmt.Fprintf(w, "  (%s)\n", res.RemoteProblem)
 		} else {
@@ -19,15 +27,15 @@ func RenderSync(w io.Writer, res syncer.Result) {
 		}
 		return
 	}
-	fmt.Fprintf(w, "  ✓ Sync ref pushed (%s)\n", res.SyncRef)
+	fmt.Fprintf(w, "  %sSync ref pushed (%s)\n", ok, res.SyncRef)
 	if res.Diverged {
-		fmt.Fprintln(w, "  ⚠ Workspace diverged — run 'jul merge' when ready")
+		fmt.Fprintf(w, "  %sWorkspace diverged — run 'jul merge' when ready\n", warn)
 		return
 	}
 	if res.AutoMerged {
-		fmt.Fprintln(w, "  ✓ Auto-merged (no conflicts)")
+		fmt.Fprintf(w, "  %sAuto-merged (no conflicts)\n", ok)
 	}
 	if res.WorkspaceUpdated {
-		fmt.Fprintln(w, "  ✓ Workspace ref updated")
+		fmt.Fprintf(w, "  %sWorkspace ref updated\n", ok)
 	}
 }

@@ -24,7 +24,7 @@ func RenderChanges(w io.Writer, changes []client.Change, opts Options) {
 			fmt.Fprintf(w, "        Latest: %s (rev %d)\n", ch.LatestRevision.CommitSHA, ch.LatestRevision.RevIndex)
 		}
 		if ch.Status != "" {
-			fmt.Fprintf(w, "        Status: %s\n", ch.Status)
+			fmt.Fprintf(w, "        Status: %s\n", statusText(ch.Status, opts))
 		}
 		if ch.Author != "" {
 			fmt.Fprintf(w, "        Author: %s\n", ch.Author)

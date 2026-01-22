@@ -83,7 +83,7 @@ func newSuggestionsCommand() Command {
 				CheckpointSHA:     currentCheckpointSHA,
 				CheckpointMessage: currentMessage,
 				Suggestions:       results,
-			})
+			}, output.DefaultOptions())
 			return 0
 		},
 	}

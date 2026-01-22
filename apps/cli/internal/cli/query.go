@@ -104,7 +104,7 @@ func newQueryCommand() Command {
 				return 0
 			}
 
-			output.RenderQuery(os.Stdout, results)
+			output.RenderQuery(os.Stdout, results, output.DefaultOptions())
 			return 0
 		},
 	}

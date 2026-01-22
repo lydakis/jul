@@ -41,8 +41,8 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 		writeKV(w, "Checkpoint", line, width)
 	}
 	if status.AttestationStatus != "" {
-		icon := statusIcon(status.AttestationStatus, opts)
-		writeKV(w, "CI", strings.ToLower(icon+status.AttestationStatus), width)
+		icon := statusIconColored(status.AttestationStatus, opts)
+		writeKV(w, "CI", icon+statusText(status.AttestationStatus, opts), width)
 	}
 	if status.SuggestionsPending > 0 {
 		writeKV(w, "Suggestions", fmt.Sprintf("%d pending", status.SuggestionsPending), width)

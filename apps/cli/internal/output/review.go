@@ -27,15 +27,24 @@ type NextAction struct {
 }
 
 func RenderReview(w io.Writer, summary ReviewSummary) {
+	opts := DefaultOptions()
 	if summary.BaseSHA != "" {
 		fmt.Fprintf(w, "Running review on %s...\n", summary.BaseSHA)
 	} else {
 		fmt.Fprintln(w, "Running review...")
 	}
 	if summary.Created == 0 {
-		fmt.Fprintln(w, "  ✓ No suggestions created")
+		icon := statusIconColored("pass", opts)
+		if icon == "" {
+			icon = statusIcon("pass", opts)
+		}
+		fmt.Fprintf(w, "  %sNo suggestions created\n", icon)
 		return
 	}
-	fmt.Fprintf(w, "  ⚠ %d suggestion(s) created\n\n", summary.Created)
+	warn := statusIconColored("warning", opts)
+	if warn == "" {
+		warn = statusIcon("warning", opts)
+	}
+	fmt.Fprintf(w, "  %s%d suggestion(s) created\n\n", warn, summary.Created)
 	fmt.Fprintln(w, "Run 'jul suggestions' to see details.")
 }

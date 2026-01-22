@@ -8,7 +8,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/client"
 )
 
-func RenderQuery(w io.Writer, results []client.QueryResult) {
+func RenderQuery(w io.Writer, results []client.QueryResult, opts Options) {
 	if len(results) == 0 {
 		fmt.Fprintln(w, "No results.")
 		return
@@ -26,7 +26,11 @@ func RenderQuery(w io.Writer, results []client.QueryResult) {
 		if res.CoverageLinePct != nil {
 			coverage = fmt.Sprintf(", %.1f%% coverage", *res.CoverageLinePct)
 		}
-		fmt.Fprintf(w, "%s %s (%s%s)\n", res.CommitSHA, strings.TrimSpace(line), status, coverage)
+		statusOut := statusText(status, opts)
+		if statusOut == "" {
+			statusOut = status
+		}
+		fmt.Fprintf(w, "%s %s (%s%s)\n", res.CommitSHA, strings.TrimSpace(line), statusOut, coverage)
 	}
 }
 

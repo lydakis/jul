@@ -71,7 +71,7 @@ func newSyncCommand() Command {
 				return 0
 			}
 
-			output.RenderSync(os.Stdout, res)
+			output.RenderSync(os.Stdout, res, output.DefaultOptions())
 			return 0
 		},
 	}

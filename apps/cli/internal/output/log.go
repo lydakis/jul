@@ -3,7 +3,6 @@ package output
 import (
 	"fmt"
 	"io"
-	"strings"
 )
 
 type LogEntry struct {
@@ -28,8 +27,8 @@ func RenderLog(w io.Writer, entries []LogEntry, opts Options) {
 			fmt.Fprintf(w, "        Author: %s\n", entry.Author)
 		}
 		if entry.AttestationStatus != "" {
-			icon := statusIcon(entry.AttestationStatus, opts)
-			fmt.Fprintf(w, "        %sCI %s\n", icon, strings.ToLower(entry.AttestationStatus))
+			icon := statusIconColored(entry.AttestationStatus, opts)
+			fmt.Fprintf(w, "        %sCI %s\n", icon, statusText(entry.AttestationStatus, opts))
 		}
 		if entry.Suggestions > 0 {
 			fmt.Fprintf(w, "        %d suggestion(s) pending\n", entry.Suggestions)

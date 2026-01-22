@@ -40,15 +40,19 @@ type CIStatusDetails struct {
 	Results         []CICheck `json:"results,omitempty"`
 }
 
-func RenderCIResult(out io.Writer, result ci.Result) {
+func RenderCIResult(out io.Writer, result ci.Result, opts Options) {
 	fmt.Fprintln(out, "Running CI...")
 	for _, cmd := range result.Commands {
-		icon := "✓"
-		if cmd.Status != "pass" {
-			icon = "✗"
+		icon := statusIconColored(cmd.Status, opts)
+		if icon == "" {
+			if strings.ToLower(cmd.Status) == "pass" {
+				icon = statusIcon("pass", opts)
+			} else {
+				icon = statusIcon("fail", opts)
+			}
 		}
-		fmt.Fprintf(out, "  %s %s (%dms)\n", icon, LabelForCommand(cmd.Command), cmd.DurationMs)
-		if cmd.Status != "pass" && cmd.OutputExcerpt != "" {
+		fmt.Fprintf(out, "  %s%s (%dms)\n", icon, LabelForCommand(cmd.Command), cmd.DurationMs)
+		if strings.ToLower(cmd.Status) != "pass" && cmd.OutputExcerpt != "" {
 			for _, line := range strings.Split(cmd.OutputExcerpt, "\n") {
 				if strings.TrimSpace(line) == "" {
 					continue
@@ -64,7 +68,7 @@ func RenderCIResult(out io.Writer, result ci.Result) {
 	fmt.Fprintln(out, "One or more checks failed.")
 }
 
-func RenderCIStatus(out io.Writer, payload CIStatusJSON) {
+func RenderCIStatus(out io.Writer, payload CIStatusJSON, opts Options) {
 	status := payload.CI
 	fmt.Fprintln(out, "CI Status:")
 	if status.CurrentDraftSHA != "" {
@@ -78,14 +82,26 @@ func RenderCIStatus(out io.Writer, payload CIStatusJSON) {
 		fmt.Fprintf(out, "  Last completed: %s %s\n", status.CompletedSHA, marker)
 	}
 	if status.RunningSHA != "" {
-		fmt.Fprintf(out, "  ⚡ CI running for %s...\n", status.RunningSHA)
+		icon := statusIconColored("running", opts)
+		if icon == "" {
+			if opts.Emoji {
+				icon = "⚡ "
+			} else {
+				icon = "* "
+			}
+		}
+		fmt.Fprintf(out, "  %sCI running for %s...\n", icon, status.RunningSHA)
 	}
 	if len(status.Results) > 0 {
 		fmt.Fprintln(out, "")
 		for _, check := range status.Results {
-			icon := "✓"
-			if strings.ToLower(check.Status) != "pass" {
-				icon = "✗"
+			icon := statusIconColored(check.Status, opts)
+			if icon == "" {
+				if strings.ToLower(check.Status) == "pass" {
+					icon = statusIcon("pass", opts)
+				} else {
+					icon = statusIcon("fail", opts)
+				}
 			}
 			if check.DurationMs > 0 {
 				fmt.Fprintf(out, "  %s %s (%dms)\n", icon, check.Name, check.DurationMs)

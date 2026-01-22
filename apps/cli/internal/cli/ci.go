@@ -198,7 +198,7 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		return exitCodeForStatus(result.Status)
 	}
 
-	output.RenderCIResult(out, result)
+	output.RenderCIResult(out, result, output.DefaultOptions())
 	return exitCodeForStatus(result.Status)
 }
 
@@ -278,7 +278,7 @@ func runCIStatus(args []string) int {
 		return 1
 	}
 
-	output.RenderCIStatus(os.Stdout, payload)
+	output.RenderCIStatus(os.Stdout, payload, output.DefaultOptions())
 	if status == "pass" {
 		return 0
 	}
