@@ -5,20 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
-
-type logEntry struct {
-	CommitSHA         string `json:"commit_sha"`
-	ChangeID          string `json:"change_id"`
-	Author            string `json:"author"`
-	Message           string `json:"message"`
-	When              string `json:"when"`
-	AttestationStatus string `json:"attestation_status,omitempty"`
-	Suggestions       int    `json:"suggestions,omitempty"`
-}
 
 func newLogCommand() Command {
 	return Command{
@@ -38,14 +28,14 @@ func newLogCommand() Command {
 				return 1
 			}
 
-			filtered := make([]logEntry, 0, len(entries))
+			filtered := make([]output.LogEntry, 0, len(entries))
 			for _, cp := range entries {
 				if *changeID != "" && cp.ChangeID != *changeID {
 					continue
 				}
 				att, _ := metadata.GetAttestation(cp.SHA)
 				suggestions, _ := metadata.ListSuggestions(cp.ChangeID, "pending", 1000)
-				entry := logEntry{
+				entry := output.LogEntry{
 					CommitSHA:   cp.SHA,
 					ChangeID:    cp.ChangeID,
 					Author:      cp.Author,
@@ -72,23 +62,7 @@ func newLogCommand() Command {
 				return 0
 			}
 
-			if len(filtered) == 0 {
-				fmt.Fprintln(os.Stdout, "No checkpoints.")
-				return 0
-			}
-			for _, entry := range filtered {
-				fmt.Fprintf(os.Stdout, "%s (%s) %q\n", entry.CommitSHA, entry.When, entry.Message)
-				if entry.Author != "" {
-					fmt.Fprintf(os.Stdout, "        Author: %s\n", entry.Author)
-				}
-				if entry.AttestationStatus != "" {
-					fmt.Fprintf(os.Stdout, "        ✓ CI %s\n", strings.ToLower(entry.AttestationStatus))
-				}
-				if entry.Suggestions > 0 {
-					fmt.Fprintf(os.Stdout, "        %d suggestion(s) pending\n", entry.Suggestions)
-				}
-				fmt.Fprintln(os.Stdout, "")
-			}
+			output.RenderLog(os.Stdout, filtered, output.DefaultOptions())
 			return 0
 		},
 	}

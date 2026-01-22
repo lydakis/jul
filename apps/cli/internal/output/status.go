@@ -1,72 +1,51 @@
 package output
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"time"
-
-	"github.com/lydakis/jul/cli/internal/client"
+	"strings"
 )
 
-type StatusPayload struct {
-	WorkspaceID string `json:"workspace_id"`
-	Repo        string `json:"repo"`
-	Branch      string `json:"branch"`
-	CommitSHA   string `json:"commit_sha"`
-	ChangeID    string `json:"change_id"`
-	SyncStatus  string `json:"sync_status"`
-	Attestation string `json:"attestation"`
-	CheckedAt   string `json:"checked_at"`
+type Status struct {
+	WorkspaceID        string            `json:"workspace_id"`
+	Repo               string            `json:"repo"`
+	Branch             string            `json:"branch"`
+	DraftSHA           string            `json:"draft_sha"`
+	ChangeID           string            `json:"change_id"`
+	SyncStatus         string            `json:"sync_status"`
+	LastCheckpoint     *CheckpointStatus `json:"last_checkpoint,omitempty"`
+	AttestationStatus  string            `json:"attestation_status,omitempty"`
+	SuggestionsPending int               `json:"suggestions_pending"`
 }
 
-func RenderStatus(w io.Writer, payload StatusPayload, jsonOut bool) error {
-	if jsonOut {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(payload)
-	}
-
-	fmt.Fprintf(w, "Workspace: %s\n", payload.WorkspaceID)
-	fmt.Fprintf(w, "Repo:      %s\n", payload.Repo)
-	fmt.Fprintf(w, "Branch:    %s\n", payload.Branch)
-	fmt.Fprintf(w, "Commit:    %s\n", payload.CommitSHA)
-	if payload.ChangeID != "" {
-		fmt.Fprintf(w, "Change:    %s\n", payload.ChangeID)
-	}
-	fmt.Fprintf(w, "Sync:      %s\n", payload.SyncStatus)
-	fmt.Fprintf(w, "Check:     %s\n", payload.Attestation)
-	fmt.Fprintf(w, "Checked:   %s\n", payload.CheckedAt)
-	return nil
+type CheckpointStatus struct {
+	CommitSHA string `json:"commit_sha"`
+	Message   string `json:"message"`
+	Author    string `json:"author"`
+	When      string `json:"when"`
+	ChangeID  string `json:"change_id"`
 }
 
-func BuildStatusPayload(wsID, repo, branch, commitSHA, changeID string, ws client.Workspace, att *client.Attestation) StatusPayload {
-	if repo == "" {
-		repo = ws.Repo
-	}
-	if branch == "" {
-		branch = ws.Branch
-	}
-
-	status := StatusPayload{
-		WorkspaceID: wsID,
-		Repo:        repo,
-		Branch:      branch,
-		CommitSHA:   commitSHA,
-		ChangeID:    changeID,
-		SyncStatus:  "not_synced",
-		Attestation: "unknown",
-		CheckedAt:   time.Now().UTC().Format(time.RFC3339),
-	}
-
-	if ws.WorkspaceID != "" {
-		status.SyncStatus = "synced"
-		if status.ChangeID == "" {
-			status.ChangeID = ws.LastChangeID
+func RenderStatus(w io.Writer, status Status, opts Options) {
+	width := 11
+	writeKV(w, "Workspace", status.WorkspaceID, width)
+	writeKV(w, "Repo", status.Repo, width)
+	writeKV(w, "Branch", status.Branch, width)
+	writeKV(w, "Draft", status.DraftSHA, width)
+	writeKV(w, "Change", status.ChangeID, width)
+	if status.LastCheckpoint != nil {
+		line := status.LastCheckpoint.CommitSHA
+		if msg := strings.TrimSpace(status.LastCheckpoint.Message); msg != "" {
+			line = fmt.Sprintf("%s %q", line, msg)
 		}
+		writeKV(w, "Checkpoint", line, width)
 	}
-	if att != nil {
-		status.Attestation = att.Status
+	if status.AttestationStatus != "" {
+		icon := statusIcon(status.AttestationStatus, opts)
+		writeKV(w, "CI", strings.ToLower(icon+status.AttestationStatus), width)
 	}
-	return status
+	if status.SuggestionsPending > 0 {
+		writeKV(w, "Suggestions", fmt.Sprintf("%d pending", status.SuggestionsPending), width)
+	}
+	writeKV(w, "Sync", status.SyncStatus, width)
 }

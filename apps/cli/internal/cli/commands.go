@@ -13,6 +13,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
+	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
@@ -123,7 +124,7 @@ func newStatusCommand() Command {
 				return 0
 			}
 
-			renderLocalStatus(os.Stdout, status)
+			output.RenderStatus(os.Stdout, status, output.DefaultOptions())
 			return 0
 		},
 	}
@@ -300,13 +301,7 @@ func newChangesCommand() Command {
 				}
 				return 0
 			}
-			if len(changes) == 0 {
-				fmt.Fprintln(os.Stdout, "No changes yet.")
-				return 0
-			}
-			for _, ch := range changes {
-				fmt.Fprintf(os.Stdout, "%s %s (rev %d, %s)\n", ch.ChangeID, ch.Title, ch.LatestRevision.RevIndex, ch.Status)
-			}
+			output.RenderChanges(os.Stdout, changes, output.DefaultOptions())
 			return 0
 		},
 	}

@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -11,34 +9,15 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
-type localStatus struct {
-	WorkspaceID        string            `json:"workspace_id"`
-	Repo               string            `json:"repo"`
-	Branch             string            `json:"branch"`
-	DraftSHA           string            `json:"draft_sha"`
-	ChangeID           string            `json:"change_id"`
-	SyncStatus         string            `json:"sync_status"`
-	LastCheckpoint     *checkpointStatus `json:"last_checkpoint,omitempty"`
-	AttestationStatus  string            `json:"attestation_status,omitempty"`
-	SuggestionsPending int               `json:"suggestions_pending"`
-}
-
-type checkpointStatus struct {
-	CommitSHA string `json:"commit_sha"`
-	Message   string `json:"message"`
-	Author    string `json:"author"`
-	When      string `json:"when"`
-	ChangeID  string `json:"change_id"`
-}
-
-func buildLocalStatus() (localStatus, error) {
+func buildLocalStatus() (output.Status, error) {
 	info, err := gitutil.CurrentCommit()
 	if err != nil {
 		info, err = fallbackCommitInfo()
 		if err != nil {
-			return localStatus{}, err
+			return output.Status{}, err
 		}
 	}
 	repoName := config.RepoName()
@@ -70,14 +49,14 @@ func buildLocalStatus() (localStatus, error) {
 		draftSHA = info.SHA
 	}
 
-	var checkpoint *checkpointStatus
+	var checkpoint *output.CheckpointStatus
 	var att *client.Attestation
 	last, err := latestCheckpoint()
 	if err != nil {
-		return localStatus{}, err
+		return output.Status{}, err
 	}
 	if last != nil {
-		checkpoint = &checkpointStatus{
+		checkpoint = &output.CheckpointStatus{
 			CommitSHA: last.SHA,
 			Message:   firstLine(last.Message),
 			Author:    last.Author,
@@ -100,10 +79,10 @@ func buildLocalStatus() (localStatus, error) {
 
 	suggestions, err := metadata.ListSuggestions(changeID, "pending", 1000)
 	if err != nil {
-		return localStatus{}, err
+		return output.Status{}, err
 	}
 
-	status := localStatus{
+	status := output.Status{
 		WorkspaceID:        wsID,
 		Repo:               info.RepoName,
 		Branch:             info.Branch,
@@ -155,24 +134,4 @@ func fallbackCommitInfo() (gitutil.CommitInfo, error) {
 		ChangeID:  changeID,
 		TopLevel:  top,
 	}, nil
-}
-
-func renderLocalStatus(w io.Writer, status localStatus) {
-	fmt.Fprintf(w, "Workspace: %s\n", status.WorkspaceID)
-	if status.DraftSHA != "" {
-		fmt.Fprintf(w, "Draft:     %s\n", status.DraftSHA)
-	}
-	if status.ChangeID != "" {
-		fmt.Fprintf(w, "Change:    %s\n", status.ChangeID)
-	}
-	if status.LastCheckpoint != nil {
-		fmt.Fprintf(w, "Checkpoint: %s \"%s\"\n", status.LastCheckpoint.CommitSHA, status.LastCheckpoint.Message)
-	}
-	if status.AttestationStatus != "" {
-		fmt.Fprintf(w, "CI:        %s\n", strings.ToLower(status.AttestationStatus))
-	}
-	if status.SuggestionsPending > 0 {
-		fmt.Fprintf(w, "Suggestions: %d pending\n", status.SuggestionsPending)
-	}
-	fmt.Fprintf(w, "Sync:      %s\n", status.SyncStatus)
 }
