@@ -122,6 +122,9 @@ func RenderCIStatus(out io.Writer, payload CIStatusJSON, opts Options) {
 
 func LabelForCommand(command string) string {
 	normalized := strings.ToLower(strings.TrimSpace(command))
+	if base, path := splitChdirCommand(normalized, command); base != "" && path != "" {
+		return fmt.Sprintf("%s (%s)", base, path)
+	}
 	switch {
 	case strings.Contains(normalized, "lint"):
 		return "lint"
@@ -137,4 +140,32 @@ func LabelForCommand(command string) string {
 		}
 		return "command"
 	}
+}
+
+func splitChdirCommand(normalized, original string) (string, string) {
+	trimmed := strings.TrimSpace(original)
+	if !strings.HasPrefix(strings.ToLower(trimmed), "cd ") {
+		return "", ""
+	}
+	rest := strings.TrimSpace(trimmed[3:])
+	sep := "&&"
+	idx := strings.Index(rest, sep)
+	if idx < 0 {
+		sep = ";"
+		idx = strings.Index(rest, sep)
+	}
+	if idx < 0 {
+		return "", ""
+	}
+	path := strings.TrimSpace(rest[:idx])
+	path = strings.Trim(path, "\"'")
+	cmd := strings.TrimSpace(rest[idx+len(sep):])
+	if path == "" || cmd == "" {
+		return "", ""
+	}
+	base := LabelForCommand(cmd)
+	if base == "" {
+		return "", ""
+	}
+	return base, path
 }

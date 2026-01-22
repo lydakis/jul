@@ -24,6 +24,7 @@
 - [x] Status shows working tree like git + porcelain option
 - [x] Skip auto draft CI when no `.jul/ci.toml` configured
 - [x] Clarify draft file counts relative to checkpoint base
+- [x] Show module path for CI checks when using go.work
 - [x] Add `jul review` (internal agent, worktree isolation)
 - [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
 - [x] GoReleaser + Homebrew packaging (bundle OpenCode)
