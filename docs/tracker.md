@@ -27,6 +27,7 @@
 - [x] Show module path for CI checks when using go.work
 - [x] Add `jul ci config --show` for resolved commands
 - [x] Hide stale draft CI when no config present
+- [x] Keep stale draft CI visible when commands are inferred
 - [x] Add `jul review` (internal agent, worktree isolation)
 - [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
 - [x] GoReleaser + Homebrew packaging (bundle OpenCode)

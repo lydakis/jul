@@ -144,9 +144,11 @@ func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
 	if completed == nil && running == nil {
 		return nil
 	}
-	configured := false
-	if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
-		configured = true
+	configured := hasCIConfig()
+	if !configured {
+		if root, err := gitutil.RepoTopLevel(); err == nil {
+			configured = hasCIInference(root)
+		}
 	}
 	status := "unknown"
 	resultsCurrent := false
@@ -160,6 +162,12 @@ func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
 	}
 	if running != nil && running.CommitSHA == draftSHA {
 		status = "running"
+	}
+	if completed != nil && hasRealCIResult(completed.Result.Commands) {
+		configured = true
+	}
+	if running != nil && running.CommitSHA == draftSHA {
+		configured = true
 	}
 	if !configured && !resultsCurrent && (running == nil || running.CommitSHA != draftSHA) {
 		return nil
@@ -203,6 +211,49 @@ func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
 		details.RunningSHA = running.CommitSHA
 	}
 	return details
+}
+
+func hasCIConfig() bool {
+	cfg, ok, err := cicmd.LoadConfig()
+	if err != nil || !ok || len(cfg.Commands) == 0 {
+		return false
+	}
+	for _, cmd := range cfg.Commands {
+		if isRealCICommand(cmd.Command) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCIInference(root string) bool {
+	cmds := cicmd.InferDefaultCommands(root)
+	for _, cmd := range cmds {
+		if isRealCICommand(cmd) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRealCIResult(cmds []cicmd.CommandResult) bool {
+	for _, cmd := range cmds {
+		if isRealCICommand(cmd.Command) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRealCICommand(cmd string) bool {
+	trimmed := strings.TrimSpace(cmd)
+	if trimmed == "" {
+		return false
+	}
+	if strings.EqualFold(trimmed, "true") {
+		return false
+	}
+	return true
 }
 
 func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
