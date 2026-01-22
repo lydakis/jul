@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
 )
 
 func newWorkspaceCommand() Command {
@@ -48,13 +50,14 @@ func runWorkspaceList(args []string) int {
 	fs := flag.NewFlagSet("ws list", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	_ = fs.Parse(args)
+	var workspaces []client.Workspace
+	var err error
 	if !config.BaseURLConfigured() {
-		fmt.Fprintln(os.Stdout, "Workspace list requires a Jul server; no server configured.")
-		return 0
+		workspaces, err = localWorkspaces()
+	} else {
+		cli := client.New(config.BaseURL())
+		workspaces, err = cli.ListWorkspaces()
 	}
-
-	cli := client.New(config.BaseURL())
-	workspaces, err := cli.ListWorkspaces()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to list workspaces: %v\n", err)
 		return 1
@@ -150,17 +153,88 @@ func runWorkspaceDelete(args []string) int {
 		return 1
 	}
 	if !config.BaseURLConfigured() {
-		fmt.Fprintln(os.Stdout, "Workspace delete requires a Jul server; no server configured.")
-		return 0
-	}
-
-	cli := client.New(config.BaseURL())
-	if err := cli.DeleteWorkspace(target); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
-		return 1
+		if err := deleteWorkspaceLocal(target); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
+			return 1
+		}
+	} else {
+		cli := client.New(config.BaseURL())
+		if err := cli.DeleteWorkspace(target); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
+			return 1
+		}
 	}
 	fmt.Fprintf(os.Stdout, "Deleted workspace %s\n", target)
 	return 0
+}
+
+func localWorkspaces() ([]client.Workspace, error) {
+	userParts := strings.SplitN(config.WorkspaceID(), "/", 2)
+	if len(userParts) < 2 {
+		return nil, nil
+	}
+	user := userParts[0]
+	refsOut, err := gitutil.Git("show-ref")
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(refsOut), "\n")
+	seen := map[string]client.Workspace{}
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		sha := fields[0]
+		ref := fields[1]
+		prefix := "refs/jul/workspaces/" + user + "/"
+		if !strings.HasPrefix(ref, prefix) {
+			continue
+		}
+		name := strings.TrimPrefix(ref, prefix)
+		if name == "" {
+			continue
+		}
+		wsID := user + "/" + name
+		seen[wsID] = client.Workspace{
+			WorkspaceID:   wsID,
+			Repo:          config.RepoName(),
+			Branch:        name,
+			LastCommitSHA: sha,
+			LastChangeID:  "",
+		}
+	}
+	workspaces := make([]client.Workspace, 0, len(seen))
+	for _, ws := range seen {
+		workspaces = append(workspaces, ws)
+	}
+	return workspaces, nil
+}
+
+func deleteWorkspaceLocal(target string) error {
+	parts := strings.SplitN(target, "/", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("workspace id must be user/name")
+	}
+	user := parts[0]
+	name := parts[1]
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, name)
+	if gitutil.RefExists(workspaceRef) {
+		if _, err := gitutil.Git("update-ref", "-d", workspaceRef); err != nil {
+			return err
+		}
+	}
+	if deviceID, err := config.DeviceID(); err == nil {
+		syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, name)
+		if gitutil.RefExists(syncRef) {
+			_, _ = gitutil.Git("update-ref", "-d", syncRef)
+		}
+	}
+	if root, err := gitutil.RepoTopLevel(); err == nil {
+		basePath := filepath.Join(root, ".jul", "workspaces", name, "base")
+		_ = os.Remove(basePath)
+	}
+	return nil
 }
 
 func runGitConfig(key, value string) error {

@@ -249,16 +249,22 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	}
 
 	wsListOut := runCmd(t, repo, env, julPath, "ws", "list")
-	if !strings.Contains(strings.ToLower(wsListOut), "jul server") {
-		t.Fatalf("expected ws list to mention server requirement, got %s", wsListOut)
+	if strings.TrimSpace(wsListOut) == "" {
+		t.Fatalf("expected ws list output")
 	}
-	promoteOut := runCmd(t, repo, env, julPath, "promote", "--to", "main")
-	if !strings.Contains(strings.ToLower(promoteOut), "jul server") {
-		t.Fatalf("expected promote to mention server requirement, got %s", promoteOut)
+	// Promote locally by anchoring to the checkpoint SHA so HEAD doesn't need to exist.
+	promoteOut := runCmd(t, repo, env, julPath, "promote", "--to", "main", checkpointRes.CheckpointSHA)
+	if strings.TrimSpace(promoteOut) == "" {
+		t.Fatalf("expected promote output")
 	}
 	changesOut := runCmd(t, repo, env, julPath, "changes")
-	if !strings.Contains(strings.ToLower(changesOut), "jul server") {
-		t.Fatalf("expected changes to mention server requirement, got %s", changesOut)
+	if strings.TrimSpace(changesOut) == "" {
+		t.Fatalf("expected changes output")
+	}
+
+	mainRef := runCmd(t, repo, nil, "git", "show-ref", "refs/heads/main")
+	if strings.TrimSpace(mainRef) == "" {
+		t.Fatalf("expected main ref to be created by promote")
 	}
 
 	reflogOut := runCmd(t, repo, env, julPath, "reflog", "--json")

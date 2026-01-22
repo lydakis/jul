@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
@@ -189,31 +191,82 @@ func newPromoteCommand() Command {
 				return 1
 			}
 
+			shaArg := strings.TrimSpace(fs.Arg(0))
+			var targetSHA string
+			if shaArg != "" {
+				resolved, err := gitutil.Git("rev-parse", shaArg)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "failed to resolve commit: %v\n", err)
+					return 1
+				}
+				targetSHA = strings.TrimSpace(resolved)
+			} else if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
+				targetSHA = checkpoint.SHA
+			} else {
+				current, err := gitutil.CurrentCommit()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
+					return 1
+				}
+				targetSHA = current.SHA
+			}
+			if targetSHA == "" {
+				fmt.Fprintln(os.Stderr, "failed to resolve commit to promote")
+				return 1
+			}
 			if !config.BaseURLConfigured() {
-				fmt.Fprintln(os.Stdout, "promote requires a Jul server; no server configured.")
-				return 0
-			}
-
-			info, err := gitutil.CurrentCommit()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
-				return 1
-			}
-			cli := client.New(config.BaseURL())
-			if err := cli.Promote(config.WorkspaceID(), *toBranch, info.SHA, *force); err != nil {
-				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
-				return 1
+				if err := promoteLocal(*toBranch, targetSHA, *force); err != nil {
+					fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
+					return 1
+				}
+			} else {
+				cli := client.New(config.BaseURL())
+				if err := cli.Promote(config.WorkspaceID(), *toBranch, targetSHA, *force); err != nil {
+					fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
+					return 1
+				}
 			}
 
 			if *force {
-				fmt.Fprintln(os.Stdout, "promote requested (force flag noted, server policy pending)")
+				if config.BaseURLConfigured() {
+					fmt.Fprintln(os.Stdout, "promote requested (force)")
+					return 0
+				}
+				fmt.Fprintln(os.Stdout, "promote completed (force)")
 				return 0
 			}
 
-			fmt.Fprintln(os.Stdout, "promote requested")
+			if config.BaseURLConfigured() {
+				fmt.Fprintln(os.Stdout, "promote requested")
+				return 0
+			}
+			fmt.Fprintln(os.Stdout, "promote completed")
 			return 0
 		},
 	}
+}
+
+func promoteLocal(branch, sha string, force bool) error {
+	if strings.TrimSpace(branch) == "" {
+		return fmt.Errorf("branch required")
+	}
+	if strings.TrimSpace(sha) == "" {
+		return fmt.Errorf("commit sha required")
+	}
+	ref := "refs/heads/" + strings.TrimSpace(branch)
+	if !force && gitutil.RefExists(ref) {
+		current, err := gitutil.ResolveRef(ref)
+		if err != nil {
+			return err
+		}
+		current = strings.TrimSpace(current)
+		if current != "" {
+			if _, err := gitutil.Git("merge-base", "--is-ancestor", current, sha); err != nil {
+				return fmt.Errorf("promote would not be fast-forward; use --force to override")
+			}
+		}
+	}
+	return gitutil.UpdateRef(ref, sha)
 }
 
 func newChangesCommand() Command {
@@ -225,12 +278,15 @@ func newChangesCommand() Command {
 			fs.SetOutput(os.Stdout)
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
+
+			var changes []client.Change
+			var err error
 			if !config.BaseURLConfigured() {
-				fmt.Fprintln(os.Stdout, "Changes require a Jul server; no server configured.")
-				return 0
+				changes, err = localChanges()
+			} else {
+				cli := client.New(config.BaseURL())
+				changes, err = cli.ListChanges()
 			}
-			cli := client.New(config.BaseURL())
-			changes, err := cli.ListChanges()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to fetch changes: %v\n", err)
 				return 1
@@ -254,6 +310,65 @@ func newChangesCommand() Command {
 			return 0
 		},
 	}
+}
+
+func localChanges() ([]client.Change, error) {
+	entries, err := listCheckpoints()
+	if err != nil {
+		return nil, err
+	}
+	type changeSummary struct {
+		change    client.Change
+		count     int
+		latestAt  time.Time
+		earliest  time.Time
+		hasLatest bool
+	}
+	byChange := make(map[string]*changeSummary)
+	for _, cp := range entries {
+		changeID := cp.ChangeID
+		if changeID == "" {
+			changeID = gitutil.FallbackChangeID(cp.SHA)
+		}
+		summary, ok := byChange[changeID]
+		if !ok {
+			summary = &changeSummary{
+				change: client.Change{
+					ChangeID: changeID,
+					Author:   cp.Author,
+					Status:   "open",
+				},
+			}
+			byChange[changeID] = summary
+		}
+		summary.count++
+		if !summary.hasLatest || cp.When.After(summary.latestAt) {
+			summary.latestAt = cp.When
+			summary.hasLatest = true
+			summary.change.LatestRevision.CommitSHA = cp.SHA
+			if title := firstLine(cp.Message); title != "" {
+				summary.change.Title = title
+			}
+		}
+		if summary.earliest.IsZero() || cp.When.Before(summary.earliest) {
+			summary.earliest = cp.When
+		}
+	}
+	summaries := make([]*changeSummary, 0, len(byChange))
+	for _, summary := range byChange {
+		summary.change.RevisionCount = summary.count
+		summary.change.LatestRevision.RevIndex = summary.count
+		summary.change.CreatedAt = summary.earliest
+		summaries = append(summaries, summary)
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		return summaries[i].latestAt.After(summaries[j].latestAt)
+	})
+	changes := make([]client.Change, 0, len(summaries))
+	for _, summary := range summaries {
+		changes = append(changes, summary.change)
+	}
+	return changes, nil
 }
 
 func newHooksCommand() Command {

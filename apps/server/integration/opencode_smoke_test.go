@@ -3,7 +3,9 @@ package integration
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -12,13 +14,7 @@ func TestReviewWithOpenCode(t *testing.T) {
 	if os.Getenv("JUL_REAL_AGENT") != "1" {
 		t.Skip("set JUL_REAL_AGENT=1 to run real agent smoke test")
 	}
-	opencodeBin := strings.TrimSpace(os.Getenv("JUL_OPENCODE_BIN"))
-	if opencodeBin == "" {
-		t.Skip("set JUL_OPENCODE_BIN to a real opencode binary")
-	}
-	if _, err := os.Stat(opencodeBin); err != nil {
-		t.Fatalf("opencode binary not found: %v", err)
-	}
+	opencodeBin := ensureBundledOpenCode(t)
 
 	repo := filepath.Join(t.TempDir(), "demo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -75,4 +71,33 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return nil
+}
+
+func ensureBundledOpenCode(t *testing.T) string {
+	t.Helper()
+	root := findRepoRoot(t)
+	bin := bundledOpenCodePath(root)
+	if _, err := os.Stat(bin); err == nil {
+		return bin
+	}
+	script := filepath.Join(root, "scripts", "fetch-opencode.sh")
+	cmd := exec.Command("bash", script)
+	cmd.Dir = root
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("failed to fetch opencode: %v\n%s", err, strings.TrimSpace(string(output)))
+	}
+	if _, err := os.Stat(bin); err != nil {
+		t.Fatalf("opencode binary not found after fetch: %v", err)
+	}
+	return bin
+}
+
+func bundledOpenCodePath(root string) string {
+	bin := "opencode"
+	if runtime.GOOS == "windows" {
+		bin = "opencode.exe"
+	}
+	return filepath.Join(root, "dist", "opencode", runtime.GOOS+"_"+runtime.GOARCH, bin)
 }
