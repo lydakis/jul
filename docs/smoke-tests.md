@@ -8,6 +8,7 @@ Covered flows:
 - **Git remote**: bare repo as `origin`, `jul sync` pushes sync/workspace refs, `jul checkpoint` pushes keep refs.
 - **Jul remote config**: `jul init --server <path> --create-remote` sets a remote and runs the same flow.
 - **Review agent**: `jul review` runs against a stub agent and creates suggestions.
+- **Real OpenCode agent** (opt-in): run `jul review` with a real OpenCode binary and real model config.
 
 ## Run
 
@@ -24,3 +25,7 @@ go test ./...
 - Requires `git` and `go` on PATH.
 - Tests build the CLI binary from `apps/cli`.
 - `jul ci` defaults to the current draft; use `--target <rev>` or `--change <id>` to pin a specific checkpoint.
+- Real agent smoke test is opt-in:
+  - Set `JUL_REAL_AGENT=1`
+  - Set `JUL_OPENCODE_BIN=/path/to/opencode`
+  - Ensure OpenCode is configured (e.g., `~/.config/opencode` or env vars) so it can run headless.
