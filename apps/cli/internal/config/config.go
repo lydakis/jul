@@ -37,6 +37,28 @@ func BaseURL() string {
 	return strings.TrimRight(value, "/")
 }
 
+func BaseURLConfigured() bool {
+	if strings.TrimSpace(os.Getenv(EnvBaseURL)) != "" {
+		return true
+	}
+	if cfg := userConfigValue("server.url"); cfg != "" {
+		return true
+	}
+	if cfg := userConfigValue("client.base_url"); cfg != "" {
+		return true
+	}
+	if cfg := userConfigValue("base_url"); cfg != "" {
+		return true
+	}
+	if cfg := gitConfigValue("jul.baseurl"); cfg != "" {
+		return true
+	}
+	if cfg := gitConfigValue("jul.base_url"); cfg != "" {
+		return true
+	}
+	return false
+}
+
 func WorkspaceID() string {
 	if value := strings.TrimSpace(os.Getenv(EnvWorkspace)); value != "" {
 		if strings.Contains(value, "/") {

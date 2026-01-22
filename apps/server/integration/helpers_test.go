@@ -128,6 +128,17 @@ func runCmd(t *testing.T, dir string, env map[string]string, name string, args .
 	return string(output)
 }
 
+func runCmdAllowFailure(t *testing.T, dir string, env map[string]string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = mergeEnv(env)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), err
+	}
+	return string(output), nil
+}
+
 func mergeEnv(extra map[string]string) []string {
 	if len(extra) == 0 {
 		return os.Environ()

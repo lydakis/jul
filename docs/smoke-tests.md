@@ -3,7 +3,8 @@
 These integration tests build the CLI, create temporary git repos, and exercise Jul’s local-first flows end-to-end. They focus on draft/checkpoint behavior and remote ref updates without requiring server APIs.
 
 Covered flows:
-- **Local-only**: `jul init`, `jul sync`, `jul checkpoint`, `jul ci` with no remotes configured.
+- **Local-only**: `jul init`, `jul sync`, `jul checkpoint`, `jul ci`, `jul status`, `jul log`, `jul show`, `jul diff`,
+  `jul review` (stub agent), `jul suggestions`, `jul apply`, `jul reflog` with no remotes configured.
 - **Git remote**: bare repo as `origin`, `jul sync` pushes sync/workspace refs, `jul checkpoint` pushes keep refs.
 - **Jul remote config**: `jul init --server <path> --create-remote` sets a remote and runs the same flow.
 - **Review agent**: `jul review` runs against a stub agent and creates suggestions.

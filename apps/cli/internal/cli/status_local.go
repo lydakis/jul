@@ -3,7 +3,9 @@ package cli
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
@@ -34,7 +36,10 @@ type checkpointStatus struct {
 func buildLocalStatus() (localStatus, error) {
 	info, err := gitutil.CurrentCommit()
 	if err != nil {
-		return localStatus{}, err
+		info, err = fallbackCommitInfo()
+		if err != nil {
+			return localStatus{}, err
+		}
 	}
 	repoName := config.RepoName()
 	if repoName != "" {
@@ -112,6 +117,44 @@ func buildLocalStatus() (localStatus, error) {
 		status.AttestationStatus = att.Status
 	}
 	return status, nil
+}
+
+func fallbackCommitInfo() (gitutil.CommitInfo, error) {
+	sha, err := currentDraftSHA()
+	if err != nil || strings.TrimSpace(sha) == "" {
+		return gitutil.CommitInfo{}, err
+	}
+	message, _ := gitutil.CommitMessage(sha)
+	author, _ := gitutil.Git("log", "-1", "--format=%an", sha)
+	committedISO, _ := gitutil.Git("log", "-1", "--format=%cI", sha)
+	top, _ := gitutil.RepoTopLevel()
+
+	committed := time.Now().UTC()
+	if committedISO != "" {
+		if parsed, err := time.Parse(time.RFC3339, committedISO); err == nil {
+			committed = parsed
+		}
+	}
+
+	changeID := gitutil.ExtractChangeID(message)
+	if changeID == "" {
+		changeID = gitutil.FallbackChangeID(sha)
+	}
+
+	repoName := ""
+	if top != "" {
+		repoName = filepath.Base(top)
+	}
+
+	return gitutil.CommitInfo{
+		SHA:       strings.TrimSpace(sha),
+		Author:    strings.TrimSpace(author),
+		Message:   message,
+		Committed: committed,
+		RepoName:  repoName,
+		ChangeID:  changeID,
+		TopLevel:  top,
+	}, nil
 }
 
 func renderLocalStatus(w io.Writer, status localStatus) {

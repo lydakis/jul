@@ -20,3 +20,5 @@ node_modules/
 .claude/
 .claw/
 dist/
+.jul/
+apps/cli/jul

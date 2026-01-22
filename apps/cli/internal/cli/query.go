@@ -136,61 +136,35 @@ func firstLine(message string) string {
 }
 
 func localQuery(filters client.QueryFilters) ([]client.QueryResult, error) {
-	args := []string{"log", "--date=iso-strict", "--format=%H%x1f%an%x1f%ad%x1f%B%x1e"}
-	if strings.TrimSpace(filters.Author) != "" {
-		args = append(args, "--author", strings.TrimSpace(filters.Author))
-	}
-	if filters.Since != nil {
-		args = append(args, "--since", filters.Since.Format(time.RFC3339))
-	}
-	if filters.Until != nil {
-		args = append(args, "--until", filters.Until.Format(time.RFC3339))
-	}
-
-	out, err := gitutil.Git(args...)
+	checkpoints, err := listCheckpoints()
 	if err != nil {
 		return nil, err
 	}
-	records := strings.Split(strings.TrimSpace(out), "\x1e")
-	results := make([]client.QueryResult, 0, len(records))
-
+	results := make([]client.QueryResult, 0, len(checkpoints))
 	limit := filters.Limit
 	if limit <= 0 {
 		limit = 20
 	}
 
-	for _, record := range records {
-		record = strings.TrimSpace(record)
-		if record == "" {
-			continue
-		}
-		fields := strings.SplitN(record, "\x1f", 4)
-		if len(fields) < 4 {
-			continue
-		}
-		sha := strings.TrimSpace(fields[0])
-		author := strings.TrimSpace(fields[1])
-		dateRaw := strings.TrimSpace(fields[2])
-		message := strings.TrimSpace(fields[3])
-
-		createdAt, _ := time.Parse(time.RFC3339, dateRaw)
-		changeID := gitutil.ExtractChangeID(message)
+	for _, cp := range checkpoints {
+		message := strings.TrimSpace(cp.Message)
+		changeID := cp.ChangeID
 		if changeID == "" {
-			changeID = gitutil.FallbackChangeID(sha)
+			changeID = gitutil.FallbackChangeID(cp.SHA)
 		}
 
 		var att client.Attestation
-		found, err := notes.ReadJSON(notes.RefAttestationsCheckpoint, sha, &att)
+		found, err := notes.ReadJSON(notes.RefAttestationsCheckpoint, cp.SHA, &att)
 		if err != nil {
 			return nil, err
 		}
 
 		res := client.QueryResult{
-			CommitSHA: sha,
+			CommitSHA: cp.SHA,
 			ChangeID:  changeID,
-			Author:    author,
+			Author:    cp.Author,
 			Message:   message,
-			CreatedAt: createdAt,
+			CreatedAt: cp.When,
 		}
 		if found {
 			res.AttestationStatus = att.Status
@@ -213,6 +187,19 @@ func localQuery(filters client.QueryFilters) ([]client.QueryResult, error) {
 }
 
 func matchQueryFilters(res client.QueryResult, att client.Attestation, hasAtt bool, filters client.QueryFilters) bool {
+	if filters.Author != "" {
+		author := strings.ToLower(res.Author)
+		want := strings.ToLower(strings.TrimSpace(filters.Author))
+		if !strings.Contains(author, want) {
+			return false
+		}
+	}
+	if filters.Since != nil && res.CreatedAt.Before(*filters.Since) {
+		return false
+	}
+	if filters.Until != nil && res.CreatedAt.After(*filters.Until) {
+		return false
+	}
 	if filters.ChangeID != "" && res.ChangeID != filters.ChangeID {
 		return false
 	}

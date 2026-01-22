@@ -56,6 +56,98 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	}
 	runCmd(t, repo, nil, "git", "show-ref", checkpointRes.KeepRef)
 
+	agentPath := filepath.Join(t.TempDir(), "agent.sh")
+	agentScript := `#!/bin/sh
+set -e
+cd "$JUL_AGENT_WORKSPACE"
+git config user.name "Agent"
+git config user.email "agent@example.com"
+echo "agent change" >> README.md
+git add README.md
+git commit -m "agent suggestion" >/dev/null
+sha=$(git rev-parse HEAD)
+printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason":"review","description":"agent change","confidence":0.9}]}\n' "$sha"
+`
+	if err := os.WriteFile(agentPath, []byte(agentScript), 0o755); err != nil {
+		t.Fatalf("write agent script failed: %v", err)
+	}
+	envAgent := map[string]string{
+		"HOME":          home,
+		"JUL_WORKSPACE": "tester/@",
+		"JUL_AGENT_CMD": agentPath,
+	}
+
+	reviewOut := runCmd(t, repo, envAgent, julPath, "review", "--json")
+	var reviewRes struct {
+		Suggestions []struct {
+			SuggestionID string `json:"suggestion_id"`
+		} `json:"suggestions"`
+	}
+	if err := json.NewDecoder(strings.NewReader(reviewOut)).Decode(&reviewRes); err != nil {
+		t.Fatalf("failed to decode review output: %v", err)
+	}
+	if len(reviewRes.Suggestions) == 0 || reviewRes.Suggestions[0].SuggestionID == "" {
+		t.Fatalf("expected suggestions from review")
+	}
+	suggestionID := reviewRes.Suggestions[0].SuggestionID
+
+	suggestionsOut := runCmd(t, repo, envAgent, julPath, "suggestions", "--json")
+	var suggestions []struct {
+		SuggestionID string `json:"suggestion_id"`
+		Status       string `json:"status"`
+	}
+	if err := json.NewDecoder(strings.NewReader(suggestionsOut)).Decode(&suggestions); err != nil {
+		t.Fatalf("failed to decode suggestions output: %v", err)
+	}
+	if len(suggestions) == 0 || suggestions[0].SuggestionID == "" {
+		t.Fatalf("expected suggestion entries")
+	}
+
+	showSugOut := runCmd(t, repo, envAgent, julPath, "show", "--json", suggestionID)
+	var showSugRes struct {
+		Type string `json:"type"`
+	}
+	if err := json.NewDecoder(strings.NewReader(showSugOut)).Decode(&showSugRes); err != nil {
+		t.Fatalf("failed to decode suggestion show output: %v", err)
+	}
+	if showSugRes.Type != "suggestion" {
+		t.Fatalf("expected suggestion show output")
+	}
+
+	diffSugOut := runCmd(t, repo, envAgent, julPath, "diff", "--json", suggestionID)
+	var diffSugRes struct {
+		Diff string `json:"diff"`
+	}
+	if err := json.NewDecoder(strings.NewReader(diffSugOut)).Decode(&diffSugRes); err != nil {
+		t.Fatalf("failed to decode suggestion diff: %v", err)
+	}
+	if strings.TrimSpace(diffSugRes.Diff) == "" {
+		t.Fatalf("expected suggestion diff output")
+	}
+
+	applyOut := runCmd(t, repo, envAgent, julPath, "apply", "--json", suggestionID)
+	var applyRes struct {
+		SuggestionID string `json:"suggestion_id"`
+		Applied      bool   `json:"applied"`
+	}
+	if err := json.NewDecoder(strings.NewReader(applyOut)).Decode(&applyRes); err != nil {
+		t.Fatalf("failed to decode apply output: %v", err)
+	}
+	if !applyRes.Applied || applyRes.SuggestionID == "" {
+		t.Fatalf("expected apply result")
+	}
+
+	appliedOut := runCmd(t, repo, envAgent, julPath, "suggestions", "--status", "applied", "--json")
+	var appliedRes []struct {
+		SuggestionID string `json:"suggestion_id"`
+	}
+	if err := json.NewDecoder(strings.NewReader(appliedOut)).Decode(&appliedRes); err != nil {
+		t.Fatalf("failed to decode applied suggestions: %v", err)
+	}
+	if len(appliedRes) == 0 {
+		t.Fatalf("expected applied suggestions")
+	}
+
 	ciOut := runCmd(t, repo, env, julPath, "ci", "--cmd", "true", "--target", checkpointRes.CheckpointSHA, "--json")
 	var ciRes struct {
 		CI struct {
@@ -71,5 +163,109 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	note := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", checkpointRes.CheckpointSHA)
 	if !strings.Contains(note, "\"status\"") {
 		t.Fatalf("expected attestation note, got %s", note)
+	}
+
+	statusOut := runCmd(t, repo, env, julPath, "status", "--json")
+	var statusRes struct {
+		WorkspaceID string `json:"workspace_id"`
+		DraftSHA    string `json:"draft_sha"`
+		ChangeID    string `json:"change_id"`
+	}
+	if err := json.NewDecoder(strings.NewReader(statusOut)).Decode(&statusRes); err != nil {
+		t.Fatalf("failed to decode status output: %v", err)
+	}
+	if statusRes.DraftSHA == "" || statusRes.ChangeID == "" {
+		t.Fatalf("expected status draft/change, got %+v", statusRes)
+	}
+
+	logOut := runCmd(t, repo, env, julPath, "log", "--json")
+	var logRes []struct {
+		CommitSHA string `json:"commit_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(logOut)).Decode(&logRes); err != nil {
+		t.Fatalf("failed to decode log output: %v", err)
+	}
+	if len(logRes) == 0 || logRes[0].CommitSHA == "" {
+		t.Fatalf("expected log entries")
+	}
+
+	showOut := runCmd(t, repo, env, julPath, "show", "--json", checkpointRes.CheckpointSHA)
+	var showRes struct {
+		Type      string `json:"type"`
+		CommitSHA string `json:"commit_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(showOut)).Decode(&showRes); err != nil {
+		t.Fatalf("failed to decode show output: %v", err)
+	}
+	if showRes.Type != "checkpoint" || showRes.CommitSHA == "" {
+		t.Fatalf("expected checkpoint show output")
+	}
+
+	queryOut := runCmd(t, repo, env, julPath, "query", "--limit", "5", "--json")
+	var queryRes []struct {
+		CommitSHA string `json:"commit_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(queryOut)).Decode(&queryRes); err != nil {
+		t.Fatalf("failed to decode query output: %v", err)
+	}
+	if len(queryRes) == 0 || queryRes[0].CommitSHA == "" {
+		t.Fatalf("expected query results")
+	}
+
+	diffOut := runCmd(t, repo, env, julPath, "diff", "--json")
+	var diffRes struct {
+		Diff string `json:"diff"`
+	}
+	if err := json.NewDecoder(strings.NewReader(diffOut)).Decode(&diffRes); err != nil {
+		t.Fatalf("failed to decode diff output: %v", err)
+	}
+	if strings.TrimSpace(diffRes.Diff) == "" {
+		t.Fatalf("expected diff output")
+	}
+
+	ciStatusOut, _ := runCmdAllowFailure(t, repo, env, julPath, "ci", "status", "--json")
+	var ciStatusRes struct {
+		CI struct {
+			CompletedSHA string `json:"completed_sha"`
+		} `json:"ci"`
+	}
+	if err := json.NewDecoder(strings.NewReader(ciStatusOut)).Decode(&ciStatusRes); err != nil {
+		t.Fatalf("failed to decode ci status output: %v", err)
+	}
+	if ciStatusRes.CI.CompletedSHA == "" {
+		t.Fatalf("expected ci completed sha")
+	}
+
+	runCmd(t, repo, env, julPath, "ci", "watch", "--cmd", "true")
+
+	remoteOut := runCmd(t, repo, env, julPath, "remote", "show")
+	if !strings.Contains(remoteOut, "No git remotes configured") {
+		t.Fatalf("expected remote show to indicate no remotes, got %s", remoteOut)
+	}
+
+	wsOut := runCmd(t, repo, env, julPath, "ws")
+	if strings.TrimSpace(wsOut) == "" {
+		t.Fatalf("expected workspace output")
+	}
+
+	wsListOut := runCmd(t, repo, env, julPath, "ws", "list")
+	if !strings.Contains(strings.ToLower(wsListOut), "jul server") {
+		t.Fatalf("expected ws list to mention server requirement, got %s", wsListOut)
+	}
+	promoteOut := runCmd(t, repo, env, julPath, "promote", "--to", "main")
+	if !strings.Contains(strings.ToLower(promoteOut), "jul server") {
+		t.Fatalf("expected promote to mention server requirement, got %s", promoteOut)
+	}
+	changesOut := runCmd(t, repo, env, julPath, "changes")
+	if !strings.Contains(strings.ToLower(changesOut), "jul server") {
+		t.Fatalf("expected changes to mention server requirement, got %s", changesOut)
+	}
+
+	reflogOut := runCmd(t, repo, env, julPath, "reflog", "--json")
+	var reflogRes []struct {
+		CommitSHA string `json:"commit_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(reflogOut)).Decode(&reflogRes); err != nil {
+		t.Fatalf("failed to decode reflog output: %v", err)
 	}
 }

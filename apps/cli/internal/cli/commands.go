@@ -189,12 +189,16 @@ func newPromoteCommand() Command {
 				return 1
 			}
 
+			if !config.BaseURLConfigured() {
+				fmt.Fprintln(os.Stdout, "promote requires a Jul server; no server configured.")
+				return 0
+			}
+
 			info, err := gitutil.CurrentCommit()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
 				return 1
 			}
-
 			cli := client.New(config.BaseURL())
 			if err := cli.Promote(config.WorkspaceID(), *toBranch, info.SHA, *force); err != nil {
 				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
@@ -221,7 +225,10 @@ func newChangesCommand() Command {
 			fs.SetOutput(os.Stdout)
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
-
+			if !config.BaseURLConfigured() {
+				fmt.Fprintln(os.Stdout, "Changes require a Jul server; no server configured.")
+				return 0
+			}
 			cli := client.New(config.BaseURL())
 			changes, err := cli.ListChanges()
 			if err != nil {

@@ -48,6 +48,10 @@ func runWorkspaceList(args []string) int {
 	fs := flag.NewFlagSet("ws list", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	_ = fs.Parse(args)
+	if !config.BaseURLConfigured() {
+		fmt.Fprintln(os.Stdout, "Workspace list requires a Jul server; no server configured.")
+		return 0
+	}
 
 	cli := client.New(config.BaseURL())
 	workspaces, err := cli.ListWorkspaces()
@@ -144,6 +148,10 @@ func runWorkspaceDelete(args []string) int {
 	if target == current {
 		fmt.Fprintln(os.Stderr, "cannot delete current workspace")
 		return 1
+	}
+	if !config.BaseURLConfigured() {
+		fmt.Fprintln(os.Stdout, "Workspace delete requires a Jul server; no server configured.")
+		return 0
 	}
 
 	cli := client.New(config.BaseURL())
