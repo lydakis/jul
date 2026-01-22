@@ -84,6 +84,8 @@ func buildLocalStatus() (output.Status, error) {
 
 	status := output.Status{
 		WorkspaceID:        wsID,
+		Workspace:          workspace,
+		WorkspaceDefault:   workspace == config.WorkspaceName(),
 		Repo:               info.RepoName,
 		Branch:             info.Branch,
 		DraftSHA:           draftSHA,
@@ -95,7 +97,67 @@ func buildLocalStatus() (output.Status, error) {
 	if att != nil {
 		status.AttestationStatus = att.Status
 	}
+
+	filesChanged := draftFilesChanged(draftSHA)
+	status.Draft = &output.DraftStatus{
+		CommitSHA:    draftSHA,
+		ChangeID:     changeID,
+		FilesChanged: filesChanged,
+	}
+
+	checkpoints, err := listCheckpoints()
+	if err != nil {
+		return output.Status{}, err
+	}
+	summaries := make([]output.CheckpointSummary, 0, len(checkpoints))
+	for _, cp := range checkpoints {
+		ciStatus := ""
+		if att, _ := metadata.GetAttestation(cp.SHA); att != nil {
+			ciStatus = att.Status
+		}
+		suggestions, _ := metadata.ListSuggestions(cp.ChangeID, "pending", 1000)
+		summaries = append(summaries, output.CheckpointSummary{
+			CommitSHA:          cp.SHA,
+			Message:            firstLine(cp.Message),
+			ChangeID:           cp.ChangeID,
+			When:               cp.When.Format("2006-01-02 15:04:05"),
+			CIStatus:           ciStatus,
+			SuggestionsPending: len(suggestions),
+		})
+	}
+	status.Checkpoints = summaries
+	status.PromoteStatus = buildPromoteStatus(checkpoints)
 	return status, nil
+}
+
+func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
+	if len(checkpoints) == 0 {
+		return nil
+	}
+	target := config.PromoteTarget()
+	if target == "" {
+		target = "main"
+	}
+	targetRef := "refs/heads/" + target
+	if !gitutil.RefExists(targetRef) {
+		return &output.PromoteStatus{
+			Target:           target,
+			Eligible:         false,
+			CheckpointsAhead: len(checkpoints),
+		}
+	}
+	ahead := 0
+	for _, cp := range checkpoints {
+		_, err := gitutil.Git("merge-base", "--is-ancestor", cp.SHA, targetRef)
+		if err != nil {
+			ahead++
+		}
+	}
+	return &output.PromoteStatus{
+		Target:           target,
+		Eligible:         true,
+		CheckpointsAhead: ahead,
+	}
 }
 
 func fallbackCommitInfo() (gitutil.CommitInfo, error) {

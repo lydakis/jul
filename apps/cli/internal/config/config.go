@@ -189,6 +189,13 @@ func ReviewRunOnCheckpoint() bool {
 	return configBool("review.run_on_checkpoint", true)
 }
 
+func PromoteTarget() string {
+	if cfg := configValue("promote.default_target"); cfg != "" {
+		return cfg
+	}
+	return "main"
+}
+
 func ReviewMinConfidence() float64 {
 	return configFloat("review.min_confidence", 0)
 }

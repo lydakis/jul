@@ -124,6 +124,20 @@ func statusText(status string, opts Options) string {
 	return colorize(text, statusColor(text))
 }
 
+func shortID(value string, n int) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if n <= 0 {
+		n = 6
+	}
+	if len(trimmed) <= n {
+		return trimmed
+	}
+	return trimmed[:n] + "..."
+}
+
 func statusIconColored(status string, opts Options) string {
 	icon := statusIcon(status, opts)
 	if icon == "" || !opts.Color {
