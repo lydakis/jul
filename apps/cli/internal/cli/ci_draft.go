@@ -49,7 +49,7 @@ func maybeRunDraftCI(res syncer.Result, jsonOut bool) int {
 			return 0
 		}
 		if !jsonOut {
-			fmt.Fprintln(os.Stdout, "  ⚡ CI running in background...")
+			fmt.Fprintln(os.Stdout, "  ⚡ CI running in background... (jul ci status)")
 		}
 		return 0
 	}
@@ -59,6 +59,9 @@ func maybeRunDraftCI(res syncer.Result, jsonOut bool) int {
 	if jsonOut {
 		out = io.Discard
 		errOut = io.Discard
+	}
+	if !jsonOut {
+		fmt.Fprintln(os.Stdout, "  ⚡ CI triggered by sync")
 	}
 	return runCIRunWithStream([]string{}, nil, out, errOut, res.DraftSHA)
 }

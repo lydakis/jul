@@ -36,6 +36,11 @@ func TestDraftCIRunsOnSyncBlocking(t *testing.T) {
 	}
 	runCmd(t, repo, env, julPath, "ci", "config", "--set", "smoke=true")
 
+	syncHuman := runCmd(t, repo, env, julPath, "sync")
+	if !strings.Contains(syncHuman, "CI triggered by sync") {
+		t.Fatalf("expected sync to mention CI trigger, got %s", syncHuman)
+	}
+
 	syncOut := runCmd(t, repo, env, julPath, "sync", "--json")
 	var syncRes struct {
 		DraftSHA string `json:"DraftSHA"`

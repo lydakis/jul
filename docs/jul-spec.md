@@ -125,7 +125,7 @@ Jul uses a three-stage model:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key insight**: Your working tree can still be "dirty" relative to HEAD (normal git). But Jul continuously snapshots your dirty state as a draft commit and syncs it. You can always recover. The draft is your safety net, not your workspace. `jul checkpoint` is when you say "this is a logical unit."
+**Key insight**: Your working tree can still be "dirty" relative to HEAD (normal git). But Jul continuously snapshots your dirty state as a draft commit and syncs it. You can always recover. The draft is your safety net, not your workspace. `jul checkpoint` is when you say "this is a logical unit." Checkpoints are real git commits, but they do **not** move `refs/heads/*`. Only `jul promote` updates branches.
 
 ### 2.3 Workspaces Replace Branches
 
@@ -1408,8 +1408,25 @@ Flags:
 - `-m "message"` — Provide message (skip agent)
 - `--amend` — Amend previous checkpoint instead of creating new one
 - `--prompt "..."` — Store the prompt that led to this checkpoint (optional metadata)
+- `--adopt` — Adopt the current `HEAD` commit as a checkpoint (opt‑in; doesn’t move branches)
 - `--no-review` — Skip review
 - `--json` — JSON output
+
+**Git commit adoption (opt‑in):**
+
+```toml
+[checkpoint]
+adopt_on_commit = false   # default: off
+adopt_run_ci = false
+adopt_run_review = false
+```
+
+When enabled, the post‑commit hook runs `jul checkpoint --adopt`, which:
+1) adds a keep‑ref for `HEAD`,
+2) records metadata, and
+3) starts a new draft parented at `HEAD`.
+
+This preserves continuity without moving `refs/heads/*`.
 
 #### `jul status`
 
