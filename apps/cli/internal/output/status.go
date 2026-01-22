@@ -28,24 +28,29 @@ type CheckpointStatus struct {
 
 func RenderStatus(w io.Writer, status Status, opts Options) {
 	width := 11
-	writeKV(w, "Workspace", status.WorkspaceID, width)
-	writeKV(w, "Repo", status.Repo, width)
-	writeKV(w, "Branch", status.Branch, width)
-	writeKV(w, "Draft", status.DraftSHA, width)
-	writeKV(w, "Change", status.ChangeID, width)
+	prefix := linePrefix(opts)
+	writeKVIcon(w, prefix, "Workspace", status.WorkspaceID, width)
+	writeKVIcon(w, prefix, "Repo", status.Repo, width)
+	writeKVIcon(w, prefix, "Branch", status.Branch, width)
+	writeKVIcon(w, prefix, "Draft", status.DraftSHA, width)
+	writeKVIcon(w, prefix, "Change", status.ChangeID, width)
 	if status.LastCheckpoint != nil {
 		line := status.LastCheckpoint.CommitSHA
 		if msg := strings.TrimSpace(status.LastCheckpoint.Message); msg != "" {
 			line = fmt.Sprintf("%s %q", line, msg)
 		}
-		writeKV(w, "Checkpoint", line, width)
+		writeKVIcon(w, prefix, "Checkpoint", line, width)
 	}
 	if status.AttestationStatus != "" {
 		icon := statusIconColored(status.AttestationStatus, opts)
-		writeKV(w, "CI", icon+statusText(status.AttestationStatus, opts), width)
+		writeKVIcon(w, prefix, "CI", icon+statusText(status.AttestationStatus, opts), width)
 	}
 	if status.SuggestionsPending > 0 {
-		writeKV(w, "Suggestions", fmt.Sprintf("%d pending", status.SuggestionsPending), width)
+		warn := statusIconColored("warning", opts)
+		if warn == "" {
+			warn = statusIcon("warning", opts)
+		}
+		writeKVIcon(w, prefix, "Suggestions", warn+fmt.Sprintf("%d pending", status.SuggestionsPending), width)
 	}
-	writeKV(w, "Sync", status.SyncStatus, width)
+	writeKVIcon(w, prefix, "Sync", statusText(status.SyncStatus, opts), width)
 }

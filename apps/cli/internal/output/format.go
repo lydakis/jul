@@ -50,6 +50,30 @@ func writeKV(w io.Writer, label, value string, width int) {
 	_, _ = io.WriteString(w, "\n")
 }
 
+func writeKVIcon(w io.Writer, icon, label, value string, width int) {
+	if value == "" {
+		return
+	}
+	if icon == "" {
+		writeKV(w, label, value, width)
+		return
+	}
+	if width <= 0 {
+		width = len(label)
+	}
+	padding := width - len(label)
+	if padding < 0 {
+		padding = 0
+	}
+	spaces := strings.Repeat(" ", padding)
+	_, _ = io.WriteString(w, icon)
+	_, _ = io.WriteString(w, label)
+	_, _ = io.WriteString(w, spaces)
+	_, _ = io.WriteString(w, ": ")
+	_, _ = io.WriteString(w, value)
+	_, _ = io.WriteString(w, "\n")
+}
+
 func statusIcon(status string, opts Options) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "pass", "passed", "success":
@@ -80,6 +104,13 @@ func statusIcon(status string, opts Options) string {
 	default:
 		return ""
 	}
+}
+
+func linePrefix(opts Options) string {
+	if opts.Emoji {
+		return "• "
+	}
+	return "- "
 }
 
 func statusText(status string, opts Options) string {
