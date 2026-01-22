@@ -75,6 +75,12 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 		workspace = workspace + " (default)"
 	}
 	fmt.Fprintf(w, "Workspace: %s\n", workspace)
+	if strings.TrimSpace(status.Repo) != "" {
+		fmt.Fprintf(w, "Repo: %s\n", status.Repo)
+	}
+	if strings.TrimSpace(status.Branch) != "" {
+		fmt.Fprintf(w, "Branch: %s\n", status.Branch)
+	}
 
 	draft := status.Draft
 	if draft == nil {
