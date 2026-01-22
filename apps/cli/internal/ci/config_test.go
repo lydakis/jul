@@ -33,8 +33,8 @@ coverage = "pytest --cov"
 		}
 		expected := []string{"ruff check .", "pytest", "pytest --cov"}
 		for i, cmd := range expected {
-			if cfg.Commands[i] != cmd {
-				t.Fatalf("expected command %q at %d, got %q", cmd, i, cfg.Commands[i])
+			if cfg.Commands[i].Command != cmd {
+				t.Fatalf("expected command %q at %d, got %q", cmd, i, cfg.Commands[i].Command)
 			}
 		}
 	})

@@ -31,12 +31,10 @@ func TestDraftCIRunsOnSyncBlocking(t *testing.T) {
 		t.Fatalf("failed to create .jul dir: %v", err)
 	}
 	config := "[ci]\nrun_on_draft = true\ndraft_ci_blocking = true\n"
-	if err := os.WriteFile(filepath.Join(repo, ".jul", "ci.toml"), []byte("[commands]\nsmoke = \"true\"\n"), 0o644); err != nil {
-		t.Fatalf("failed to write ci.toml: %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(repo, ".jul", "config.toml"), []byte(config), 0o644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
 	}
+	runCmd(t, repo, env, julPath, "ci", "config", "--set", "smoke=true")
 
 	syncOut := runCmd(t, repo, env, julPath, "sync", "--json")
 	var syncRes struct {

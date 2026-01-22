@@ -1,23 +1,37 @@
 package ci
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
 )
 
 type Config struct {
-	Commands []string
+	Commands []CommandSpec
+}
+
+type CommandSpec struct {
+	Name    string
+	Command string
+}
+
+func ConfigPath() (string, error) {
+	root, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, ".jul", "ci.toml"), nil
 }
 
 func LoadConfig() (Config, bool, error) {
-	root, err := gitutil.RepoTopLevel()
+	path, err := ConfigPath()
 	if err != nil {
 		return Config{}, false, err
 	}
-	path := filepath.Join(root, ".jul", "ci.toml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -54,12 +68,16 @@ func parseConfig(raw string) Config {
 		if len(parts) != 2 {
 			continue
 		}
+		name := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
 		value = strings.Trim(value, "\"")
-		if value == "" {
+		if value == "" || name == "" {
 			continue
 		}
-		cfg.Commands = append(cfg.Commands, value)
+		cfg.Commands = append(cfg.Commands, CommandSpec{
+			Name:    name,
+			Command: value,
+		})
 	}
 	return cfg
 }
@@ -76,4 +94,31 @@ func stripInlineComment(line string) string {
 		}
 	}
 	return line
+}
+
+func WriteConfig(commands []CommandSpec) error {
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	b.WriteString("[commands]\n")
+	for i, cmd := range commands {
+		name := strings.TrimSpace(cmd.Name)
+		if name == "" {
+			name = fmt.Sprintf("cmd%d", i+1)
+		}
+		value := strings.TrimSpace(cmd.Command)
+		if value == "" {
+			continue
+		}
+		b.WriteString(name)
+		b.WriteString(" = ")
+		b.WriteString(strconv.Quote(value))
+		b.WriteString("\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

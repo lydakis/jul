@@ -78,7 +78,12 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	cmds := []string(commands)
 	if len(cmds) == 0 {
 		if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
-			cmds = cfg.Commands
+			for _, cmd := range cfg.Commands {
+				if strings.TrimSpace(cmd.Command) == "" {
+					continue
+				}
+				cmds = append(cmds, cmd.Command)
+			}
 		} else {
 			cmds = []string{"go test ./..."}
 		}
@@ -289,7 +294,46 @@ func runCIStatus(args []string) int {
 }
 
 func runCIConfig(args []string) int {
-	_ = args
+	fs := flag.NewFlagSet("ci config", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	initCfg := fs.Bool("init", false, "Create a default .jul/ci.toml if missing")
+	var sets stringList
+	fs.Var(&sets, "set", "Add command (name=command)")
+	_ = fs.Parse(args)
+
+	if *initCfg || len(sets) > 0 {
+		if *initCfg && len(sets) == 0 {
+			if path, err := cicmd.ConfigPath(); err == nil {
+				if _, statErr := os.Stat(path); statErr == nil {
+					fmt.Fprintln(os.Stdout, "CI configuration already exists.")
+					return 0
+				}
+			}
+		}
+		commands := []cicmd.CommandSpec{}
+		if len(sets) > 0 {
+			for i, raw := range sets {
+				name, cmd := splitCommandSpec(raw)
+				if name == "" {
+					name = fmt.Sprintf("cmd%d", i+1)
+				}
+				if strings.TrimSpace(cmd) == "" {
+					fmt.Fprintf(os.Stderr, "invalid --set value: %s\n", raw)
+					return 1
+				}
+				commands = append(commands, cicmd.CommandSpec{Name: name, Command: cmd})
+			}
+		} else {
+			commands = []cicmd.CommandSpec{{Name: "test", Command: "go test ./..."}}
+		}
+		if err := cicmd.WriteConfig(commands); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to write ci config: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "CI configuration saved to .jul/ci.toml")
+		return 0
+	}
+
 	fmt.Fprintln(os.Stdout, "CI configuration:")
 	fmt.Fprintf(os.Stdout, "  run_on_checkpoint: %t\n", config.CIRunOnCheckpoint())
 	fmt.Fprintf(os.Stdout, "  run_on_draft: %t\n", config.CIRunOnDraft())
@@ -297,12 +341,27 @@ func runCIConfig(args []string) int {
 	if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
 		fmt.Fprintln(os.Stdout, "  commands (.jul/ci.toml):")
 		for _, cmd := range cfg.Commands {
-			fmt.Fprintf(os.Stdout, "    - %s\n", cmd)
+			if strings.TrimSpace(cmd.Command) == "" {
+				continue
+			}
+			label := cmd.Command
+			if strings.TrimSpace(cmd.Name) != "" {
+				label = fmt.Sprintf("%s: %s", cmd.Name, cmd.Command)
+			}
+			fmt.Fprintf(os.Stdout, "    - %s\n", label)
 		}
 	} else {
 		fmt.Fprintln(os.Stdout, "  default command: go test ./...")
 	}
 	return 0
+}
+
+func splitCommandSpec(raw string) (string, string) {
+	if strings.Contains(raw, "=") {
+		parts := strings.SplitN(raw, "=", 2)
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return "", strings.TrimSpace(raw)
 }
 
 func runCICancel(args []string) int {
