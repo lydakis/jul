@@ -12,7 +12,8 @@
 - [x] Checkpoint semantics: new checkpoint commit + new draft + keep-ref
 - [x] Workspace ref lease + auto-merge flow (`jul sync`, `jul merge`)
 - [x] Local metadata in notes (attestations, suggestions)
-- [ ] Notes for review + prompts (optional, local-only by default)
+- [x] Notes for review (local-only by default)
+- [ ] Notes for prompts (optional, local-only by default)
 - [x] Agent sandbox + review pipeline (internal agent)
 - [ ] `jul ws checkout` + local workspace save/restore integration
 - [x] Query/log/diff/show over local metadata

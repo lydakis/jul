@@ -111,9 +111,15 @@ func runJSONAgentFile(ctx context.Context, provider Provider, req ReviewRequest,
 }
 
 func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewRequest) (ReviewResponse, error) {
-	prompt := buildOpenCodePrompt(req)
+	prompt, attachment := buildOpenCodePrompt(req)
+	tempFile, err := writeReviewAttachment(req.WorkspacePath, attachment)
+	if err != nil {
+		return ReviewResponse{}, err
+	}
+	defer os.Remove(tempFile)
+
 	cmdPath := provider.Command
-	args := []string{"run", "-f", "json"}
+	args := []string{"run", "--format", "json", "--file", tempFile, prompt}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	cmd.Dir = req.WorkspacePath
 	cmd.Env = append(os.Environ(),
@@ -121,7 +127,6 @@ func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewReques
 		"JUL_AGENT_ACTION=review",
 		"JUL_AGENT_WORKSPACE="+req.WorkspacePath,
 	)
-	cmd.Stdin = strings.NewReader(prompt)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return ReviewResponse{}, fmt.Errorf("opencode failed: %w (%s)", err, strings.TrimSpace(string(output)))
@@ -227,39 +232,57 @@ func extractJSON(data []byte) []byte {
 	return trimmed[start:]
 }
 
-func buildOpenCodePrompt(req ReviewRequest) string {
+func buildOpenCodePrompt(req ReviewRequest) (string, string) {
 	var buf strings.Builder
 	buf.WriteString("You are the Jul internal review agent.\n")
-	buf.WriteString("Review the checkpoint diff and propose suggestions.\n")
-	buf.WriteString("Make changes in the workspace, commit them, and respond with JSON ONLY.\n\n")
+	buf.WriteString("Review the attached context file, make any fixes in the workspace, commit them, and respond with JSON ONLY.\n")
 	buf.WriteString("Response schema:\n")
-	buf.WriteString("{\"version\":1,\"status\":\"completed\",\"suggestions\":[{\"commit\":\"<sha>\",\"reason\":\"...\",\"description\":\"...\",\"confidence\":0.0}]}\n\n")
+	buf.WriteString("{\"version\":1,\"status\":\"completed\",\"suggestions\":[{\"commit\":\"<sha>\",\"reason\":\"...\",\"description\":\"...\",\"confidence\":0.0}]}\n")
+	prompt := buf.String()
+
+	var attachment strings.Builder
 	if req.Context.Checkpoint != "" {
-		buf.WriteString("Checkpoint: " + req.Context.Checkpoint + "\n")
+		attachment.WriteString("Checkpoint: " + req.Context.Checkpoint + "\n")
 	}
 	if req.Context.ChangeID != "" {
-		buf.WriteString("Change-Id: " + req.Context.ChangeID + "\n")
+		attachment.WriteString("Change-Id: " + req.Context.ChangeID + "\n")
 	}
 	if req.Context.Diff != "" {
-		buf.WriteString("\nDiff:\n")
-		buf.WriteString(req.Context.Diff)
-		buf.WriteString("\n")
+		attachment.WriteString("\nDiff:\n")
+		attachment.WriteString(req.Context.Diff)
+		attachment.WriteString("\n")
 	}
 	if len(req.Context.Files) > 0 {
-		buf.WriteString("\nFiles:\n")
+		attachment.WriteString("\nFiles:\n")
 		for _, file := range req.Context.Files {
-			buf.WriteString("- " + file.Path + "\n")
+			attachment.WriteString("- " + file.Path + "\n")
 			if strings.TrimSpace(file.Content) != "" {
-				buf.WriteString("```\n")
-				buf.WriteString(file.Content)
-				buf.WriteString("\n```\n")
+				attachment.WriteString("```\n")
+				attachment.WriteString(file.Content)
+				attachment.WriteString("\n```\n")
 			}
 		}
 	}
 	if len(req.Context.CIResults) > 0 {
-		buf.WriteString("\nCI results:\n")
-		buf.Write(req.Context.CIResults)
-		buf.WriteString("\n")
+		attachment.WriteString("\nCI results:\n")
+		attachment.Write(req.Context.CIResults)
+		attachment.WriteString("\n")
 	}
-	return buf.String()
+	return prompt, attachment.String()
+}
+
+func writeReviewAttachment(workdir, content string) (string, error) {
+	dir := workdir
+	if strings.TrimSpace(dir) == "" {
+		dir = "."
+	}
+	file, err := os.CreateTemp(dir, "jul-review-*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	if _, err := file.WriteString(content); err != nil {
+		return "", err
+	}
+	return file.Name(), nil
 }

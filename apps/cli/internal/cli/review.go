@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -122,8 +123,17 @@ func runReview() ([]client.Suggestion, reviewSummary, error) {
 		return nil, reviewSummary{}, err
 	}
 
-	created, err := storeReviewSuggestions(baseSHA, changeID, resp.Suggestions)
+	seeds, err := collectReviewSuggestions(worktree, baseSHA, resp)
 	if err != nil {
+		return nil, reviewSummary{}, err
+	}
+
+	created, err := storeReviewSuggestions(baseSHA, changeID, seeds)
+	if err != nil {
+		return nil, reviewSummary{}, err
+	}
+
+	if err := writeReviewNote(baseSHA, changeID, resp); err != nil {
 		return nil, reviewSummary{}, err
 	}
 
@@ -222,6 +232,24 @@ func reviewCIResults(baseSHA string) json.RawMessage {
 	return json.RawMessage(att.SignalsJSON)
 }
 
+func writeReviewNote(baseSHA, changeID string, resp agent.ReviewResponse) error {
+	payload, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	status := strings.TrimSpace(resp.Status)
+	if status == "" {
+		status = "completed"
+	}
+	_, err = metadata.WriteReview(metadata.ReviewNote{
+		BaseCommitSHA: baseSHA,
+		ChangeID:      changeID,
+		Status:        status,
+		Response:      payload,
+	})
+	return err
+}
+
 func storeReviewSuggestions(baseSHA, changeID string, suggestions []agent.ReviewSuggestion) ([]client.Suggestion, error) {
 	minConfidence := config.ReviewMinConfidence()
 	created := make([]client.Suggestion, 0, len(suggestions))
@@ -247,6 +275,132 @@ func storeReviewSuggestions(baseSHA, changeID string, suggestions []agent.Review
 		created = append(created, createdSuggestion)
 	}
 	return created, nil
+}
+
+func collectReviewSuggestions(worktree, baseSHA string, resp agent.ReviewResponse) ([]agent.ReviewSuggestion, error) {
+	seeds := make(map[string]agent.ReviewSuggestion)
+	for _, sug := range resp.Suggestions {
+		commit := strings.TrimSpace(sug.Commit)
+		if commit == "" {
+			continue
+		}
+		seeds[commit] = sug
+	}
+
+	if len(seeds) == 0 {
+		commit, err := autoCommitWorktree(worktree, "agent: review")
+		if err != nil {
+			return nil, err
+		}
+		if commit != "" {
+			seeds[commit] = agent.ReviewSuggestion{
+				Commit:      commit,
+				Reason:      "agent_review",
+				Description: "agent generated changes",
+				Confidence:  0,
+			}
+		}
+	}
+
+	commits, err := worktreeCommits(worktree, baseSHA)
+	if err != nil {
+		return nil, err
+	}
+	for _, commit := range commits {
+		if _, ok := seeds[commit]; ok {
+			continue
+		}
+		seeds[commit] = agent.ReviewSuggestion{
+			Commit:      commit,
+			Reason:      "agent_review",
+			Description: "agent generated changes",
+		}
+	}
+
+	out := make([]agent.ReviewSuggestion, 0, len(seeds))
+	for _, sug := range seeds {
+		out = append(out, sug)
+	}
+	return out, nil
+}
+
+func autoCommitWorktree(worktree, message string) (string, error) {
+	dirty, err := worktreeDirty(worktree)
+	if err != nil || !dirty {
+		return "", err
+	}
+	if err := gitDir(worktree, nil, "add", "-A"); err != nil {
+		return "", err
+	}
+	env := map[string]string{
+		"GIT_AUTHOR_NAME":     "Jul Agent",
+		"GIT_AUTHOR_EMAIL":    "agent@jul.local",
+		"GIT_COMMITTER_NAME":  "Jul Agent",
+		"GIT_COMMITTER_EMAIL": "agent@jul.local",
+	}
+	if err := gitDir(worktree, env, "commit", "-m", message, "--no-gpg-sign"); err != nil {
+		return "", err
+	}
+	return gitOutputDir(worktree, "rev-parse", "HEAD")
+}
+
+func worktreeDirty(worktree string) (bool, error) {
+	out, err := gitOutputDir(worktree, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+func worktreeCommits(worktree, baseSHA string) ([]string, error) {
+	if strings.TrimSpace(baseSHA) == "" {
+		return nil, nil
+	}
+	out, err := gitOutputDir(worktree, "rev-list", "--reverse", fmt.Sprintf("%s..HEAD", baseSHA))
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	commits := make([]string, 0, len(lines))
+	for _, line := range lines {
+		sha := strings.TrimSpace(line)
+		if sha == "" {
+			continue
+		}
+		commits = append(commits, sha)
+	}
+	return commits, nil
+}
+
+func gitOutputDir(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func gitDir(dir string, env map[string]string, args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), flattenEnv(env)...)
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func flattenEnv(env map[string]string) []string {
+	out := make([]string, 0, len(env))
+	for key, value := range env {
+		out = append(out, fmt.Sprintf("%s=%s", key, value))
+	}
+	return out
 }
 
 func passesConfidence(min, value float64) bool {
