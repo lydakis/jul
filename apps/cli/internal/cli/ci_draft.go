@@ -29,6 +29,11 @@ func maybeRunDraftCI(res syncer.Result, jsonOut bool) int {
 		return 0
 	}
 
+	if completed, err := cicmd.ReadCompleted(); err == nil && completed != nil {
+		if strings.TrimSpace(completed.CommitSHA) == strings.TrimSpace(res.DraftSHA) {
+			return 0
+		}
+	}
 	if running, err := cicmd.ReadRunning(); err == nil && running != nil {
 		if strings.TrimSpace(running.CommitSHA) == strings.TrimSpace(res.DraftSHA) {
 			return 0

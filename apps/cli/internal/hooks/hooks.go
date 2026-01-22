@@ -118,6 +118,7 @@ if [ -n "$JUL_HOOK_CMD" ]; then
 fi
 
 if command -v "$JUL_CMD" >/dev/null 2>&1; then
+  JUL_ADOPT_FROM_HOOK=1 "$JUL_CMD" checkpoint --adopt --if-configured >/dev/null 2>&1 || true
   "$JUL_CMD" sync >/dev/null 2>&1 || true
 else
   if [ -n "$JUL_HOOK_VERBOSE" ]; then

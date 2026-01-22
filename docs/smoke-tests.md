@@ -11,6 +11,7 @@ Covered flows:
 - **CI config show**: `jul ci config --show` prints the resolved command list (file or inferred).
 - **Status + inferred CI**: when commands are inferred (go.mod/go.work), stale draft CI results remain visible in `jul status`.
 - **Draft reuse**: repeated `jul sync` with no working tree changes reuses the same draft SHA and keeps draft files changed at 0.
+- **Adopt git commits**: when `checkpoint.adopt_on_commit = true`, a git commit triggers `jul checkpoint --adopt` via post-commit hook.
 - **Go workspaces**: when a repo has `go.work` (no root `go.mod`), default CI runs `go test ./...` inside each `use` module.
 - **Prompt notes**: `jul checkpoint --prompt` stores metadata in `refs/notes/jul/prompts`.
 - **Git remote**: bare repo as `origin`, `jul sync` pushes sync/workspace refs, `jul checkpoint` pushes keep refs.

@@ -276,6 +276,115 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	return res, nil
 }
 
+func AdoptCheckpoint() (CheckpointResult, error) {
+	syncRes, err := Sync()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	if syncRes.Diverged && strings.Contains(syncRes.RemoteProblem, "baseline") {
+		return CheckpointResult{}, errors.New(syncRes.RemoteProblem)
+	}
+
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
+
+	headSHA, err := gitutil.Git("rev-parse", "HEAD")
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	headSHA = strings.TrimSpace(headSHA)
+	if headSHA == "" {
+		return CheckpointResult{}, fmt.Errorf("HEAD commit required")
+	}
+	headMsg, _ := gitutil.CommitMessage(headSHA)
+	if isDraftMessage(headMsg) {
+		return CheckpointResult{}, fmt.Errorf("cannot adopt draft commit")
+	}
+	changeID := gitutil.ExtractChangeID(headMsg)
+	if changeID == "" {
+		changeID = gitutil.FallbackChangeID(headSHA)
+	}
+
+	keepRef := keepRefPath(user, workspace, changeID, headSHA)
+	if err := gitutil.UpdateRef(keepRef, headSHA); err != nil {
+		return CheckpointResult{}, err
+	}
+
+	newChangeID, err := gitutil.NewChangeID()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	treeSHA, err := gitutil.DraftTree()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, headSHA, newChangeID)
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
+		return CheckpointResult{}, err
+	}
+
+	res := CheckpointResult{
+		CheckpointSHA: headSHA,
+		DraftSHA:      newDraftSHA,
+		ChangeID:      changeID,
+		WorkspaceRef:  workspaceRef,
+		SyncRef:       syncRef,
+		KeepRef:       keepRef,
+		RemoteName:    syncRes.RemoteName,
+		RemotePushed:  syncRes.RemotePushed,
+		Diverged:      syncRes.Diverged,
+		RemoteProblem: syncRes.RemoteProblem,
+	}
+
+	if !syncRes.Diverged {
+		if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+			return res, err
+		}
+		res.WorkspaceUpdated = true
+		if err := writeWorkspaceBase(repoRoot, workspace, newDraftSHA); err != nil {
+			return res, err
+		}
+	}
+
+	if syncRes.RemoteName != "" {
+		workspaceRemote := ""
+		_ = fetchRef(syncRes.RemoteName, workspaceRef)
+		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
+			workspaceRemote = sha
+		}
+		if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+			return res, err
+		}
+		res.RemotePushed = true
+		if res.WorkspaceUpdated {
+			if err := pushWorkspace(syncRes.RemoteName, newDraftSHA, workspaceRef, workspaceRemote); err != nil {
+				return res, err
+			}
+		}
+		if err := pushRef(syncRes.RemoteName, headSHA, keepRef, true); err != nil {
+			return res, err
+		}
+	}
+
+	return res, nil
+}
+
 func workspaceParts() (string, string) {
 	id := strings.TrimSpace(config.WorkspaceID())
 	parts := strings.SplitN(id, "/", 2)
