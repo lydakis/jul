@@ -175,12 +175,20 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		WorkspaceID string `json:"workspace_id"`
 		DraftSHA    string `json:"draft_sha"`
 		ChangeID    string `json:"change_id"`
+		WorkingTree struct {
+			Untracked []struct {
+				Path string `json:"path"`
+			} `json:"untracked"`
+		} `json:"working_tree"`
 	}
 	if err := json.NewDecoder(strings.NewReader(statusOut)).Decode(&statusRes); err != nil {
 		t.Fatalf("failed to decode status output: %v", err)
 	}
 	if statusRes.DraftSHA == "" || statusRes.ChangeID == "" {
 		t.Fatalf("expected status draft/change, got %+v", statusRes)
+	}
+	if len(statusRes.WorkingTree.Untracked) == 0 {
+		t.Fatalf("expected working tree untracked entries")
 	}
 
 	logOut := runCmd(t, repo, env, julPath, "log", "--json")

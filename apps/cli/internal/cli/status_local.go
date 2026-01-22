@@ -106,6 +106,9 @@ func buildLocalStatus() (output.Status, error) {
 		FilesChanged: filesChanged,
 	}
 	status.DraftCI = buildDraftCIStatus(draftSHA)
+	if tree, err := readWorkingTreeStatus(); err == nil {
+		status.WorkingTree = tree
+	}
 
 	checkpoints, err := listCheckpoints()
 	if err != nil {
@@ -223,6 +226,55 @@ func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
 		Eligible:         true,
 		CheckpointsAhead: ahead,
 	}
+}
+
+func readWorkingTreeStatus() (*output.WorkingTreeStatus, error) {
+	out, err := gitutil.Git("status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return &output.WorkingTreeStatus{Clean: true}, nil
+	}
+
+	status := &output.WorkingTreeStatus{}
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		if len(line) < 2 {
+			continue
+		}
+		code := line[:2]
+		path := strings.TrimSpace(line[2:])
+		if path == "" {
+			continue
+		}
+		if code == "??" {
+			status.Untracked = append(status.Untracked, output.WorkingTreeEntry{
+				Path:   path,
+				Status: "?",
+			})
+			continue
+		}
+		staged := code[0]
+		unstaged := code[1]
+		if staged != ' ' {
+			status.Staged = append(status.Staged, output.WorkingTreeEntry{
+				Path:   path,
+				Status: string(staged),
+			})
+		}
+		if unstaged != ' ' && unstaged != '?' {
+			status.Unstaged = append(status.Unstaged, output.WorkingTreeEntry{
+				Path:   path,
+				Status: string(unstaged),
+			})
+		}
+	}
+	if len(status.Staged) == 0 && len(status.Unstaged) == 0 && len(status.Untracked) == 0 {
+		status.Clean = true
+	}
+	return status, nil
 }
 
 func fallbackCommitInfo() (gitutil.CommitInfo, error) {

@@ -76,18 +76,6 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	_ = fs.Parse(args)
 
 	cmds := []string(commands)
-	if len(cmds) == 0 {
-		if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
-			for _, cmd := range cfg.Commands {
-				if strings.TrimSpace(cmd.Command) == "" {
-					continue
-				}
-				cmds = append(cmds, cmd.Command)
-			}
-		} else {
-			cmds = []string{"go test ./..."}
-		}
-	}
 
 	if targetSHA == "" {
 		targetSHA = strings.TrimSpace(*target)
@@ -122,6 +110,20 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	if workdir == "" {
 		fmt.Fprintln(errOut, "failed to determine repo root")
 		return 1
+	}
+
+	if len(cmds) == 0 {
+		if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
+			for _, cmd := range cfg.Commands {
+				if strings.TrimSpace(cmd.Command) == "" {
+					continue
+				}
+				cmds = append(cmds, cmd.Command)
+			}
+		}
+	}
+	if len(cmds) == 0 {
+		cmds = cicmd.InferDefaultCommands(workdir)
 	}
 
 	_ = cicmd.WriteRunning(cicmd.Running{

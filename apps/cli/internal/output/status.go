@@ -20,6 +20,7 @@ type Status struct {
 	SuggestionsPending int                 `json:"suggestions_pending"`
 	Draft              *DraftStatus        `json:"draft,omitempty"`
 	DraftCI            *CIStatusDetails    `json:"draft_ci,omitempty"`
+	WorkingTree        *WorkingTreeStatus  `json:"working_tree,omitempty"`
 	Checkpoints        []CheckpointSummary `json:"checkpoints,omitempty"`
 	PromoteStatus      *PromoteStatus      `json:"promote_status,omitempty"`
 }
@@ -36,6 +37,18 @@ type DraftStatus struct {
 	CommitSHA    string `json:"commit_sha,omitempty"`
 	ChangeID     string `json:"change_id,omitempty"`
 	FilesChanged int    `json:"files_changed"`
+}
+
+type WorkingTreeStatus struct {
+	Clean     bool               `json:"clean"`
+	Staged    []WorkingTreeEntry `json:"staged,omitempty"`
+	Unstaged  []WorkingTreeEntry `json:"unstaged,omitempty"`
+	Untracked []WorkingTreeEntry `json:"untracked,omitempty"`
+}
+
+type WorkingTreeEntry struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
 }
 
 type CheckpointSummary struct {
@@ -84,6 +97,9 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 
 	if status.DraftCI != nil {
 		renderDraftCI(w, status.DraftCI, opts, draft.CommitSHA)
+	}
+	if status.WorkingTree != nil {
+		renderWorkingTree(w, status.WorkingTree, opts)
 	}
 	fmt.Fprintln(w, "")
 
@@ -159,4 +175,61 @@ func renderDraftCI(w io.Writer, ci *CIStatusDetails, opts Options, draftSHA stri
 		}
 		fmt.Fprintln(w, line)
 	}
+}
+
+func renderWorkingTree(w io.Writer, tree *WorkingTreeStatus, opts Options) {
+	if tree == nil {
+		return
+	}
+	if tree.Clean {
+		fmt.Fprintln(w, "Working tree: clean")
+		return
+	}
+	fmt.Fprintln(w, "Working tree:")
+	if len(tree.Staged) > 0 {
+		fmt.Fprintf(w, "  staged (%d):\n", len(tree.Staged))
+		for _, entry := range tree.Staged {
+			fmt.Fprintf(w, "    %s\n", formatWorkingEntry(entry, "staged", opts))
+		}
+	}
+	if len(tree.Unstaged) > 0 {
+		fmt.Fprintf(w, "  unstaged (%d):\n", len(tree.Unstaged))
+		for _, entry := range tree.Unstaged {
+			fmt.Fprintf(w, "    %s\n", formatWorkingEntry(entry, "unstaged", opts))
+		}
+	}
+	if len(tree.Untracked) > 0 {
+		fmt.Fprintf(w, "  untracked (%d):\n", len(tree.Untracked))
+		for _, entry := range tree.Untracked {
+			fmt.Fprintf(w, "    %s\n", formatWorkingEntry(entry, "untracked", opts))
+		}
+	}
+}
+
+func formatWorkingEntry(entry WorkingTreeEntry, bucket string, opts Options) string {
+	status := strings.TrimSpace(entry.Status)
+	if status == "" {
+		status = "?"
+	}
+	icon := "•"
+	color := ansiGray
+	switch bucket {
+	case "staged":
+		icon = "+"
+		color = ansiGreen
+	case "unstaged":
+		icon = "~"
+		color = ansiYellow
+	case "untracked":
+		icon = "?"
+		color = ansiCyan
+	}
+	if opts.Emoji {
+		icon = "●"
+	}
+	if opts.Color {
+		icon = colorize(icon, color)
+		status = colorize(status, color)
+	}
+	return fmt.Sprintf("%s %s %s", icon, status, entry.Path)
 }
