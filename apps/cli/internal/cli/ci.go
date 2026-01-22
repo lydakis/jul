@@ -299,9 +299,14 @@ func runCIConfig(args []string) int {
 	fs := flag.NewFlagSet("ci config", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	initCfg := fs.Bool("init", false, "Create a default .jul/ci.toml if missing")
+	showCfg := fs.Bool("show", false, "Show resolved commands")
 	var sets stringList
 	fs.Var(&sets, "set", "Add command (name=command)")
 	_ = fs.Parse(args)
+
+	if *showCfg {
+		return showCIConfigResolved()
+	}
 
 	if *initCfg || len(sets) > 0 {
 		if *initCfg && len(sets) == 0 {
@@ -364,6 +369,34 @@ func splitCommandSpec(raw string) (string, string) {
 		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 	}
 	return "", strings.TrimSpace(raw)
+}
+
+func showCIConfigResolved() int {
+	root, err := gitutil.RepoTopLevel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read repo root: %v\n", err)
+		return 1
+	}
+	var cmds []string
+	source := "inferred"
+	if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
+		for _, cmd := range cfg.Commands {
+			if strings.TrimSpace(cmd.Command) == "" {
+				continue
+			}
+			cmds = append(cmds, cmd.Command)
+		}
+		source = ".jul/ci.toml"
+	} else {
+		cmds = cicmd.InferDefaultCommands(root)
+	}
+	fmt.Fprintln(os.Stdout, "CI configuration (resolved):")
+	fmt.Fprintf(os.Stdout, "  source: %s\n", source)
+	fmt.Fprintln(os.Stdout, "  commands:")
+	for _, cmd := range cmds {
+		fmt.Fprintf(os.Stdout, "    - %s\n", cmd)
+	}
+	return 0
 }
 
 func runCICancel(args []string) int {

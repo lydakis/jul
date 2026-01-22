@@ -144,6 +144,10 @@ func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
 	if completed == nil && running == nil {
 		return nil
 	}
+	configured := false
+	if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
+		configured = true
+	}
 	status := "unknown"
 	resultsCurrent := false
 	if completed != nil {
@@ -156,6 +160,9 @@ func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
 	}
 	if running != nil && running.CommitSHA == draftSHA {
 		status = "running"
+	}
+	if !configured && !resultsCurrent && (running == nil || running.CommitSHA != draftSHA) {
+		return nil
 	}
 	details := &output.CIStatusDetails{
 		Status:          status,
