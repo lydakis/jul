@@ -97,7 +97,7 @@ func newCheckpointCommand() Command {
 					out = io.Discard
 					errOut = io.Discard
 				}
-				ciExit = runCIRunWithStream([]string{}, nil, out, errOut, res.CheckpointSHA)
+				ciExit = runCIRunWithStream([]string{}, nil, out, errOut, res.CheckpointSHA, "checkpoint")
 			}
 
 			if config.ReviewEnabled() && config.ReviewRunOnCheckpoint() && !skipReview {

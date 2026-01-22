@@ -9,6 +9,7 @@ Covered flows:
 - **CI config**: if `.jul/ci.toml` exists, CI uses its `[commands]` list instead of the default `go test ./...`.
 - **CI config command**: `jul ci config --set name=cmd` writes `.jul/ci.toml` and is used in smoke tests.
 - **CI config show**: `jul ci config --show` prints the resolved command list (file or inferred).
+- **CI list**: `jul ci list` shows recent CI runs.
 - **Status + inferred CI**: when commands are inferred (go.mod/go.work), stale draft CI results remain visible in `jul status`.
 - **Draft reuse**: repeated `jul sync` with no working tree changes reuses the same draft SHA and keeps draft files changed at 0.
 - **Adopt git commits**: when `checkpoint.adopt_on_commit = true`, a git commit triggers `jul checkpoint --adopt` via post-commit hook.

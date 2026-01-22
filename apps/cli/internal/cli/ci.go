@@ -39,6 +39,8 @@ func newCICommand() Command {
 				return runCIRun(args[1:])
 			case "status":
 				return runCIStatus(args[1:])
+			case "list":
+				return runCIList(args[1:])
 			case "watch":
 				return runCIWatch(args[1:])
 			case "config":
@@ -54,14 +56,14 @@ func newCICommand() Command {
 }
 
 func runCIRun(args []string) int {
-	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr, "")
+	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr, "", "manual")
 }
 
 func runCIWatch(args []string) int {
-	return runCIRunWithStream(args, os.Stdout, os.Stdout, os.Stderr, "")
+	return runCIRunWithStream(args, os.Stdout, os.Stdout, os.Stderr, "", "manual")
 }
 
-func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer, targetSHA string) int {
+func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer, targetSHA string, mode string) int {
 	fs := flag.NewFlagSet("ci run", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var commands stringList
@@ -73,6 +75,7 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	coverageLine := fs.Float64("coverage-line", -1, "Coverage line percentage (optional)")
 	coverageBranch := fs.Float64("coverage-branch", -1, "Coverage branch percentage (optional)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
+	watch := fs.Bool("watch", false, "Stream output")
 	_ = fs.Parse(args)
 
 	cmds := []string(commands)
@@ -126,14 +129,37 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		cmds = cicmd.InferDefaultCommands(workdir)
 	}
 
-	_ = cicmd.WriteRunning(cicmd.Running{
+	if *watch {
+		stream = out
+	}
+	mode = resolveCIMode(mode)
+	runID := strings.TrimSpace(os.Getenv("JUL_CI_RUN_ID"))
+	if runID == "" {
+		runID = cicmd.NewRunID()
+	}
+	logPath := strings.TrimSpace(os.Getenv("JUL_CI_LOG_PATH"))
+	record := cicmd.RunRecord{
+		ID:        runID,
 		CommitSHA: info.SHA,
+		Status:    "running",
+		Mode:      mode,
+		Commands:  cmds,
 		StartedAt: time.Now().UTC(),
+		LogPath:   logPath,
 		PID:       os.Getpid(),
-	})
-	defer func() {
-		_ = cicmd.ClearRunning()
-	}()
+	}
+	_ = cicmd.WriteRun(record)
+
+	if mode == "draft" {
+		_ = cicmd.WriteRunning(cicmd.Running{
+			CommitSHA: info.SHA,
+			StartedAt: time.Now().UTC(),
+			PID:       os.Getpid(),
+		})
+		defer func() {
+			_ = cicmd.ClearRunning()
+		}()
+	}
 
 	var result cicmd.Result
 	if stream != nil && !*jsonOut {
@@ -143,6 +169,9 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		result, err = cicmd.RunCommands(cmds, workdir)
 	}
 	if err != nil {
+		record.Status = "error"
+		record.FinishedAt = time.Now().UTC()
+		_ = cicmd.WriteRun(record)
 		fmt.Fprintf(errOut, "ci run failed: %v\n", err)
 		return 1
 	}
@@ -199,6 +228,10 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		CoverageBranchPct: coverageBranchPtr,
 	})
 
+	record.Status = result.Status
+	record.FinishedAt = time.Now().UTC()
+	_ = cicmd.WriteRun(record)
+
 	if *jsonOut {
 		payload := buildCIJSON(result, created)
 		if err := renderCIJSON(payload); err != nil {
@@ -213,8 +246,9 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 }
 
 func printCIUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ci [run] [--cmd <command>] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--target <rev>] [--change <id>] [--json]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ci [run] [--cmd <command>] [--watch] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--target <rev>] [--change <id>] [--json]")
 	fmt.Fprintln(os.Stdout, "       jul ci status [--json]")
+	fmt.Fprintln(os.Stdout, "       jul ci list [--limit N] [--json]")
 	fmt.Fprintln(os.Stdout, "       jul ci watch [--cmd <command>] [--target <rev>] [--change <id>]")
 	fmt.Fprintln(os.Stdout, "       jul ci config")
 	fmt.Fprintln(os.Stdout, "       jul ci cancel")
@@ -452,6 +486,42 @@ func buildCIJSON(result cicmd.Result, att client.Attestation) output.CIJSON {
 		details.Results = checks
 	}
 	return output.CIJSON{CI: details}
+}
+
+func resolveCIMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		mode = strings.TrimSpace(os.Getenv("JUL_CI_MODE"))
+	}
+	if mode == "" {
+		mode = "manual"
+	}
+	return mode
+}
+
+func runCIList(args []string) int {
+	fs := flag.NewFlagSet("ci list", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	limit := fs.Int("limit", 10, "Max runs to show")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	_ = fs.Parse(args)
+
+	runs, err := cicmd.ListRuns(*limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to list ci runs: %v\n", err)
+		return 1
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(output.CIRunsJSON{Runs: runs}); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	output.RenderCIRuns(os.Stdout, runs, output.DefaultOptions())
+	return 0
 }
 
 func renderCIJSON(payload output.CIJSON) error {

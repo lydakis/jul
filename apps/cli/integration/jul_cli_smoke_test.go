@@ -165,6 +165,20 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	if ciRes.CI.Status == "" {
 		t.Fatalf("expected ci status")
 	}
+	listOut := runCmd(t, repo, env, julPath, "ci", "list", "--json")
+	var listRes struct {
+		Runs []struct {
+			ID        string `json:"id"`
+			CommitSHA string `json:"commit_sha"`
+			Status    string `json:"status"`
+		} `json:"runs"`
+	}
+	if err := json.NewDecoder(strings.NewReader(listOut)).Decode(&listRes); err != nil {
+		t.Fatalf("failed to decode ci list output: %v", err)
+	}
+	if len(listRes.Runs) == 0 || listRes.Runs[0].ID == "" {
+		t.Fatalf("expected ci runs list")
+	}
 	note := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", checkpointRes.CheckpointSHA)
 	if !strings.Contains(note, "\"status\"") {
 		t.Fatalf("expected attestation note, got %s", note)

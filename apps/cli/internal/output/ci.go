@@ -40,6 +40,10 @@ type CIStatusDetails struct {
 	Results         []CICheck `json:"results,omitempty"`
 }
 
+type CIRunsJSON struct {
+	Runs []ci.RunRecord `json:"runs"`
+}
+
 func RenderCIResult(out io.Writer, result ci.Result, opts Options) {
 	fmt.Fprintln(out, "Running CI...")
 	for _, cmd := range result.Commands {
@@ -117,6 +121,31 @@ func RenderCIStatus(out io.Writer, payload CIStatusJSON, opts Options) {
 				}
 			}
 		}
+	}
+}
+
+func RenderCIRuns(out io.Writer, runs []ci.RunRecord, opts Options) {
+	if len(runs) == 0 {
+		fmt.Fprintln(out, "No CI runs recorded.")
+		return
+	}
+	fmt.Fprintln(out, "CI Runs:")
+	for _, run := range runs {
+		icon := statusIconColored(run.Status, opts)
+		if icon == "" {
+			icon = statusIcon(run.Status, opts)
+		}
+		start := ""
+		if !run.StartedAt.IsZero() {
+			start = run.StartedAt.Format("2006-01-02 15:04:05")
+		}
+		mode := run.Mode
+		if mode == "" {
+			mode = "manual"
+		}
+		sha := shortID(run.CommitSHA, 6)
+		line := fmt.Sprintf("  %s%s %s %s %s", icon, start, mode, sha, run.ID)
+		fmt.Fprintln(out, strings.TrimSpace(line))
 	}
 }
 

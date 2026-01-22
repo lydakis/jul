@@ -33,6 +33,7 @@
 - [x] Document checkpoint vs branch commits + adopt config
 - [x] Sync output mentions background CI status
 - [x] Document CI run types + visibility
+- [x] Normalize CI commands (watch flag + list)
 - [x] Add `jul review` (internal agent, worktree isolation)
 - [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
 - [x] GoReleaser + Homebrew packaging (bundle OpenCode)

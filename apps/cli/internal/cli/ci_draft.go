@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	cicmd "github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/config"
@@ -63,7 +62,7 @@ func maybeRunDraftCI(res syncer.Result, jsonOut bool) int {
 	if !jsonOut {
 		fmt.Fprintln(os.Stdout, "  ⚡ CI triggered by sync")
 	}
-	return runCIRunWithStream([]string{}, nil, out, errOut, res.DraftSHA)
+	return runCIRunWithStream([]string{}, nil, out, errOut, res.DraftSHA, "draft")
 }
 
 func cancelRunningCI(running *cicmd.Running) error {
@@ -86,13 +85,19 @@ func startBackgroundCI(targetSHA string) error {
 	if err != nil {
 		return err
 	}
-	logFile, err := openCILogFile(root)
+	runID := cicmd.NewRunID()
+	logFile, logPath, err := openCILogFile(root, runID)
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command(exe, "ci", "run", "--target", targetSHA)
 	cmd.Dir = root
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(),
+		"JUL_CI_MODE=draft",
+		"JUL_CI_RUN_ID="+runID,
+		"JUL_CI_LOG_PATH="+logPath,
+		"JUL_CI_BACKGROUND=1",
+	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
@@ -103,11 +108,16 @@ func startBackgroundCI(targetSHA string) error {
 	return nil
 }
 
-func openCILogFile(root string) (*os.File, error) {
+func openCILogFile(root string, runID string) (*os.File, string, error) {
 	dir := filepath.Join(root, ".jul", "ci", "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	name := fmt.Sprintf("%s.log", time.Now().UTC().Format("20060102-150405"))
-	return os.Create(filepath.Join(dir, name))
+	name := fmt.Sprintf("%s.log", runID)
+	path := filepath.Join(dir, name)
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return file, path, nil
 }

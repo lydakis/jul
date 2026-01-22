@@ -1813,9 +1813,11 @@ Running CI...
 
 ```bash
 $ jul ci              # Run CI now, wait for results
+$ jul ci --watch      # Run CI now, stream output
 $ jul ci --target <rev>   # Attach results to a specific revision
 $ jul ci --change Iab4f3c2d...  # Attach results to latest checkpoint for a change
 $ jul ci status       # Show latest results (don't re-run)
+$ jul ci list         # List recent CI runs
 $ jul ci watch        # Run and stream output
 $ jul ci config       # Show CI configuration
 $ jul ci config --show  # Show resolved commands (file or inferred)
