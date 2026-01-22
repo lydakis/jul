@@ -216,14 +216,31 @@ func parseCommandLine(command string) ([]string, error) {
 		buf = buf[:0]
 	}
 
-	for _, r := range []rune(command) {
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		if escaped {
 			buf = append(buf, r)
 			escaped = false
 			continue
 		}
 		if r == '\\' && !inSingle {
-			escaped = true
+			var next rune
+			if i+1 < len(runes) {
+				next = runes[i+1]
+			}
+			if inDouble {
+				if next == '"' || next == '\\' || next == '$' || next == '\n' {
+					escaped = true
+					continue
+				}
+			} else {
+				if next == ' ' || next == '\t' || next == '\n' || next == '"' || next == '\\' {
+					escaped = true
+					continue
+				}
+			}
+			buf = append(buf, r)
 			continue
 		}
 		if r == '"' && !inSingle {
