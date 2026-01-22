@@ -25,6 +25,7 @@ type Provider struct {
 	Timeout  time.Duration
 	Bundled  bool
 	Headless string
+	Actions  map[string]string
 }
 
 func ResolveProvider() (Provider, error) {
@@ -54,6 +55,7 @@ func ResolveProvider() (Provider, error) {
 		Timeout:  cfg.Timeout,
 		Bundled:  cfg.Bundled,
 		Headless: cfg.Headless,
+		Actions:  cfg.Actions,
 	}
 	if provider.Mode == "" {
 		provider.Mode = "stdin"
@@ -72,6 +74,15 @@ func ResolveProvider() (Provider, error) {
 		return Provider{}, ErrAgentNotConfigured
 	}
 	return provider, nil
+}
+
+func (p Provider) HeadlessFor(action string) string {
+	if p.Actions != nil {
+		if cmd := strings.TrimSpace(p.Actions[action]); cmd != "" {
+			return cmd
+		}
+	}
+	return p.Headless
 }
 
 func bundledOpenCodePath() (string, error) {

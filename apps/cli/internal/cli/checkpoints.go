@@ -53,6 +53,19 @@ func latestCheckpoint() (*checkpointInfo, error) {
 	return &entries[0], nil
 }
 
+func latestCheckpointForChange(changeID string) (*checkpointInfo, error) {
+	entries, err := listCheckpoints()
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.ChangeID == changeID {
+			return &entry, nil
+		}
+	}
+	return nil, nil
+}
+
 func checkpointFromRef(ref keepRefInfo) (checkpointInfo, error) {
 	if ref.CheckpointSHA == "" {
 		return checkpointInfo{}, fmt.Errorf("checkpoint sha missing")

@@ -23,6 +23,10 @@ func RunReview(ctx context.Context, provider Provider, req ReviewRequest) (Revie
 	if provider.Bundled {
 		return runBundledOpenCode(ctx, provider, req)
 	}
+	headless := provider.HeadlessFor("review")
+	if headless != "" || strings.EqualFold(provider.Mode, "prompt") {
+		return runPromptAgent(ctx, provider, req, headless)
+	}
 
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -111,13 +115,14 @@ func runJSONAgentFile(ctx context.Context, provider Provider, req ReviewRequest,
 }
 
 func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewRequest) (ReviewResponse, error) {
-	prompt, attachment := buildOpenCodePrompt(req)
+	attachment := buildReviewAttachment(req)
 	tempFile, err := writeReviewAttachment(req.WorkspacePath, attachment)
 	if err != nil {
 		return ReviewResponse{}, err
 	}
 	defer os.Remove(tempFile)
 
+	prompt := buildReviewPrompt(tempFile)
 	cmdPath := provider.Command
 	args := []string{"run", "--format", "json", "--file", tempFile, prompt}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
@@ -134,6 +139,43 @@ func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewReques
 	return parseReviewResponse(output)
 }
 
+func runPromptAgent(ctx context.Context, provider Provider, req ReviewRequest, headless string) (ReviewResponse, error) {
+	attachment := buildReviewAttachment(req)
+	tempFile, err := writeReviewAttachment(req.WorkspacePath, attachment)
+	if err != nil {
+		return ReviewResponse{}, err
+	}
+	defer os.Remove(tempFile)
+
+	prompt := buildReviewPrompt(tempFile)
+	command := strings.TrimSpace(headless)
+	if command == "" {
+		command = provider.Command
+	}
+	cmdPath, cmdArgs, err := splitCommand(command)
+	if err != nil {
+		return ReviewResponse{}, err
+	}
+	cmdArgs, replaced := applyPromptTemplate(cmdArgs, prompt, tempFile)
+	if !replaced {
+		cmdArgs = append(cmdArgs, prompt)
+	}
+	cmd := exec.CommandContext(ctx, cmdPath, cmdArgs...)
+	cmd.Dir = req.WorkspacePath
+	cmd.Env = append(os.Environ(),
+		"JUL_AGENT_MODE=prompt",
+		"JUL_AGENT_ACTION=review",
+		"JUL_AGENT_WORKSPACE="+req.WorkspacePath,
+		"JUL_AGENT_INPUT="+tempFile,
+		"JUL_AGENT_PROMPT="+prompt,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return ReviewResponse{}, fmt.Errorf("agent failed: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	return parseReviewResponse(output)
+}
+
 func splitCommand(command string) (string, []string, error) {
 	args, err := parseCommandLine(command)
 	if err != nil {
@@ -143,6 +185,20 @@ func splitCommand(command string) (string, []string, error) {
 		return "", nil, fmt.Errorf("command required")
 	}
 	return args[0], args[1:], nil
+}
+
+func applyPromptTemplate(args []string, prompt, attachment string) ([]string, bool) {
+	out := make([]string, len(args))
+	replaced := false
+	for i, arg := range args {
+		next := strings.ReplaceAll(arg, "$PROMPT", prompt)
+		next = strings.ReplaceAll(next, "$ATTACHMENT", attachment)
+		if next != arg {
+			replaced = true
+		}
+		out[i] = next
+	}
+	return out, replaced
 }
 
 func parseCommandLine(command string) ([]string, error) {
@@ -232,14 +288,22 @@ func extractJSON(data []byte) []byte {
 	return trimmed[start:]
 }
 
-func buildOpenCodePrompt(req ReviewRequest) (string, string) {
+func buildReviewPrompt(attachmentPath string) string {
 	var buf strings.Builder
 	buf.WriteString("You are the Jul internal review agent.\n")
-	buf.WriteString("Review the attached context file, make any fixes in the workspace, commit them, and respond with JSON ONLY.\n")
+	if strings.TrimSpace(attachmentPath) != "" {
+		buf.WriteString("Review the context file at ")
+		buf.WriteString(attachmentPath)
+		buf.WriteString(", make fixes in the workspace, commit them, and respond with JSON ONLY.\n")
+	} else {
+		buf.WriteString("Review the attached context file, make fixes in the workspace, commit them, and respond with JSON ONLY.\n")
+	}
 	buf.WriteString("Response schema:\n")
 	buf.WriteString("{\"version\":1,\"status\":\"completed\",\"suggestions\":[{\"commit\":\"<sha>\",\"reason\":\"...\",\"description\":\"...\",\"confidence\":0.0}]}\n")
-	prompt := buf.String()
+	return buf.String()
+}
 
+func buildReviewAttachment(req ReviewRequest) string {
 	var attachment strings.Builder
 	if req.Context.Checkpoint != "" {
 		attachment.WriteString("Checkpoint: " + req.Context.Checkpoint + "\n")
@@ -268,7 +332,7 @@ func buildOpenCodePrompt(req ReviewRequest) (string, string) {
 		attachment.Write(req.Context.CIResults)
 		attachment.WriteString("\n")
 	}
-	return prompt, attachment.String()
+	return attachment.String()
 }
 
 func writeReviewAttachment(workdir, content string) (string, error) {

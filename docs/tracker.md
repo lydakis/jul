@@ -15,6 +15,7 @@
 - [x] Notes for review (local-only by default)
 - [ ] Notes for prompts (optional, local-only by default)
 - [x] Agent sandbox + review pipeline (internal agent)
+- [x] Agent headless prompt mode (external providers)
 - [ ] `jul ws checkout` + local workspace save/restore integration
 - [x] Query/log/diff/show over local metadata
 - [x] Local reflog + status summaries from refs/notes
@@ -22,6 +23,7 @@
 - [ ] Align `jul status --json` and human output with new spec (draft/checkpoint summaries)
 - [x] Add `jul review` (internal agent, worktree isolation)
 - [x] Update smoke tests: local-only, Git remote, Jul-remote (optional)
+- [ ] GoReleaser + Homebrew packaging (bundle OpenCode)
 
 ## Completed (pre-pivot groundwork)
 - [x] Monorepo scaffold (CLI/server/web/infra)

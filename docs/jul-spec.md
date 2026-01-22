@@ -1788,6 +1788,8 @@ Running CI...
 
 ```bash
 $ jul ci              # Run CI now, wait for results
+$ jul ci --target <rev>   # Attach results to a specific revision
+$ jul ci --change Iab4f3c2d...  # Attach results to latest checkpoint for a change
 $ jul ci status       # Show latest results (don't re-run)
 $ jul ci watch        # Run and stream output
 $ jul ci config       # Show CI configuration
@@ -2076,14 +2078,20 @@ provider = "opencode"
 [providers.opencode]
 command = "opencode"
 protocol = "jul-agent-v1"
+headless = "opencode run --format json --file $ATTACHMENT $PROMPT"
 
 [providers.claude-code]
 command = "claude"
 protocol = "jul-agent-v1"
+headless = "claude -p $PROMPT --output-format json --permission-mode acceptEdits"
 
 [providers.codex]
 command = "codex"
 protocol = "jul-agent-v1"
+headless = "codex exec --output-format json --full-auto $PROMPT"
+
+[providers.codex.actions.review]
+headless = "codex exec \"/review $PROMPT\" --output-format json --full-auto"
 ```
 
 ### 7.4 Repo Config
@@ -2501,7 +2509,7 @@ provider = "opencode"              # Bundled, works out of box
 [providers.opencode]
 command = "opencode"
 bundled = true
-headless = "opencode run --model $MODEL \"$PROMPT\" -f json"
+headless = "opencode run --format json --file $ATTACHMENT $PROMPT"
 timeout_seconds = 300
 
 [providers.claude-code]
@@ -2515,6 +2523,9 @@ command = "codex"
 bundled = false                    # User must install
 headless = "codex exec \"$PROMPT\" --output-format json --full-auto"
 timeout_seconds = 300
+
+[providers.codex.actions.review]
+headless = "codex exec \"/review $PROMPT\" --output-format json --full-auto"
 
 [sandbox]
 enable_network = false             # Agent can't make network calls

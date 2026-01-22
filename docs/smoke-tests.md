@@ -22,3 +22,4 @@ go test ./...
 ## Notes
 - Requires `git` and `go` on PATH.
 - Tests build the CLI binary from `apps/cli`.
+- `jul ci` defaults to the current draft; use `--target <rev>` or `--change <id>` to pin a specific checkpoint.

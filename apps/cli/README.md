@@ -44,6 +44,9 @@ go run ./cmd/jul changes --json
 
 # Run local CI and record attestation
 go run ./cmd/jul ci --cmd "go test ./..." --coverage-line 82.5
+# Target a specific checkpoint or change
+go run ./cmd/jul ci --target HEAD
+go run ./cmd/jul ci --change Iabcdef123
 
 # Query recent passing commits with coverage
 go run ./cmd/jul query --tests pass --compiles true --coverage-min 80 --limit 5
@@ -69,4 +72,4 @@ go run ./cmd/jul suggest --base HEAD --suggested <sha> --reason fix_tests
 - `JUL_NO_SYNC`: Set to disable auto-sync in the hook
 - `JUL_HOOK_VERBOSE`: Set to show hook warnings
 - `JUL_AGENT_CMD`: Override review agent command (default: bundled OpenCode)
-- `JUL_AGENT_MODE`: Review agent mode (`stdin` or `file`)
+- `JUL_AGENT_MODE`: Review agent mode (`stdin`, `file`, or `prompt`)

@@ -27,8 +27,6 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 
 	// Sync draft locally
 	writeFile(t, repo, "README.md", "hello\n")
-	runCmd(t, repo, nil, "git", "add", "README.md")
-	runCmd(t, repo, nil, "git", "commit", "-m", "feat: base")
 	syncOut := runCmd(t, repo, env, julPath, "sync", "--json")
 	var syncRes struct {
 		DraftSHA     string `json:"DraftSHA"`
@@ -58,7 +56,7 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	}
 	runCmd(t, repo, nil, "git", "show-ref", checkpointRes.KeepRef)
 
-	ciOut := runCmd(t, repo, env, julPath, "ci", "--cmd", "true", "--json")
+	ciOut := runCmd(t, repo, env, julPath, "ci", "--cmd", "true", "--target", checkpointRes.CheckpointSHA, "--json")
 	var ciRes struct {
 		CI struct {
 			Status string `json:"status"`
@@ -70,8 +68,7 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	if ciRes.CI.Status == "" {
 		t.Fatalf("expected ci status")
 	}
-	head := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
-	note := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", head)
+	note := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", checkpointRes.CheckpointSHA)
 	if !strings.Contains(note, "\"status\"") {
 		t.Fatalf("expected attestation note, got %s", note)
 	}

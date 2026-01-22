@@ -67,6 +67,9 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	var commands stringList
 	fs.Var(&commands, "cmd", "Command to run (repeatable). Default: go test ./...")
 	attType := fs.String("type", "ci", "Attestation type")
+	target := fs.String("target", "", "Revision to attach results to (default: current draft)")
+	commitSHA := fs.String("commit", "", "Alias for --target")
+	changeIDFlag := fs.String("change", "", "Change-Id to attach results to (latest checkpoint)")
 	coverageLine := fs.Float64("coverage-line", -1, "Coverage line percentage (optional)")
 	coverageBranch := fs.Float64("coverage-branch", -1, "Coverage branch percentage (optional)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -77,6 +80,24 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		cmds = []string{"go test ./..."}
 	}
 
+	if targetSHA == "" {
+		targetSHA = strings.TrimSpace(*target)
+	}
+	if targetSHA == "" {
+		targetSHA = strings.TrimSpace(*commitSHA)
+	}
+	if strings.TrimSpace(*changeIDFlag) != "" {
+		if targetSHA != "" {
+			fmt.Fprintln(errOut, "cannot combine --change with --target/--commit")
+			return 1
+		}
+		resolved, err := resolveChangeTarget(*changeIDFlag)
+		if err != nil {
+			fmt.Fprintf(errOut, "failed to resolve change %s: %v\n", strings.TrimSpace(*changeIDFlag), err)
+			return 1
+		}
+		targetSHA = resolved
+	}
 	info, err := resolveCICommit(targetSHA)
 	if err != nil {
 		fmt.Fprintf(errOut, "failed to read git state: %v\n", err)
@@ -181,9 +202,9 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 }
 
 func printCIUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ci [run] [--cmd <command>] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--json]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ci [run] [--cmd <command>] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--target <rev>] [--change <id>] [--json]")
 	fmt.Fprintln(os.Stdout, "       jul ci status [--json]")
-	fmt.Fprintln(os.Stdout, "       jul ci watch [--cmd <command>]")
+	fmt.Fprintln(os.Stdout, "       jul ci watch [--cmd <command>] [--target <rev>] [--change <id>]")
 	fmt.Fprintln(os.Stdout, "       jul ci config")
 	fmt.Fprintln(os.Stdout, "       jul ci cancel")
 }
@@ -425,7 +446,11 @@ func exitCodeForStatus(status string) int {
 
 func resolveCICommit(targetSHA string) (gitutil.CommitInfo, error) {
 	if strings.TrimSpace(targetSHA) == "" {
-		return gitutil.CurrentCommit()
+		sha, err := currentDraftSHA()
+		if err != nil {
+			return gitutil.CommitInfo{}, err
+		}
+		targetSHA = sha
 	}
 	sha, err := gitutil.Git("rev-parse", targetSHA)
 	if err != nil {
@@ -445,6 +470,27 @@ func resolveCICommit(targetSHA string) (gitutil.CommitInfo, error) {
 		ChangeID: changeID,
 		TopLevel: strings.TrimSpace(top),
 	}, nil
+}
+
+func resolveChangeTarget(changeID string) (string, error) {
+	changeID = strings.TrimSpace(changeID)
+	if changeID == "" {
+		return "", nil
+	}
+	if checkpoint, err := latestCheckpointForChange(changeID); err != nil {
+		return "", err
+	} else if checkpoint != nil {
+		return checkpoint.SHA, nil
+	}
+	draftSHA, err := currentDraftSHA()
+	if err != nil {
+		return "", fmt.Errorf("no checkpoint for change %s", changeID)
+	}
+	msg, _ := gitutil.CommitMessage(draftSHA)
+	if gitutil.ExtractChangeID(msg) == changeID {
+		return draftSHA, nil
+	}
+	return "", fmt.Errorf("no checkpoint for change %s", changeID)
 }
 
 type ciStatusJSON struct {

@@ -18,6 +18,7 @@ type AgentProvider struct {
 	Bundled       bool
 	MaxIterations int
 	EnableNetwork bool
+	Actions       map[string]string
 }
 
 type AgentConfig struct {
@@ -44,14 +45,29 @@ func LoadAgentConfig() AgentConfig {
 			continue
 		}
 		rest := strings.TrimPrefix(key, "providers.")
-		parts := strings.SplitN(rest, ".", 2)
-		if len(parts) != 2 {
+		parts := strings.Split(rest, ".")
+		if len(parts) < 2 {
 			continue
 		}
 		name := parts[0]
-		field := parts[1]
 		provider := cfg.Providers[name]
 		provider.Name = name
+		if len(parts) >= 4 && parts[1] == "actions" {
+			action := parts[2]
+			field := parts[3]
+			if field == "headless" {
+				if provider.Actions == nil {
+					provider.Actions = map[string]string{}
+				}
+				provider.Actions[action] = strings.TrimSpace(value)
+			}
+			cfg.Providers[name] = provider
+			continue
+		}
+		if len(parts) != 2 {
+			continue
+		}
+		field := parts[1]
 		switch field {
 		case "command":
 			provider.Command = strings.TrimSpace(value)
@@ -110,19 +126,22 @@ func WriteAgentConfig(defaultProvider string) error {
 	content += "command = \"opencode\"\n"
 	content += "bundled = true\n"
 	content += "protocol = \"jul-agent-v1\"\n"
-	content += "mode = \"stdin\"\n"
+	content += "mode = \"prompt\"\n"
+	content += "headless = \"opencode run --format json --file $ATTACHMENT $PROMPT\"\n"
 	content += "timeout_seconds = 300\n"
 	content += "\n[providers.codex]\n"
 	content += "command = \"codex\"\n"
 	content += "bundled = false\n"
 	content += "protocol = \"jul-agent-v1\"\n"
-	content += "mode = \"stdin\"\n"
+	content += "mode = \"prompt\"\n"
+	content += "headless = \"codex exec --output-format json --full-auto $PROMPT\"\n"
 	content += "timeout_seconds = 300\n"
 	content += "\n[providers.claude-code]\n"
 	content += "command = \"claude\"\n"
 	content += "bundled = false\n"
 	content += "protocol = \"jul-agent-v1\"\n"
-	content += "mode = \"stdin\"\n"
+	content += "mode = \"prompt\"\n"
+	content += "headless = \"claude -p $PROMPT --output-format json --permission-mode acceptEdits\"\n"
 	content += "timeout_seconds = 300\n"
 	return os.WriteFile(path, []byte(content), 0o644)
 }
@@ -150,7 +169,7 @@ func defaultBundledProvider() AgentProvider {
 		Command:  "opencode",
 		Bundled:  true,
 		Protocol: "jul-agent-v1",
-		Mode:     "stdin",
+		Mode:     "prompt",
 		Timeout:  5 * time.Minute,
 	}
 }
