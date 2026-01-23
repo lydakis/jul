@@ -9,7 +9,7 @@
 
 Jul is **Git with a built-in agent**. It's a local CLI tool that adds:
 
-- **Rich metadata** on every checkpoint (CI results, coverage, lint, prompts)
+- **Rich metadata** on every checkpoint (CI results, coverage, lint, traces)
 - **Agent-native feedback loop**: checkpoint → get suggestions → act → repeat
 - **Continuous sync**: Every draft pushed to your git remote immediately
 - **Local review agent**: Analyzes code, creates suggestions automatically
@@ -60,7 +60,7 @@ Agent (Codex / Claude Code / OpenCode)
 - **Checkpoint model**: Lock work, agent generates message, run CI, get suggestions
 - **Agent-native feedback**: Rich JSON responses for agents to act on
 - **Workspaces over branches**: Named streams of work
-- **Rich metadata**: CI/coverage/lint/prompts attached to checkpoints
+- **Rich metadata**: CI/coverage/lint/traces attached to checkpoints
 - **Git compatibility**: Any git remote works (GitHub, GitLab, etc.)
 - **JJ friendliness**: Works with JJ's git backend
 
@@ -680,7 +680,7 @@ refs/notes/jul/suggestions               # Suggestion metadata
 .jul/ci/                  # Draft attestations (device-scoped, ephemeral)
 .jul/workspaces/<ws>/     # Per-workspace tracking (workspace_base)
 .jul/local/               # Saved local workspace states
-.jul/traces/              # Full prompt text (when sync_prompts != "full")
+.jul/traces/              # Full prompt text and summaries (local by default)
 ```
 
 Notes are pushed with explicit refspecs. Draft attestations are local-only by default to avoid multi-device write contention.
@@ -1579,7 +1579,7 @@ Local storage for prompts and summaries: `.jul/traces/`
 - `refs/jul/sync/<user>/<device>/<ws>` — This device's backup (never clobbered)
 - `refs/jul/keep/*` — Checkpoint retention anchors
 - `refs/jul/suggest/*` — Suggestion patch commits
-- `refs/notes/jul/*` — Metadata (attestations, review, suggestions, prompts)
+- `refs/notes/jul/*` — Metadata (attestations, review, suggestions, traces)
 
 **Local state (per workspace):**
 - `.jul/workspaces/<ws>/base` — SHA of last workspace state we merged (the semantic lease)

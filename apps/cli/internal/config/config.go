@@ -200,15 +200,16 @@ func ReviewMinConfidence() float64 {
 	return configFloat("review.min_confidence", 0)
 }
 
-func PromptsStorage() string {
-	if cfg := configValue("prompts.storage"); cfg != "" {
-		return cfg
-	}
-	return "local"
+func TraceSyncPromptHash() bool {
+	return configBool("traces.sync_prompt_hash", true)
 }
 
-func PromptsSyncEnabled() bool {
-	return strings.EqualFold(strings.TrimSpace(PromptsStorage()), "sync")
+func TraceSyncPromptSummary() bool {
+	return configBool("traces.sync_prompt_summary", false)
+}
+
+func TraceSyncPromptFull() bool {
+	return configBool("traces.sync_prompt_full", false)
 }
 
 func CheckpointAdoptOnCommit() bool {

@@ -13,10 +13,10 @@ import (
 
 const (
 	RefAttestationsCheckpoint = "refs/notes/jul/attestations/checkpoint"
+	RefTraces                 = "refs/notes/jul/traces"
 	RefSuggestions            = "refs/notes/jul/suggestions"
 	RefReview                 = "refs/notes/jul/review"
 	RefMeta                   = "refs/notes/jul/meta"
-	RefPrompts                = "refs/notes/jul/prompts"
 )
 
 const MaxNoteSize = 16 * 1024

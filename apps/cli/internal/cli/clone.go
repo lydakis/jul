@@ -98,6 +98,8 @@ func newCloneCommand() Command {
 				refspecs := []string{
 					"+refs/heads/*:refs/remotes/" + remoteName + "/*",
 					"+refs/jul/workspaces/*:refs/jul/workspaces/*",
+					"+refs/jul/traces/*:refs/jul/traces/*",
+					"+refs/jul/trace-sync/*:refs/jul/trace-sync/*",
 					"+refs/jul/suggest/*:refs/jul/suggest/*",
 					"+refs/notes/jul/*:refs/notes/jul/*",
 				}

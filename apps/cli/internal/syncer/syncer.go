@@ -56,6 +56,10 @@ func Sync() (Result, error) {
 	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
 	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
 
+	if _, err := Trace(TraceOptions{Implicit: true}); err != nil {
+		return Result{}, err
+	}
+
 	parentSHA, changeID := resolveDraftBase(workspaceRef, syncRef)
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {

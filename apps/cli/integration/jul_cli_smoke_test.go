@@ -43,8 +43,25 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "show-ref", syncRes.SyncRef)
 	runCmd(t, repo, nil, "git", "show-ref", syncRes.WorkspaceRef)
 
+	// Create an explicit trace with prompt metadata.
+	traceOut := runCmd(t, repo, env, julPath, "trace", "--prompt", "write a trace", "--json")
+	var traceRes struct {
+		TraceSHA   string `json:"trace_sha"`
+		PromptHash string `json:"prompt_hash"`
+	}
+	if err := json.NewDecoder(strings.NewReader(traceOut)).Decode(&traceRes); err != nil {
+		t.Fatalf("failed to decode trace output: %v", err)
+	}
+	if traceRes.TraceSHA == "" {
+		t.Fatalf("expected trace sha")
+	}
+	traceNote := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/traces", "show", traceRes.TraceSHA)
+	if !strings.Contains(traceNote, traceRes.PromptHash) {
+		t.Fatalf("expected trace note prompt hash, got %s", traceNote)
+	}
+
 	// Checkpoint locally (keep-ref)
-	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--prompt", "write a checkpoint", "--no-ci", "--no-review", "--json")
+	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
 	var checkpointRes struct {
 		CheckpointSHA string `json:"CheckpointSHA"`
 		KeepRef       string `json:"KeepRef"`
@@ -56,10 +73,6 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 		t.Fatalf("expected keep ref and checkpoint sha")
 	}
 	runCmd(t, repo, nil, "git", "show-ref", checkpointRes.KeepRef)
-	promptNote := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/prompts", "show", checkpointRes.CheckpointSHA)
-	if !strings.Contains(promptNote, "write a checkpoint") {
-		t.Fatalf("expected prompt note, got %s", promptNote)
-	}
 
 	agentPath := filepath.Join(t.TempDir(), "agent.sh")
 	agentScript := `#!/bin/sh
