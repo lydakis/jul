@@ -4,8 +4,8 @@
 - [x] Trace system (side history) + refs (`refs/jul/traces`, `refs/jul/trace-sync`)
 - [x] `jul trace` command + trace metadata (prompt hash/summary/agent/session)
 - [x] Trace privacy + local storage (`.jul/traces/`, scrubber)
-- [ ] Trace CI (lightweight attestations) + config (`run_on_trace`, `trace_checks`)
-- [ ] `jul blame` (checkpoint + trace provenance)
+- [x] Trace CI (lightweight attestations) + config (`run_on_trace`, `trace_checks`)
+- [x] `jul blame` (checkpoint + trace provenance)
 - [x] Replace prompt notes with trace metadata (remove `refs/notes/jul/prompts`)
 
 ## Current Focus (v0.3 Pivot: Local-First)

@@ -669,6 +669,7 @@ Anchors checkpoints for retention/fetchability. Without a ref, git may GC unreac
 ```
 refs/notes/jul/attestations/checkpoint   # Checkpoint CI results (keyed by SHA)
 refs/notes/jul/attestations/published    # Published CI results (keyed by SHA)
+refs/notes/jul/attestations/trace        # Trace CI results (keyed by trace SHA)
 refs/notes/jul/traces                    # Trace metadata (prompt hash, summary, agent)
 refs/notes/jul/review                    # Review comments  
 refs/notes/jul/meta                      # Change-Id mappings

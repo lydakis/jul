@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	RefAttestationsTrace      = "refs/notes/jul/attestations/trace"
 	RefAttestationsCheckpoint = "refs/notes/jul/attestations/checkpoint"
 	RefTraces                 = "refs/notes/jul/traces"
 	RefSuggestions            = "refs/notes/jul/suggestions"

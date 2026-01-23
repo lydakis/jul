@@ -3,11 +3,16 @@ package syncer
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/lydakis/jul/cli/internal/ci"
+	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
@@ -37,7 +42,7 @@ type TraceResult struct {
 }
 
 func Trace(opts TraceOptions) (TraceResult, error) {
-	_, err := gitutil.RepoTopLevel()
+	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return TraceResult{}, err
 	}
@@ -149,6 +154,13 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		return res, err
 	}
 
+	traceAttested := false
+	if config.TraceRunOnTrace() {
+		if err := runTraceCI(traceSHA, repoRoot); err == nil {
+			traceAttested = true
+		}
+	}
+
 	canonical := traceSHA
 	existingTip := remoteTip
 	if existingTip == "" {
@@ -184,7 +196,7 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 			return res, err
 		}
 		res.RemotePushed = true
-		_ = pushTraceNotes(remote.Name)
+		_ = pushTraceNotes(remote.Name, traceAttested)
 		if canonical != "" {
 			if err := pushWorkspace(remote.Name, canonical, traceRef, remoteTip); err != nil {
 				return res, err
@@ -248,12 +260,19 @@ func isMissingRemoteRef(err error) bool {
 	return strings.Contains(msg, "couldn't find remote ref") || strings.Contains(msg, "remote ref does not exist")
 }
 
-func pushTraceNotes(remoteName string) error {
+func pushTraceNotes(remoteName string, pushAttestations bool) error {
 	if strings.TrimSpace(remoteName) == "" {
 		return nil
 	}
-	ref := notes.RefTraces
-	_, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", ref, ref))
+	traceRef := notes.RefTraces
+	if _, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", traceRef, traceRef)); err != nil {
+		return err
+	}
+	if !pushAttestations {
+		return nil
+	}
+	attRef := notes.RefAttestationsTrace
+	_, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", attRef, attRef))
 	return err
 }
 
@@ -264,4 +283,79 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`sk-[A-Za-z0-9]{16,}`),
 	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._-]+`),
 	regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|pwd)\s*[:=]\s*\S+`),
+}
+
+func runTraceCI(traceSHA, repoRoot string) error {
+	cmds := resolveTraceCommands(repoRoot)
+	if len(cmds) == 0 {
+		return nil
+	}
+	result, err := ci.RunCommands(cmds, repoRoot)
+	if err != nil {
+		return err
+	}
+	signals, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	att := client.Attestation{
+		CommitSHA:   traceSHA,
+		Type:        "trace",
+		Status:      result.Status,
+		StartedAt:   result.StartedAt,
+		FinishedAt:  result.FinishedAt,
+		SignalsJSON: string(signals),
+	}
+	_, err = metadata.WriteTraceAttestation(att)
+	return err
+}
+
+func resolveTraceCommands(repoRoot string) []string {
+	checks := config.TraceChecks()
+	if len(checks) == 0 {
+		return nil
+	}
+	hasGoMod := fileExists(filepath.Join(repoRoot, "go.mod"))
+	hasGoWork := fileExists(filepath.Join(repoRoot, "go.work"))
+	cmds := make([]string, 0, len(checks))
+	for _, check := range checks {
+		check = strings.TrimSpace(check)
+		if check == "" {
+			continue
+		}
+		cmd := traceCheckCommand(check, hasGoMod || hasGoWork)
+		if cmd == "" {
+			continue
+		}
+		cmds = append(cmds, cmd)
+	}
+	return cmds
+}
+
+func traceCheckCommand(check string, hasGo bool) string {
+	lower := strings.ToLower(strings.TrimSpace(check))
+	if strings.Contains(check, " ") || strings.Contains(check, "/") {
+		return check
+	}
+	switch lower {
+	case "lint":
+		if hasGo {
+			return "go vet ./..."
+		}
+	case "typecheck":
+		if hasGo {
+			return "go test ./... -run TestDoesNotExist"
+		}
+	default:
+		return check
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }

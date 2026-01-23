@@ -32,6 +32,7 @@ func Commands(version string) []Command {
 		newLogCommand(),
 		newDiffCommand(),
 		newShowCommand(),
+		newBlameCommand(),
 		newApplyCommand(),
 		newReflogCommand(),
 		newPromoteCommand(),

@@ -241,6 +241,26 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		t.Fatalf("expected checkpoint show output")
 	}
 
+	blameOut := runCmd(t, repo, env, julPath, "blame", "README.md", "--json")
+	var blameRes struct {
+		File  string `json:"file"`
+		Lines []struct {
+			Line             int    `json:"line"`
+			Content          string `json:"content"`
+			CheckpointSHA    string `json:"checkpoint_sha"`
+			CheckpointChange string `json:"checkpoint_change_id"`
+		} `json:"lines"`
+	}
+	if err := json.NewDecoder(strings.NewReader(blameOut)).Decode(&blameRes); err != nil {
+		t.Fatalf("failed to decode blame output: %v", err)
+	}
+	if blameRes.File != "README.md" || len(blameRes.Lines) == 0 {
+		t.Fatalf("expected blame lines for README.md")
+	}
+	if blameRes.Lines[0].CheckpointSHA == "" || blameRes.Lines[0].CheckpointChange == "" {
+		t.Fatalf("expected blame checkpoint metadata")
+	}
+
 	queryOut := runCmd(t, repo, env, julPath, "query", "--limit", "5", "--json")
 	var queryRes []struct {
 		CommitSHA string `json:"commit_sha"`

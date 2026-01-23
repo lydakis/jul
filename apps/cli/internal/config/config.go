@@ -212,8 +212,46 @@ func TraceSyncPromptFull() bool {
 	return configBool("traces.sync_prompt_full", false)
 }
 
+func TraceRunOnTrace() bool {
+	return configBool("ci.run_on_trace", true)
+}
+
+func TraceChecks() []string {
+	return configList("ci.trace_checks", []string{"lint", "typecheck"})
+}
+
 func CheckpointAdoptOnCommit() bool {
 	return configBool("checkpoint.adopt_on_commit", false)
+}
+
+func configList(key string, def []string) []string {
+	raw := strings.TrimSpace(configValue(key))
+	if raw == "" {
+		return def
+	}
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
+	}
+	var parts []string
+	if strings.Contains(trimmed, ",") {
+		parts = strings.Split(trimmed, ",")
+	} else {
+		parts = []string{trimmed}
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		value = strings.Trim(value, "\"")
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
 }
 
 func CheckpointAdoptRunCI() bool {

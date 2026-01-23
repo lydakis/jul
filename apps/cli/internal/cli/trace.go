@@ -8,7 +8,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
@@ -99,6 +102,14 @@ func newTraceCommand() Command {
 			}
 			if res.Merged && res.CanonicalSHA != "" && res.CanonicalSHA != res.TraceSHA {
 				fmt.Fprintf(os.Stdout, "  Trace tip merged: %s\n", shortSHA(res.CanonicalSHA))
+			}
+			if config.TraceRunOnTrace() && !res.Skipped {
+				if att, err := metadata.GetTraceAttestation(res.TraceSHA); err == nil && att != nil && att.SignalsJSON != "" {
+					var result ci.Result
+					if err := json.Unmarshal([]byte(att.SignalsJSON), &result); err == nil {
+						output.RenderCIResult(os.Stdout, result, output.DefaultOptions())
+					}
+				}
 			}
 			return 0
 		},
