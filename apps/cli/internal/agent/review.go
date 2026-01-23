@@ -129,7 +129,7 @@ func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewReques
 	cmd.Dir = req.WorkspacePath
 	cmd.Env = append(os.Environ(),
 		"JUL_AGENT_MODE=prompt",
-		"JUL_AGENT_ACTION=review",
+		"JUL_AGENT_ACTION="+req.Action,
 		"JUL_AGENT_WORKSPACE="+req.WorkspacePath,
 	)
 	output, err := cmd.CombinedOutput()
@@ -164,7 +164,7 @@ func runPromptAgent(ctx context.Context, provider Provider, req ReviewRequest, h
 	cmd.Dir = req.WorkspacePath
 	cmd.Env = append(os.Environ(),
 		"JUL_AGENT_MODE=prompt",
-		"JUL_AGENT_ACTION=review",
+		"JUL_AGENT_ACTION="+req.Action,
 		"JUL_AGENT_WORKSPACE="+req.WorkspacePath,
 		"JUL_AGENT_INPUT="+tempFile,
 		"JUL_AGENT_PROMPT="+prompt,

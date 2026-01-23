@@ -106,6 +106,9 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 	if draftParentMismatch(oursSHA, mergeBase) {
 		return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
 	}
+	if draftParentMismatch(theirsSHA, mergeBase) {
+		return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
+	}
 
 	worktree, err := agent.EnsureWorktree(repoRoot, oursSHA)
 	if err != nil {
