@@ -58,10 +58,6 @@ func Sync() (Result, error) {
 	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
 	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
 
-	if _, err := Trace(TraceOptions{Implicit: true}); err != nil {
-		return Result{}, err
-	}
-
 	parentSHA, changeID := resolveDraftBase(workspaceRef, syncRef)
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
@@ -114,7 +110,7 @@ func Sync() (Result, error) {
 	if baseSHA == "" && workspaceRemote != "" {
 		res.Diverged = true
 		res.RemoteProblem = "workspace baseline missing; run 'jul ws checkout' first"
-		return res, nil
+		return finalizeSync(res, false)
 	}
 	if workspaceRemote != "" && baseSHA != "" && workspaceRemote != baseSHA {
 		mergedSHA, merged, err := autoMerge(repoRoot, workspaceRemote, draftSHA, changeID)
@@ -123,7 +119,7 @@ func Sync() (Result, error) {
 		}
 		if !merged {
 			res.Diverged = true
-			return res, nil
+			return finalizeSync(res, false)
 		}
 		if err := gitutil.UpdateRef(syncRef, mergedSHA); err != nil {
 			return res, err
@@ -148,7 +144,7 @@ func Sync() (Result, error) {
 				return res, err
 			}
 		}
-		return res, nil
+		return finalizeSync(res, true)
 	}
 
 	if err := gitutil.UpdateRef(workspaceRef, draftSHA); err != nil {
@@ -163,11 +159,18 @@ func Sync() (Result, error) {
 	if err := writeWorkspaceBase(repoRoot, workspace, draftSHA); err != nil {
 		return res, err
 	}
+	return finalizeSync(res, true)
+}
+
+func finalizeSync(res Result, allowCanonical bool) (Result, error) {
+	if _, err := Trace(TraceOptions{Implicit: true, UpdateCanonical: allowCanonical}); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
 func Checkpoint(message string) (CheckpointResult, error) {
-	traceRes, err := Trace(TraceOptions{Force: true})
+	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true})
 	if err != nil {
 		return CheckpointResult{}, err
 	}
@@ -296,7 +299,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 }
 
 func AdoptCheckpoint() (CheckpointResult, error) {
-	traceRes, err := Trace(TraceOptions{Force: true})
+	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true})
 	if err != nil {
 		return CheckpointResult{}, err
 	}

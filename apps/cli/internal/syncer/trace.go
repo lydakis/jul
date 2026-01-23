@@ -21,12 +21,13 @@ import (
 )
 
 type TraceOptions struct {
-	Prompt    string
-	Agent     string
-	SessionID string
-	Turn      int
-	Force     bool
-	Implicit  bool
+	Prompt          string
+	Agent           string
+	SessionID       string
+	Turn            int
+	Force           bool
+	Implicit        bool
+	UpdateCanonical bool
 }
 
 type TraceResult struct {
@@ -63,11 +64,12 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		TraceRef:     traceRef,
 		TraceSyncRef: traceSyncRef,
 	}
+	allowCanonical := opts.UpdateCanonical
 
 	remote, rerr := remotesel.Resolve()
 	remoteTip := ""
 	remoteMissing := false
-	if rerr == nil {
+	if rerr == nil && allowCanonical {
 		res.RemoteName = remote.Name
 		if err := fetchRef(remote.Name, traceRef); err != nil {
 			if isMissingRemoteRef(err) {
@@ -163,34 +165,40 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		}
 	}
 
-	canonical := traceSHA
-	existingTip := remoteTip
-	if existingTip == "" {
-		if sha, err := gitutil.ResolveRef(traceRef); err == nil {
-			existingTip = strings.TrimSpace(sha)
+	canonical := ""
+	existingTip := ""
+	if allowCanonical {
+		canonical = traceSHA
+		existingTip = remoteTip
+		if existingTip == "" {
+			if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+				existingTip = strings.TrimSpace(sha)
+			}
 		}
-	}
-	if existingTip != "" && existingTip != traceSHA {
-		switch {
-		case gitutil.IsAncestor(existingTip, traceSHA):
-			canonical = traceSHA
-		case gitutil.IsAncestor(traceSHA, existingTip):
-			canonical = existingTip
-		default:
-			mergeMessage := "[trace] merge"
-			mergeSHA, err := gitutil.CommitTreeWithParents(treeSHA, []string{existingTip, traceSHA}, mergeMessage)
-			if err != nil {
+		if existingTip != "" && existingTip != traceSHA {
+			switch {
+			case gitutil.IsAncestor(existingTip, traceSHA):
+				canonical = traceSHA
+			case gitutil.IsAncestor(traceSHA, existingTip):
+				canonical = existingTip
+			default:
+				mergeMessage := "[trace] merge"
+				mergeSHA, err := gitutil.CommitTreeWithParents(treeSHA, []string{existingTip, traceSHA}, mergeMessage)
+				if err != nil {
+					return res, err
+				}
+				canonical = mergeSHA
+				res.Merged = true
+			}
+		}
+		res.CanonicalSHA = canonical
+		if canonical != "" {
+			if err := gitutil.UpdateRef(traceRef, canonical); err != nil {
 				return res, err
 			}
-			canonical = mergeSHA
-			res.Merged = true
 		}
-	}
-	res.CanonicalSHA = canonical
-	if canonical != "" {
-		if err := gitutil.UpdateRef(traceRef, canonical); err != nil {
-			return res, err
-		}
+	} else if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+		res.CanonicalSHA = strings.TrimSpace(sha)
 	}
 
 	if rerr == nil {
@@ -199,7 +207,7 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		}
 		res.RemotePushed = true
 		_ = pushTraceNotes(remote.Name, traceAttested)
-		if canonical != "" {
+		if allowCanonical && canonical != "" {
 			if err := pushWorkspace(remote.Name, canonical, traceRef, remoteTip); err != nil {
 				return res, err
 			}
@@ -267,15 +275,46 @@ func pushTraceNotes(remoteName string, pushAttestations bool) error {
 		return nil
 	}
 	traceRef := notes.RefTraces
-	if _, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", traceRef, traceRef)); err != nil {
-		return err
+	if gitutil.RefExists(traceRef) {
+		if err := syncNotesRef(remoteName, traceRef); err != nil {
+			return err
+		}
+		if _, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", traceRef, traceRef)); err != nil {
+			return err
+		}
 	}
 	if !pushAttestations {
 		return nil
 	}
 	attRef := notes.RefAttestationsTrace
+	if !gitutil.RefExists(attRef) {
+		return nil
+	}
+	if err := syncNotesRef(remoteName, attRef); err != nil {
+		return err
+	}
 	_, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", attRef, attRef))
 	return err
+}
+
+func syncNotesRef(remoteName, ref string) error {
+	if strings.TrimSpace(remoteName) == "" || strings.TrimSpace(ref) == "" {
+		return nil
+	}
+	tmpRef := fmt.Sprintf("refs/jul/tmp/notes/%d", time.Now().UnixNano())
+	if _, err := gitutil.Git("fetch", remoteName, "+"+ref+":"+tmpRef); err != nil {
+		if isMissingRemoteRef(err) {
+			return nil
+		}
+		return err
+	}
+	if _, err := gitutil.Git("notes", "--ref", ref, "merge", tmpRef); err != nil {
+		_, _ = gitutil.Git("notes", "--ref", ref, "merge", "--abort")
+		_, _ = gitutil.Git("update-ref", "-d", tmpRef)
+		return err
+	}
+	_, _ = gitutil.Git("update-ref", "-d", tmpRef)
+	return nil
 }
 
 var secretPatterns = []*regexp.Regexp{

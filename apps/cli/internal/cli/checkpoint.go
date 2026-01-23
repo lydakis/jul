@@ -52,8 +52,9 @@ func newCheckpointCommand() Command {
 
 			if strings.TrimSpace(*prompt) != "" {
 				if _, err := syncer.Trace(syncer.TraceOptions{
-					Prompt: strings.TrimSpace(*prompt),
-					Force:  true,
+					Prompt:          strings.TrimSpace(*prompt),
+					Force:           true,
+					UpdateCanonical: true,
 				}); err != nil {
 					fmt.Fprintf(os.Stderr, "failed to record trace: %v\n", err)
 					return 1

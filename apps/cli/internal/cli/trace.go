@@ -47,11 +47,12 @@ func newTraceCommand() Command {
 			}
 
 			res, err := syncer.Trace(syncer.TraceOptions{
-				Prompt:    promptText,
-				Agent:     strings.TrimSpace(*agent),
-				SessionID: strings.TrimSpace(*sessionID),
-				Turn:      *turn,
-				Force:     true,
+				Prompt:          promptText,
+				Agent:           strings.TrimSpace(*agent),
+				SessionID:       strings.TrimSpace(*sessionID),
+				Turn:            *turn,
+				Force:           true,
+				UpdateCanonical: true,
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "trace failed: %v\n", err)

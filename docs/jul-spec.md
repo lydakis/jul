@@ -410,6 +410,12 @@ This keeps main ancestry clean while letting `jul blame` traverse the DAG and at
 }
 ```
 
+These are recorded as commit trailers on the checkpoint commit:
+```
+Trace-Base: <sha>
+Trace-Head: <sha>
+```
+
 Blame walks from head(s) to base. Tiny metadata, same power. Avoids blowing 16KB notes limit.
 
 **Privacy defaults (secrets can leak in summaries too!):**
@@ -584,7 +590,7 @@ refs/jul/traces/george/@  →  merge_sha  (merge trace)
                           def456   uvw012
 ```
 
-The merge trace commit uses strategy `ours` for its tree (tree = current canonical workspace tree). This keeps both device histories reachable without requiring code conflict resolution just to unify traces.
+The merge trace commit uses strategy `ours` for its tree (tree = `workspace_remote^{tree}` from the fetched canonical workspace ref). This keeps both device histories reachable without requiring code conflict resolution just to unify traces.
 
 This lets `jul blame` traverse the DAG to find the real origin trace.
 
@@ -592,13 +598,15 @@ This lets `jul blame` traverse the DAG to find the real origin trace.
 ```json
 {
   "prompt_hash": "sha256:abc123...",
-  "prompt_summary": "Added null check for auth token",
   "agent": "claude-code",
   "session_id": "abc123",
   "turn": 5,
-  "device": "swift-tiger"
+  "device": "swift-tiger",
+  "prompt_summary": "Added null check for auth token"
 }
 ```
+
+`prompt_summary` and `prompt_full` are **only present in synced notes** when `traces.sync_prompt_summary` / `traces.sync_prompt_full` are enabled. With defaults, only the hash is synced.
 
 Note: No "trace_id" field — use short SHA for display.
 
@@ -623,7 +631,8 @@ By default, only the prompt hash syncs. Summaries are generated locally and stay
 **Lifecycle:**
 - Created by `jul trace` (explicit) or `jul sync` (implicit, if tree changed)
 - Device trace-sync ref always pushes
-- Canonical trace tip advances when canonical workspace advances
+- **Canonical trace tip advances only when canonical workspace advances**  
+  If workspace is diverged (conflicts pending), **do not update `refs/jul/traces/...`** (only update `trace-sync/...`)
 - Referenced by checkpoint metadata: `{trace_base, trace_head}`
 - Cleaned up when associated checkpoint expires
 
@@ -1079,10 +1088,14 @@ refs/jul/trace-sync/george/swift-tiger/@    ← this device's trace backup
 2. **Fetch** canonical trace tip → `trace_remote`
 3. **Compare** `trace_remote` to local trace tip
 4. **If same or fast-forward**: canonical trace = local (simple case)
-5. **If diverged** (both devices created traces):
+5. **If diverged** (both devices created traces) **and workspace is not diverged**:
    - Create **trace merge commit** with two parents: `trace_remote` and local tip
-   - Tree = current canonical workspace tree (strategy `ours`)
+   - Tree = **tree of fetched canonical workspace ref** (`workspace_remote^{tree}`), strategy `ours`
    - Push trace merge as new canonical tip
+6. **If workspace is diverged (conflicts pending)**:
+   - Do **not** update `refs/jul/traces/...`
+   - Only update this device’s `trace-sync/...` ref
+   - (Optional) create local trace merge, but keep canonical frozen until workspace resolves
 
 ```
 Before merge:
@@ -1517,17 +1530,26 @@ Git notes are not fetched by default. Jul configures explicit refspecs:
     fetch = +refs/notes/jul/*:refs/notes/jul/*
 ```
 
-**Single-writer rule per namespace:**
+**Recommended writers per namespace:**
 
-Notes refs can have non-fast-forward conflicts. Avoid with clear ownership:
+Notes refs can have non-fast-forward conflicts. Prefer clear ownership, but **multiple devices may still write** (e.g., two laptops). Use the notes sync algorithm below to merge safely.
 
-| Namespace | Writer | Content |
-|-----------|--------|---------|
+| Namespace | Typical writer | Content |
+|-----------|----------------|---------|
 | `refs/notes/jul/meta` | Client | Change-Id mappings |
 | `refs/notes/jul/attestations` | CI runner | Test results (summaries only) |
 | `refs/notes/jul/review` | Review agent | Review comments |
 | `refs/notes/jul/suggestions` | Review agent | Suggestion metadata |
 | `refs/notes/jul/traces` | Client | Trace metadata (prompt hash, agent, session) |
+
+**Notes sync algorithm (multi-device):**
+
+Even though notes are mergeable, the notes ref itself can reject non‑fast‑forward pushes. Jul syncs notes like this:
+1. Fetch remote notes ref into a temporary ref
+2. `git notes --ref <ref> merge <temp_ref>`
+3. Push merged notes ref with lease
+
+This avoids flaky push failures when two devices append notes in parallel.
 
 **Suggestions storage:**
 
@@ -1855,6 +1877,8 @@ When enabled, the post‑commit hook runs `jul checkpoint --adopt`, which:
 3) starts a new draft parented at `HEAD`.
 
 This preserves continuity without moving `refs/heads/*`.
+
+**Change-Id note for adopted commits:** Adopted commits may not have a `Change-Id:` trailer. In that case, Jul records the Change‑Id mapping only in `refs/notes/jul/meta` and does **not** rewrite the commit. If you want Change‑Id embedded in normal git commits, install a Gerrit‑style `commit-msg` hook (outside Jul) so commits include the trailer from the start.
 
 #### `jul status`
 

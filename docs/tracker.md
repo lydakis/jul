@@ -7,6 +7,7 @@
 - [x] Trace CI (lightweight attestations) + config (`run_on_trace`, `trace_checks`)
 - [x] `jul blame` (checkpoint + trace provenance)
 - [x] Replace prompt notes with trace metadata (remove `refs/notes/jul/prompts`)
+- [x] Spec clarifications (trace canonical gating, notes merge, adopt Change-Id)
 
 ## Current Focus (v0.3 Pivot: Local-First)
 - [x] Local sync engine: shadow-index draft commits + `refs/jul/sync/<user>/<device>/<ws>`
