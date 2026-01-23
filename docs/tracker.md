@@ -1,5 +1,17 @@
 # Jul Build Tracker
 
+## Current Focus (v0.5 Spec Alignment & UX)
+- [ ] Remove server API dependency (`JUL_BASE_URL`/client calls); all commands operate locally + git remote only
+- [ ] Implement `jul merge` (conflict resolution flow) per spec
+- [ ] Implement `jul local` save/restore/list/delete (client-side workspace states)
+- [ ] Implement `jul doctor` to verify remote refspecs/notes support
+- [ ] Add sync modes (`on-command`/`continuous`/`explicit`) and config wiring
+- [ ] Enforce promote policies + strategies (`.jul/policy.toml`, rebase/squash/merge)
+- [ ] Add retention cleanup for keep-refs + cascading suggestion/notes cleanup
+- [ ] Align CLI human output with spec (icons/colors/layout for status/sync/ci/checkpoint/log)
+- [ ] Fix sync draft creation when `.jul` is gitignored (no hard failure)
+- [ ] Expand smoke tests: full local-only flow, remote flow, opencode review, CI config/no-config
+
 ## Current Focus (v0.4 Trace/Provenance)
 - [x] Trace system (side history) + refs (`refs/jul/traces`, `refs/jul/trace-sync`)
 - [x] `jul trace` command + trace metadata (prompt hash/summary/agent/session)
