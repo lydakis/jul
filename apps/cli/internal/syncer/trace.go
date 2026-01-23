@@ -34,6 +34,7 @@ type TraceResult struct {
 	TraceRef     string
 	TraceSyncRef string
 	CanonicalSHA string
+	TraceBase    string
 	PromptHash   string
 	RemoteName   string
 	RemotePushed bool
@@ -90,6 +91,7 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 	}
 
 	parent := resolveTraceParent(traceSyncRef, traceRef)
+	res.TraceBase = parent
 	if !opts.Force {
 		if parent != "" {
 			if parentTree, err := gitutil.TreeOf(parent); err == nil && parentTree == treeSHA {

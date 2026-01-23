@@ -29,6 +29,8 @@ type CheckpointResult struct {
 	CheckpointSHA    string
 	DraftSHA         string
 	ChangeID         string
+	TraceBase        string
+	TraceHead        string
 	WorkspaceRef     string
 	SyncRef          string
 	KeepRef          string
@@ -165,6 +167,11 @@ func Sync() (Result, error) {
 }
 
 func Checkpoint(message string) (CheckpointResult, error) {
+	traceRes, err := Trace(TraceOptions{Force: true})
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+
 	syncRes, err := Sync()
 	if err != nil {
 		return CheckpointResult{}, err
@@ -206,6 +213,12 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		message = "checkpoint"
 	}
 	message = ensureChangeID(message, changeID)
+	if traceRes.CanonicalSHA != "" {
+		message = ensureTrailer(message, "Trace-Head", traceRes.CanonicalSHA)
+	}
+	if traceRes.TraceBase != "" {
+		message = ensureTrailer(message, "Trace-Base", traceRes.TraceBase)
+	}
 
 	treeSHA, err := gitutil.TreeOf(draftSHA)
 	if err != nil {
@@ -238,6 +251,8 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		CheckpointSHA: checkpointSHA,
 		DraftSHA:      newDraftSHA,
 		ChangeID:      changeID,
+		TraceBase:     traceRes.TraceBase,
+		TraceHead:     traceRes.CanonicalSHA,
 		WorkspaceRef:  workspaceRef,
 		SyncRef:       syncRef,
 		KeepRef:       keepRef,
@@ -281,6 +296,11 @@ func Checkpoint(message string) (CheckpointResult, error) {
 }
 
 func AdoptCheckpoint() (CheckpointResult, error) {
+	traceRes, err := Trace(TraceOptions{Force: true})
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+
 	syncRes, err := Sync()
 	if err != nil {
 		return CheckpointResult{}, err
@@ -347,6 +367,8 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		CheckpointSHA: headSHA,
 		DraftSHA:      newDraftSHA,
 		ChangeID:      changeID,
+		TraceBase:     traceRes.TraceBase,
+		TraceHead:     traceRes.CanonicalSHA,
 		WorkspaceRef:  workspaceRef,
 		SyncRef:       syncRef,
 		KeepRef:       keepRef,
@@ -478,6 +500,19 @@ func ensureChangeID(message, changeID string) string {
 		return message
 	}
 	return strings.TrimSpace(message) + "\n\nChange-Id: " + changeID + "\n"
+}
+
+func ensureTrailer(message, key, value string) string {
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+		return message
+	}
+	if strings.TrimSpace(gitutil.ExtractTraceHead(message)) != "" && key == "Trace-Head" {
+		return message
+	}
+	if strings.TrimSpace(gitutil.ExtractTraceBase(message)) != "" && key == "Trace-Base" {
+		return message
+	}
+	return strings.TrimSpace(message) + "\n\n" + key + ": " + value + "\n"
 }
 
 func keepRefPath(user, workspace, changeID, checkpointSHA string) string {

@@ -75,14 +75,18 @@ func newBlameCommand() Command {
 			traceLines := map[int]blameLine{}
 			traceTip := ""
 			if !*noTrace {
-				user, workspace := workspaceParts()
-				if workspace == "" {
-					workspace = "@"
-				}
-				traceRef := fmt.Sprintf("refs/jul/traces/%s/%s", user, workspace)
-				if gitutil.RefExists(traceRef) {
-					if sha, err := gitutil.ResolveRef(traceRef); err == nil {
-						traceTip = strings.TrimSpace(sha)
+				if checkpoint != nil && checkpoint.TraceHead != "" {
+					traceTip = checkpoint.TraceHead
+				} else {
+					user, workspace := workspaceParts()
+					if workspace == "" {
+						workspace = "@"
+					}
+					traceRef := fmt.Sprintf("refs/jul/traces/%s/%s", user, workspace)
+					if gitutil.RefExists(traceRef) {
+						if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+							traceTip = strings.TrimSpace(sha)
+						}
 					}
 				}
 				if traceTip != "" {
@@ -274,7 +278,7 @@ func parseBlamePorcelain(output string) []blameLine {
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		fields := strings.Fields(line)
-		if len(fields) < 4 {
+		if len(fields) < 3 {
 			continue
 		}
 		sha := fields[0]
