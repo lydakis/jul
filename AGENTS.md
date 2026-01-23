@@ -36,5 +36,5 @@
 - If adding API changes, update `apps/server/README.md` and consider the design spec in `docs/jul-spec.md`.
 
 ## Configuration Tips
-- CLI uses `JUL_BASE_URL` and `JUL_WORKSPACE`. Hooks respect `JUL_HOOK_CMD`, `JUL_NO_SYNC`, and `JUL_HOOK_VERBOSE`.
+- CLI uses `JUL_WORKSPACE`. Hooks respect `JUL_HOOK_CMD`, `JUL_NO_SYNC`, and `JUL_HOOK_VERBOSE`.
 - Server storage defaults to SQLite; keep paths under `apps/server/data/` for local dev.

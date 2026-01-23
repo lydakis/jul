@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/lydakis/jul/cli/internal/client"
-	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
 	"github.com/lydakis/jul/cli/internal/output"
@@ -205,32 +204,16 @@ func newPromoteCommand() Command {
 				fmt.Fprintln(os.Stderr, "failed to resolve commit to promote")
 				return 1
 			}
-			if !config.BaseURLConfigured() {
-				if err := promoteLocal(*toBranch, targetSHA, *force); err != nil {
-					fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
-					return 1
-				}
-			} else {
-				cli := client.New(config.BaseURL())
-				if err := cli.Promote(config.WorkspaceID(), *toBranch, targetSHA, *force); err != nil {
-					fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
-					return 1
-				}
+			if err := promoteLocal(*toBranch, targetSHA, *force); err != nil {
+				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
+				return 1
 			}
 
 			if *force {
-				if config.BaseURLConfigured() {
-					fmt.Fprintln(os.Stdout, "promote requested (force)")
-					return 0
-				}
 				fmt.Fprintln(os.Stdout, "promote completed (force)")
 				return 0
 			}
 
-			if config.BaseURLConfigured() {
-				fmt.Fprintln(os.Stdout, "promote requested")
-				return 0
-			}
 			fmt.Fprintln(os.Stdout, "promote completed")
 			return 0
 		},
@@ -270,14 +253,7 @@ func newChangesCommand() Command {
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			var changes []client.Change
-			var err error
-			if !config.BaseURLConfigured() {
-				changes, err = localChanges()
-			} else {
-				cli := client.New(config.BaseURL())
-				changes, err = cli.ListChanges()
-			}
+			changes, err := localChanges()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to fetch changes: %v\n", err)
 				return 1

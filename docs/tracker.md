@@ -1,7 +1,7 @@
 # Jul Build Tracker
 
 ## Current Focus (v0.5 Spec Alignment & UX)
-- [ ] Remove server API dependency (`JUL_BASE_URL`/client calls); all commands operate locally + git remote only
+- [x] Remove server API dependency (`JUL_BASE_URL`/client calls); all commands operate locally + git remote only
 - [ ] Implement `jul merge` (conflict resolution flow) per spec
 - [ ] Implement `jul local` save/restore/list/delete (client-side workspace states)
 - [ ] Implement `jul doctor` to verify remote refspecs/notes support

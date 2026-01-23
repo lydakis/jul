@@ -10,54 +10,8 @@ import (
 )
 
 const (
-	EnvBaseURL   = "JUL_BASE_URL"
 	EnvWorkspace = "JUL_WORKSPACE"
 )
-
-func BaseURL() string {
-	value := strings.TrimSpace(os.Getenv(EnvBaseURL))
-	if value == "" {
-		if cfg := userConfigValue("server.url"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		if cfg := userConfigValue("client.base_url"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		if cfg := userConfigValue("base_url"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		if cfg := gitConfigValue("jul.baseurl"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		if cfg := gitConfigValue("jul.base_url"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		return "http://localhost:8000"
-	}
-	return strings.TrimRight(value, "/")
-}
-
-func BaseURLConfigured() bool {
-	if strings.TrimSpace(os.Getenv(EnvBaseURL)) != "" {
-		return true
-	}
-	if cfg := userConfigValue("server.url"); cfg != "" {
-		return true
-	}
-	if cfg := userConfigValue("client.base_url"); cfg != "" {
-		return true
-	}
-	if cfg := userConfigValue("base_url"); cfg != "" {
-		return true
-	}
-	if cfg := gitConfigValue("jul.baseurl"); cfg != "" {
-		return true
-	}
-	if cfg := gitConfigValue("jul.base_url"); cfg != "" {
-		return true
-	}
-	return false
-}
 
 func WorkspaceID() string {
 	if value := strings.TrimSpace(os.Getenv(EnvWorkspace)); value != "" {

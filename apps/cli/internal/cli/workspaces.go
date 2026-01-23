@@ -53,14 +53,7 @@ func runWorkspaceList(args []string) int {
 	fs := flag.NewFlagSet("ws list", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	_ = fs.Parse(args)
-	var workspaces []client.Workspace
-	var err error
-	if !config.BaseURLConfigured() {
-		workspaces, err = localWorkspaces()
-	} else {
-		cli := client.New(config.BaseURL())
-		workspaces, err = cli.ListWorkspaces()
-	}
+	workspaces, err := localWorkspaces()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to list workspaces: %v\n", err)
 		return 1
@@ -256,17 +249,9 @@ func runWorkspaceDelete(args []string) int {
 		fmt.Fprintln(os.Stderr, "cannot delete current workspace")
 		return 1
 	}
-	if !config.BaseURLConfigured() {
-		if err := deleteWorkspaceLocal(target); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
-			return 1
-		}
-	} else {
-		cli := client.New(config.BaseURL())
-		if err := cli.DeleteWorkspace(target); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
-			return 1
-		}
+	if err := deleteWorkspaceLocal(target); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
+		return 1
 	}
 	fmt.Fprintf(os.Stdout, "Deleted workspace %s\n", target)
 	return 0
