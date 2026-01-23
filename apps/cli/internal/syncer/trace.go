@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/notes"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 )
 
@@ -59,14 +60,21 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 
 	remote, rerr := remotesel.Resolve()
 	remoteTip := ""
+	remoteMissing := false
 	if rerr == nil {
 		res.RemoteName = remote.Name
 		if err := fetchRef(remote.Name, traceRef); err != nil {
-			if !isMissingRemoteRef(err) {
+			if isMissingRemoteRef(err) {
+				remoteMissing = true
+			} else {
 				return res, err
 			}
 		}
-		if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+		if !remoteMissing {
+			if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+				remoteTip = strings.TrimSpace(sha)
+			}
+		} else if sha, err := gitutil.ResolveRef(traceRef); err == nil {
 			remoteTip = strings.TrimSpace(sha)
 		}
 	}
@@ -176,6 +184,7 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 			return res, err
 		}
 		res.RemotePushed = true
+		_ = pushTraceNotes(remote.Name)
 		if canonical != "" {
 			if err := pushWorkspace(remote.Name, canonical, traceRef, remoteTip); err != nil {
 				return res, err
@@ -239,11 +248,20 @@ func isMissingRemoteRef(err error) bool {
 	return strings.Contains(msg, "couldn't find remote ref") || strings.Contains(msg, "remote ref does not exist")
 }
 
+func pushTraceNotes(remoteName string) error {
+	if strings.TrimSpace(remoteName) == "" {
+		return nil
+	}
+	ref := notes.RefTraces
+	_, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", ref, ref))
+	return err
+}
+
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	regexp.MustCompile(`ghp_[A-Za-z0-9]{30,}`),
 	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`),
 	regexp.MustCompile(`sk-[A-Za-z0-9]{16,}`),
-	regexp.MustCompile(`(?i)bearer\\s+[A-Za-z0-9._-]+`),
-	regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|pwd)\\s*[:=]\\s*\\S+`),
+	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._-]+`),
+	regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|pwd)\s*[:=]\s*\S+`),
 }
