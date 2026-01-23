@@ -23,14 +23,12 @@ func newCICommand() Command {
 		Summary: "Run local CI and record attestation",
 		Run: func(args []string) int {
 			if len(args) == 0 {
-				return runCIRun(args)
+				printCIUsage()
+				return 1
 			}
 			if args[0] == "help" || args[0] == "--help" {
 				printCIUsage()
 				return 0
-			}
-			if strings.HasPrefix(args[0], "-") {
-				return runCIRun(args)
 			}
 
 			sub := args[0]
@@ -41,8 +39,6 @@ func newCICommand() Command {
 				return runCIStatus(args[1:])
 			case "list":
 				return runCIList(args[1:])
-			case "watch":
-				return runCIWatch(args[1:])
 			case "config":
 				return runCIConfig(args[1:])
 			case "cancel":
@@ -57,10 +53,6 @@ func newCICommand() Command {
 
 func runCIRun(args []string) int {
 	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr, "", "manual")
-}
-
-func runCIWatch(args []string) int {
-	return runCIRunWithStream(args, os.Stdout, os.Stdout, os.Stderr, "", "manual")
 }
 
 func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer, targetSHA string, mode string) int {
@@ -246,10 +238,9 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 }
 
 func printCIUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ci [run] [--cmd <command>] [--watch] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--target <rev>] [--change <id>] [--json]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ci run [--cmd <command>] [--watch] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--target <rev>] [--change <id>] [--json]")
 	fmt.Fprintln(os.Stdout, "       jul ci status [--json]")
 	fmt.Fprintln(os.Stdout, "       jul ci list [--limit N] [--json]")
-	fmt.Fprintln(os.Stdout, "       jul ci watch [--cmd <command>] [--target <rev>] [--change <id>]")
 	fmt.Fprintln(os.Stdout, "       jul ci config")
 	fmt.Fprintln(os.Stdout, "       jul ci cancel")
 }

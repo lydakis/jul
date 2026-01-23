@@ -3,7 +3,7 @@
 These integration tests build the CLI, create temporary git repos, and exercise Jul’s local-first flows end-to-end. Local smoke tests live under `apps/cli`, while remote smoke tests live under `apps/server`.
 
 Covered flows:
-- **Local-only**: `jul init`, `jul sync`, `jul checkpoint`, `jul ci`, `jul status`, `jul log`, `jul show`, `jul diff`,
+- **Local-only**: `jul init`, `jul sync`, `jul checkpoint`, `jul ci run`, `jul status`, `jul log`, `jul show`, `jul diff`,
   `jul review` (stub agent), `jul suggestions`, `jul apply`, `jul reflog` with no remotes configured.
 - **Draft CI on sync**: when `ci.run_on_draft = true`, `jul sync` triggers CI (blocking or background) and updates `.jul/ci/results.json`.
 - **CI config**: if `.jul/ci.toml` exists, CI uses its `[commands]` list instead of the default `go test ./...`.
@@ -36,7 +36,7 @@ go test ./integration -run Smoke
 ## Notes
 - Requires `git` and `go` on PATH.
 - Tests build the CLI binary from `apps/cli`.
-- `jul ci` defaults to the current draft; use `--target <rev>` or `--change <id>` to pin a specific checkpoint.
+- `jul ci run` defaults to the current draft; use `--target <rev>` or `--change <id>` to pin a specific checkpoint.
 - Real agent smoke test is opt-in:
   - Set `JUL_REAL_AGENT=1`
   - Ensure OpenCode is configured (e.g., `~/.config/opencode` or env vars) so it can run headless.

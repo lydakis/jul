@@ -36,7 +36,7 @@ func TestCIGoWorkDefaultCommands(t *testing.T) {
 
 	runCmd(t, repo, env, julPath, "sync")
 
-	ciOut := runCmd(t, repo, env, julPath, "ci", "--json")
+	ciOut := runCmd(t, repo, env, julPath, "ci", "run", "--json")
 	var ciRes struct {
 		CI struct {
 			Status  string `json:"status"`

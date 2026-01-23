@@ -43,10 +43,10 @@ go run ./cmd/jul sync --json
 go run ./cmd/jul changes --json
 
 # Run local CI and record attestation
-go run ./cmd/jul ci --cmd "go test ./..." --coverage-line 82.5
+go run ./cmd/jul ci run --cmd "go test ./..." --coverage-line 82.5
 # Target a specific checkpoint or change
-go run ./cmd/jul ci --target HEAD
-go run ./cmd/jul ci --change Iabcdef123
+go run ./cmd/jul ci run --target HEAD
+go run ./cmd/jul ci run --change Iabcdef123
 
 # Query recent passing commits with coverage
 go run ./cmd/jul query --tests pass --compiles true --coverage-min 80 --limit 5
@@ -59,9 +59,6 @@ go run ./cmd/jul review
 
 # List suggestions
 go run ./cmd/jul suggestions --status pending
-
-# Create a suggestion
-go run ./cmd/jul suggest --base HEAD --suggested <sha> --reason fix_tests
 ```
 
 ## Environment

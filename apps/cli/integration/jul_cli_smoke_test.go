@@ -153,7 +153,7 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		t.Fatalf("expected applied suggestions")
 	}
 
-	ciOut := runCmd(t, repo, env, julPath, "ci", "--cmd", "true", "--target", checkpointRes.CheckpointSHA, "--json")
+	ciOut := runCmd(t, repo, env, julPath, "ci", "run", "--cmd", "true", "--target", checkpointRes.CheckpointSHA, "--json")
 	var ciRes struct {
 		CI struct {
 			Status string `json:"status"`
@@ -263,7 +263,7 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		t.Fatalf("expected ci completed sha")
 	}
 
-	runCmd(t, repo, env, julPath, "ci", "watch", "--cmd", "true")
+	runCmd(t, repo, env, julPath, "ci", "run", "--watch", "--cmd", "true")
 
 	remoteOut := runCmd(t, repo, env, julPath, "remote", "show")
 	if !strings.Contains(remoteOut, "No git remotes configured") {

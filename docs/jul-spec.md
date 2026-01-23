@@ -1041,9 +1041,9 @@ sync_draft_attestations = false  # Default: local-only (avoid multi-device confl
 
 **Run types and visibility:**
 - **Background draft CI (sync‑triggered)**: one at a time, coalesced per device. Visible via `jul ci status` (current draft + running PID).
-- **Foreground CI (`jul ci` / `jul ci watch`)**: runs immediately and streams output; results are recorded for the target SHA.
+- **Foreground CI (`jul ci run` / `jul ci run --watch`)**: runs immediately and streams output; results are recorded for the target SHA.
 - **Checkpoint CI (`jul checkpoint`)**: runs after a checkpoint and writes an attestation note for that checkpoint.
-- **Manual CI (`jul ci --target/--change`)**: attaches to the requested revision; does not replace draft CI unless it targets the draft SHA.
+- **Manual CI (`jul ci run --target/--change`)**: attaches to the requested revision; does not replace draft CI unless it targets the draft SHA.
 
 **Multiple runs:** Draft CI is single‑flight per device (latest draft wins). Manual/foreground runs can be started while draft CI is idle, but if they target the draft SHA they will supersede the previous draft result.
 
@@ -1627,6 +1627,8 @@ Run 'jul merge' to resolve.
 
 List pending suggestions for current checkpoint.
 
+Suggestions are created by `jul review` (agent-generated); there is no manual `jul suggest` command.
+
 ```bash
 $ jul suggestions
 
@@ -1781,12 +1783,12 @@ With `--json` for agents:
 
 ### 6.7 CI Command
 
-#### `jul ci`
+#### `jul ci run`
 
 Run CI and show results.
 
 ```bash
-$ jul ci
+$ jul ci run
 Running CI...
   ✓ lint: pass (1.2s)
   ✓ test: pass (8.4s) — 48/48
@@ -1797,7 +1799,7 @@ All checks passed.
 
 If tests fail:
 ```bash
-$ jul ci
+$ jul ci run
 Running CI...
   ✓ lint: pass (1.2s)
   ✗ test: fail (6.1s) — 45/48
@@ -1812,13 +1814,12 @@ Running CI...
 **Subcommands:**
 
 ```bash
-$ jul ci              # Run CI now, wait for results
-$ jul ci --watch      # Run CI now, stream output
-$ jul ci --target <rev>   # Attach results to a specific revision
-$ jul ci --change Iab4f3c2d...  # Attach results to latest checkpoint for a change
+$ jul ci run              # Run CI now, wait for results
+$ jul ci run --watch      # Run CI now, stream output
+$ jul ci run --target <rev>   # Attach results to a specific revision
+$ jul ci run --change Iab4f3c2d...  # Attach results to latest checkpoint for a change
 $ jul ci status       # Show latest results (don't re-run)
 $ jul ci list         # List recent CI runs
-$ jul ci watch        # Run and stream output
 $ jul ci config       # Show CI configuration
 $ jul ci config --show  # Show resolved commands (file or inferred)
 $ jul ci cancel       # Cancel in-progress background CI
@@ -1854,7 +1855,7 @@ CI Status:
 **For agents (JSON):**
 
 ```bash
-$ jul ci --json
+$ jul ci run --json
 ```
 
 ```json
@@ -1891,11 +1892,11 @@ When results are stale:
 
 **Difference from background CI:**
 - Background CI runs automatically on sync (non-blocking)
-- `jul ci` runs explicitly and waits for results (blocking)
+- `jul ci run` runs explicitly and waits for results (blocking)
 
-Use `jul ci` when you want to explicitly verify before checkpointing:
+Use `jul ci run` when you want to explicitly verify before checkpointing:
 ```bash
-$ jul ci && jul checkpoint   # Only checkpoint if CI passes
+$ jul ci run && jul checkpoint   # Only checkpoint if CI passes
 ```
 
 ### 6.8 History and Diff Commands

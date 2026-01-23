@@ -27,7 +27,7 @@ func TestStatusHidesStaleCIWithoutConfig(t *testing.T) {
 
 	writeFile(t, repo, "README.md", "hello\n")
 	runCmd(t, repo, env, julPath, "sync")
-	runCmd(t, repo, env, julPath, "ci", "--json")
+	runCmd(t, repo, env, julPath, "ci", "run", "--json")
 
 	writeFile(t, repo, "CHANGELOG.md", "update\n")
 	runCmd(t, repo, env, julPath, "sync")

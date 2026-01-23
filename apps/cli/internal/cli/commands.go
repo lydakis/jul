@@ -37,7 +37,6 @@ func Commands(version string) []Command {
 		newChangesCommand(),
 		newQueryCommand(),
 		newSuggestionsCommand(),
-		newSuggestCommand(),
 		newSuggestionActionCommand("reject", "reject"),
 		newCICommand(),
 		newHooksCommand(),
