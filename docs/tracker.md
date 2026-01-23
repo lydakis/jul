@@ -2,7 +2,7 @@
 
 ## Current Focus (v0.5 Spec Alignment & UX)
 - [x] Remove server API dependency (`JUL_BASE_URL`/client calls); all commands operate locally + git remote only
-- [ ] Implement `jul merge` (conflict resolution flow) per spec
+- [x] Implement `jul merge` (conflict resolution flow) per spec
 - [ ] Implement `jul local` save/restore/list/delete (client-side workspace states)
 - [ ] Implement `jul doctor` to verify remote refspecs/notes support
 - [ ] Add sync modes (`on-command`/`continuous`/`explicit`) and config wiring

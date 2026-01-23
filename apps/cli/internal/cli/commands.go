@@ -26,6 +26,7 @@ func Commands(version string) []Command {
 		newCheckpointCommand(),
 		newReviewCommand(),
 		newTraceCommand(),
+		newMergeCommand(),
 		newSyncCommand(),
 		newStatusCommand(),
 		newLogCommand(),
