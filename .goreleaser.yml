@@ -1,0 +1,45 @@
+version: 2
+
+before:
+  hooks:
+    - ./scripts/fetch-opencode.sh
+
+builds:
+  - id: jul
+    dir: apps/cli
+    main: ./cmd/jul
+    binary: jul
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: jul
+    builds:
+      - jul
+    name_template: "jul_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - src: dist/opencode/{{ .Os }}_{{ .Arch }}/opencode
+        dst: libexec/jul/opencode
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: jul
+    homepage: https://github.com/lydakis/jul
+    description: Jul CLI with bundled OpenCode agent
+    tap:
+      owner: lydakis
+      name: homebrew-jul
+    install: |
+      bin.install "jul"
+      libexec.install "libexec/jul/opencode" => "jul/opencode"

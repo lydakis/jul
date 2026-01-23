@@ -1,0 +1,24 @@
+# OS
+.DS_Store
+
+# Go
+/bin/
+/pkg/
+*.exe
+*.test
+*.out
+*.prof
+
+# Go workspace
+/go.work.sum
+
+# Node
+node_modules/
+
+# Misc
+.env
+.claude/
+.claw/
+dist/
+.jul/
+apps/cli/jul
