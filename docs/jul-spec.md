@@ -86,20 +86,29 @@ Agent (Codex / Claude Code / OpenCode)
 | **Workspace Ref** | Canonical state (`refs/jul/workspaces/...`) — shared across devices |
 | **Workspace Base** | Per-workspace file (`.jul/workspaces/<ws>/base`) — the semantic lease |
 | **Sync Ref** | Device backup (`refs/jul/sync/<user>/<device>/...`) — always pushes |
+| **Trace Sync Ref** | Device trace backup (`refs/jul/trace-sync/...`) — always pushes |
 | **Draft** | Ephemeral commit snapshotting working tree (parent = last checkpoint) |
-| **Checkpoint** | A locked unit of work with Change-Id and generated message |
-| **Change-Id** | Stable identifier that survives amend/rebase (`Iab4f3c2d...`) |
-| **Attestation** | CI/test/coverage results attached to a checkpoint |
+| **Trace** | Fine-grained provenance unit (prompt, agent, session) — side history, keyed by SHA |
+| **Checkpoint** | A locked unit of work with Change-Id, message, and trace_base/trace_head refs |
+| **Change-Id** | Gerrit-style stable identifier that survives amend/rebase (`Iab4f3c2d...`) |
+| **Attestation** | CI/test/coverage results attached to a trace, draft, checkpoint, or published commit |
 | **Suggestion** | Agent-proposed fix targeting a checkpoint |
 | **Local Workspace** | Client-side saved state for fast context switching |
 
-### 2.2 The Draft → Checkpoint → Promote Model
+### 2.2 The Trace → Draft → Checkpoint → Promote Model
 
-Jul uses a three-stage model:
+Jul uses a four-stage model:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  DRAFT                                                                  │
+│  TRACE (side history)                                                   │
+│    • Fine-grained provenance: prompt + agent + session                  │
+│    • Created explicitly (jul trace) or implicitly (jul sync)            │
+│    • Stored as side refs, not in main commit ancestry                   │
+│    • Lightweight CI: lint, typecheck                                    │
+│    • Powers `jul blame` for "how did this line come to exist?"          │
+├─────────────────────────────────────────────────────────────────────────┤
+│  DRAFT (main ancestry)                                                  │
 │    • Shadow snapshot of your working tree                               │
 │    • Continuously updated (every save)                                  │
 │    • Synced to remote automatically                                     │
@@ -111,7 +120,8 @@ Jul uses a three-stage model:
 │  CHECKPOINT                                                             │
 │    • Locked, immutable                                                  │
 │    • Agent generates commit message (or user provides with -m)          │
-│    • Optional: prompt that led to this checkpoint                       │
+│    • Records trace_base + trace_head (for blame)                        │
+│    • Session summary: AI-generated summary of multi-turn work           │
 │    • CI runs, attestation created                                       │
 │    • Review runs, suggestions created                                   │
 │    • New draft automatically started                                    │
@@ -125,7 +135,7 @@ Jul uses a three-stage model:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key insight**: Your working tree can still be "dirty" relative to HEAD (normal git). But Jul continuously snapshots your dirty state as a draft commit and syncs it. You can always recover. The draft is your safety net, not your workspace. `jul checkpoint` is when you say "this is a logical unit." Checkpoints are real git commits, but they do **not** move `refs/heads/*`. Only `jul promote` updates branches.
+**Key insight**: Your working tree can still be "dirty" relative to HEAD (normal git). But Jul continuously snapshots your dirty state as a draft commit and syncs it. You can always recover. The draft is your safety net, not your workspace. `jul checkpoint` is when you say "this is a logical unit." Traces track *how* you got there.
 
 ### 2.3 Workspaces Replace Branches
 
@@ -156,7 +166,7 @@ jul promote --to main           # Publish
 Jul works at multiple levels. Choose your porcelain:
 All modes work offline; add a remote only when you want sync/collaboration.
 
-#### 2.5.1 Full Jul Mode
+#### 2.4.1 Full Jul Mode
 
 Jul is your primary interface.
 
@@ -168,7 +178,7 @@ $ jul checkpoint                        # Lock + message + CI + review
 $ jul promote --to main                 # Publish
 ```
 
-#### 2.5.2 Git + Jul (Invisible Infrastructure)
+#### 2.4.2 Git + Jul (Invisible Infrastructure)
 
 Git is your porcelain. Jul can sync in background via hooks when a remote is configured.
 
@@ -181,7 +191,7 @@ $ jul status                            # Check attestations
 $ jul promote --to main                 # When ready
 ```
 
-#### 2.5.3 JJ + Jul
+#### 2.4.3 JJ + Jul
 
 JJ handles local workflow. Jul handles optional remote sync/policy.
 
@@ -193,7 +203,7 @@ $ jul sync --daemon &                   # Background sync
 $ jul promote --to main
 ```
 
-#### 2.5.4 Agent Mode
+#### 2.4.4 Agent Mode
 
 Agents use Jul programmatically with `--json` on all commands.
 
@@ -276,6 +286,199 @@ main:
   Ief6a... "feat: add refresh tokens"    ← your work
 ```
 
+### 2.6 Traces (Provenance Side History)
+
+**The problem Mitchell Hashimoto identified:** "I need a `git blame` equivalent that maps each line back to the prompt that created it."
+
+A checkpoint might come from 20 prompts and 50 file edits. Standard `git blame` shows the checkpoint SHA, but not *how* the code evolved within that checkpoint.
+
+**Solution: Traces as side history.**
+
+Traces capture fine-grained provenance (prompt, agent, session) without polluting the main commit ancestry:
+
+```
+Primary ancestry (clean, for promote):
+  checkpoint0 ← checkpoint1 ← checkpoint2 → main
+
+Side history (for blame/provenance):
+  refs/jul/traces/george/@  →  t3 ← t2 ← t1
+                               (single tip ref, parent chain provides history)
+```
+
+**Naming clarity:**
+- **Change-Id** (`Iab4f...`): Gerrit-style stable identifier for a checkpoint
+- **Trace ID** (`t1`, `t2`): Identifier for a provenance unit within the trace chain
+
+**Trace creation:**
+
+```bash
+# Explicit trace with prompt (harness calls this)
+$ jul trace --prompt "add user authentication" --agent claude-code
+
+# Or sync creates trace implicitly
+$ jul sync   # creates trace from working tree, no prompt
+
+# With full session context
+$ jul trace \
+  --prompt "fix the failing test" \
+  --agent claude-code \
+  --session-id abc123 \
+  --turn 5
+```
+
+**How it flows:**
+
+```
+Agent prompt: "add auth"
+  │
+  ▼
+jul trace --prompt "add auth" --agent claude-code
+  → creates trace t1 (parent = previous trace or null)
+  → updates refs/jul/traces/george/@ to point to t1
+  
+Agent prompt: "use JWT instead"
+  │
+  ▼
+jul trace --prompt "use JWT instead" --agent claude-code
+  → creates trace t2 (parent = t1)
+  → updates refs/jul/traces/george/@ to point to t2
+
+jul sync
+  → pushes trace ref (single ref, not N refs)
+  → creates draft (tree = t2's tree, parent = last checkpoint)
+  → draft is STILL a sibling, not end of trace chain
+
+jul checkpoint "feat: add auth"
+  → flushes final trace t3 if working tree changed since t2
+  → creates checkpoint (parent = last checkpoint)
+  → records in notes: {trace_base: t0, trace_head: t3}
+  → trace chain stays for blame
+```
+
+**Ref structure (single tip, not N refs):**
+
+Instead of N refs per trace:
+```
+refs/jul/traces/george/@/t1   # Bad: ref explosion
+refs/jul/traces/george/@/t2
+refs/jul/traces/george/@/t3
+```
+
+Single tip ref with parent chain:
+```
+refs/jul/traces/george/@      # Points to t3
+                              # t3.parent = t2, t2.parent = t1
+```
+
+This avoids ref explosion (fetch negotiation, packed-refs size, host limits).
+
+**Why side history, not primary ancestry?**
+
+1. **Merge stays simple** — Two devices with different trace chains? Merge the trees, merge the trace tips.
+2. **`git log` stays clean** — No 9 million micro-commits.
+3. **Checkpoint model unchanged** — All the sync/promote machinery works as designed.
+4. **Provenance is durable** — `jul blame` can query: line → checkpoint → traces → prompt
+
+**Multi-device trace merge:**
+
+When two devices produce different trace chains:
+
+```
+Device A: t1 ← t2 ← t3 (tip)
+Device B: t1 ← t4 ← t5 (tip)
+
+After workspace merge, trace history also merges:
+  t1 ← t2 ← t3 ─┐
+                ├─ t6 (merge trace, two parents)
+  t1 ← t4 ← t5 ─┘
+
+refs/jul/traces/george/@ now points to t6
+```
+
+This keeps main ancestry clean while letting `jul blame` traverse the DAG and attribute lines to the real origin trace, not just "merge happened."
+
+**Checkpoint metadata (base + head, not list):**
+
+```json
+{
+  "checkpoint": "Iab4f...",
+  "sha": "def456",
+  "trace_base": "t0_sha",       // Previous checkpoint's trace tip (or null)
+  "trace_head": "t3_sha",       // Current trace tip
+  "trace_heads": ["t3", "t5"],  // If merge produced multiple heads
+  "session_summary": "Added auth with JWT. First tried sessions, switched after test failures."
+}
+```
+
+Blame walks from head(s) to base. Tiny metadata, same power. Avoids blowing 16KB notes limit.
+
+**Privacy defaults (secrets can leak in summaries too!):**
+
+```toml
+[traces]
+sync_prompt_hash = true       # Always sync (cannot leak secrets)
+sync_prompt_summary = false   # Opt-in — summaries CAN leak paraphrased secrets!
+sync_prompt_full = false      # Opt-in — definitely can leak
+```
+
+| Setting | Default | What syncs | Risk |
+|---------|---------|-----------|------|
+| `sync_prompt_hash` | true | SHA-256 hash | None |
+| `sync_prompt_summary` | false | AI summary | Medium (can paraphrase secrets) |
+| `sync_prompt_full` | false | Full text | High |
+
+If `sync_prompt_summary = true`, Jul runs a secret scrubber before syncing (detects API keys, passwords, tokens). But scrubbing isn't perfect — if you're paranoid, keep summaries local.
+
+```bash
+$ jul blame src/auth.py --prompts
+
+44 │ Iab4f... (sha:abc123) claude-code
+   │ Prompt: [hash only, summary stored locally]
+
+# If you have summary locally:
+$ jul blame src/auth.py --prompts --local
+
+44 │ Iab4f... (sha:abc123) claude-code
+   │ Summary: "Added null check for auth token"
+   │ Prompt: "add null check for missing auth token"
+```
+
+This prevents accidental secret exfiltration to remotes.
+
+**Checkpoint flush rule:**
+
+`jul checkpoint` MUST flush a final trace before creating the checkpoint:
+
+1. If working tree differs from last trace → create final trace (tree matches)
+2. Then create checkpoint with trace_head = final trace
+
+This ensures checkpoint tree and trace_head tree are identical. Otherwise blame becomes "almost right" (which is worse than wrong).
+
+**Integration modes:**
+
+| Mode | How traces are created | Prompt attached? |
+|------|------------------------|------------------|
+| **Harness integration** | Harness calls `jul trace --prompt "..."` | Yes |
+| **Manual** | User calls `jul trace` | Optional |
+| **Auto (no harness)** | `jul sync` creates trace implicitly | No |
+
+Without harness integration, you still get file-level blame (which trace introduced which files), just no semantic context.
+
+**CI on traces:**
+
+Traces get cheap, fast checks (lint, typecheck). Full CI runs on checkpoint.
+
+```bash
+$ jul log --traces
+Iab4f... "feat: add auth"
+  ├── (sha:abc1) claude-code "add auth" (auth.py, models.py)
+  │       ✓ lint pass, ✓ typecheck pass
+  ├── (sha:def2) claude-code "use JWT instead" (auth.py)
+  │       ✓ lint pass, ✗ typecheck fail
+  └── (sha:ghi3) claude-code "fix type error" (auth.py)
+          ✓ lint pass, ✓ typecheck pass
+```
+
 ---
 
 ## 3. Git Layer: Ref Namespaces
@@ -335,10 +538,103 @@ refs/jul/sync/george/swift-tiger/feature-auth
 - When not diverged: workspace = sync (same commit)
 - When diverged: workspace ≠ sync (must merge to reunify)
 
-### 3.4 Suggestion Refs
+### 3.4 Trace Refs (Provenance Side History)
+
+Traces mirror the workspace/sync pattern with two ref levels:
 
 ```
-refs/jul/suggest/<change_id>/<suggestion_id>
+refs/jul/traces/<user>/<workspace>              # Canonical tip (advances with workspace)
+refs/jul/trace-sync/<user>/<device>/<workspace> # Device backup (always pushes)
+```
+
+**Why two levels?** Same reason as workspace/sync: canonical tip advances only when workspace does, but device backup never loses work even during "conflicts pending" state.
+
+Examples:
+```
+refs/jul/traces/george/@                    # Canonical trace tip
+refs/jul/trace-sync/george/swift-tiger/@    # Laptop's trace backup
+refs/jul/trace-sync/george/quiet-mountain/@ # Desktop's trace backup
+```
+
+**Not N refs per trace:** To avoid ref explosion (fetch negotiation, packed-refs, host limits), we store one tip ref per workspace, not one ref per trace commit.
+
+**Trace chain structure:**
+```
+refs/jul/traces/george/@  →  abc123  (tip SHA)
+                              │
+                              ▼
+                            def456
+                              │
+                              ▼
+                            ghi789
+                              │
+                              ▼
+                            (null or previous checkpoint's trace_head)
+```
+
+**Trace ID is display-only:** The `t1, t2, t3` notation is for human readability (computed from position in chain or short SHA). Everything is keyed by the trace commit SHA, not a separate "trace ID" field.
+
+**Multi-device trace merge:** When two devices produce different trace chains, the merge creates a trace merge commit with two parents:
+
+```
+refs/jul/traces/george/@  →  merge_sha  (merge trace)
+                               /   \
+                          abc123   xyz789
+                             │       │
+                          def456   uvw012
+```
+
+The merge trace commit uses strategy `ours` for its tree (tree = current canonical workspace tree). This keeps both device histories reachable without requiring code conflict resolution just to unify traces.
+
+This lets `jul blame` traverse the DAG to find the real origin trace.
+
+**Trace metadata** (stored in notes keyed by trace commit SHA):
+```json
+{
+  "prompt_hash": "sha256:abc123...",
+  "prompt_summary": "Added null check for auth token",
+  "agent": "claude-code",
+  "session_id": "abc123",
+  "turn": 5,
+  "device": "swift-tiger"
+}
+```
+
+Note: No "trace_id" field — use short SHA for display.
+
+**Privacy defaults (secrets can leak in summaries too):**
+
+```toml
+[traces]
+sync_prompt_hash = true       # Always (cannot leak secrets)
+sync_prompt_summary = false   # Opt-in (summaries CAN leak secrets!)
+sync_prompt_full = false      # Opt-in (definitely can leak)
+```
+
+By default, only the prompt hash syncs. Summaries are generated locally and stay local unless explicitly opted in. If `sync_prompt_summary = true`, Jul runs a secret scrubber before syncing (detects API keys, passwords, tokens).
+
+**Local storage:**
+```
+.jul/traces/
+├── prompts/           # Full prompt text (keyed by trace SHA)
+└── summaries/         # AI summaries (keyed by trace SHA)
+```
+
+**Lifecycle:**
+- Created by `jul trace` (explicit) or `jul sync` (implicit, if tree changed)
+- Device trace-sync ref always pushes
+- Canonical trace tip advances when canonical workspace advances
+- Referenced by checkpoint metadata: `{trace_base, trace_head}`
+- Cleaned up when associated checkpoint expires
+
+**Idempotency:** `jul sync` does NOT create a new trace if working tree equals current trace tip tree. This prevents trace spam from repeated syncs with no actual changes.
+
+**Not part of main ancestry:** Drafts and checkpoints do NOT have traces as parents. Traces are queryable side data.
+
+### 3.5 Suggestion Refs
+
+```
+refs/jul/suggest/<Change-Id>/<suggestion_id>
 ```
 
 - Points to suggested commit — the actual code changes
@@ -359,7 +655,7 @@ refs/jul/keep/george/@/Iab4f.../abc123  expires
 
 Without this, suggestion refs would accumulate forever even after their checkpoints are GC'd.
 
-### 3.5 Keep Refs
+### 3.6 Keep Refs
 
 ```
 refs/jul/keep/<workspace>/<change_id>/<sha>
@@ -367,16 +663,16 @@ refs/jul/keep/<workspace>/<change_id>/<sha>
 
 Anchors checkpoints for retention/fetchability. Without a ref, git may GC unreachable commits.
 
-### 3.6 Notes Namespaces
+### 3.7 Notes Namespaces
 
 **Synced notes (pushed to remote):**
 ```
 refs/notes/jul/attestations/checkpoint   # Checkpoint CI results (keyed by SHA)
 refs/notes/jul/attestations/published    # Published CI results (keyed by SHA)
+refs/notes/jul/traces                    # Trace metadata (prompt hash, summary, agent)
 refs/notes/jul/review                    # Review comments  
 refs/notes/jul/meta                      # Change-Id mappings
 refs/notes/jul/suggestions               # Suggestion metadata
-refs/notes/jul/prompts                   # Optional: prompts that led to checkpoints
 ```
 
 **Local-only storage (not synced):**
@@ -384,11 +680,12 @@ refs/notes/jul/prompts                   # Optional: prompts that led to checkpo
 .jul/ci/                  # Draft attestations (device-scoped, ephemeral)
 .jul/workspaces/<ws>/     # Per-workspace tracking (workspace_base)
 .jul/local/               # Saved local workspace states
+.jul/traces/              # Full prompt text (when sync_prompts != "full")
 ```
 
 Notes are pushed with explicit refspecs. Draft attestations are local-only by default to avoid multi-device write contention.
 
-### 3.7 Complete Ref Layout
+### 3.8 Complete Ref Layout
 
 ```
 refs/
@@ -401,25 +698,40 @@ refs/
 │   │   └── <user>/
 │   │       ├── @
 │   │       └── <named>
-│   ├── sync/                        # Device backups (per-device)
+│   ├── sync/                        # Device backups for drafts (per-device)
+│   │   └── <user>/
+│   │       └── <device>/
+│   │           ├── @
+│   │           └── <named>
+│   ├── traces/                      # Canonical trace tips (advances with workspace)
+│   │   └── <user>/
+│   │       ├── @                    # Points to trace tip SHA, parent chain provides history
+│   │       └── <named>
+│   ├── trace-sync/                  # Device backups for traces (always pushes)
 │   │   └── <user>/
 │   │       └── <device>/
 │   │           ├── @
 │   │           └── <named>
 │   ├── suggest/
-│   │   └── <change_id>/
+│   │   └── <Change-Id>/             # Gerrit-style Change-Id (Iab4f...)
 │   │       └── <suggestion_id>
 │   └── keep/
 │       └── <workspace>/
-│           └── <change_id>/
+│           └── <Change-Id>/
 │               └── <sha>
 └── notes/jul/
-    ├── attestations
+    ├── attestations/
+    │   ├── checkpoint
+    │   └── published
+    ├── traces                       # Trace metadata (prompt hash, agent, session)
     ├── review
     ├── meta
-    ├── suggestions
-    └── prompts
+    └── suggestions
 ```
+
+**Note:** No `refs/notes/jul/prompts` — prompt data is either:
+- Trace-level: stored in `refs/notes/jul/traces` (per-turn, from harness)
+- Checkpoint-level: the commit message itself (high-level intent)
 
 ---
 
@@ -751,6 +1063,46 @@ After `jul merge`:
 - Git: conflict blocks you immediately
 - Jul: no-conflict cases auto-merge; conflicts deferred until you're ready
 
+#### Trace Sync Algorithm
+
+Traces mirror the workspace/sync pattern:
+
+```
+refs/jul/traces/george/@                    ← canonical trace tip
+refs/jul/trace-sync/george/swift-tiger/@    ← this device's trace backup
+```
+
+**The trace sync algorithm (runs as part of `jul sync`):**
+
+1. **Push** to device's trace-sync ref with `--force` (always succeeds)
+2. **Fetch** canonical trace tip → `trace_remote`
+3. **Compare** `trace_remote` to local trace tip
+4. **If same or fast-forward**: canonical trace = local (simple case)
+5. **If diverged** (both devices created traces):
+   - Create **trace merge commit** with two parents: `trace_remote` and local tip
+   - Tree = current canonical workspace tree (strategy `ours`)
+   - Push trace merge as new canonical tip
+
+```
+Before merge:
+  Device A trace: t1 ← t2 ← t3
+  Device B trace: t1 ← t4 ← t5
+
+After trace merge:
+  Canonical:  t1 ← t2 ← t3 ─┐
+                             ├─ merge_trace (tree = workspace tree)
+              t1 ← t4 ← t5 ─┘
+```
+
+**Why strategy `ours` for trace merge tree?** The trace merge exists purely to keep both device histories reachable for `jul blame`. The actual code state is determined by the workspace merge, not the trace merge. So we use the canonical workspace tree (which may be the result of a separate code merge) as the trace merge tree.
+
+**Timing:** Trace sync happens atomically with workspace sync:
+- Workspace diverged + traces diverged → both get merge commits
+- Workspace not diverged + traces diverged → trace merge, workspace fast-forward
+- "Conflicts pending" state → trace-sync refs still push (nothing lost), canonical trace tip waits until workspace resolves
+
+**Idempotency:** If working tree equals current trace tip tree, no new trace is created. This prevents trace spam from repeated syncs.
+
 ### 5.4 Sync Modes
 
 **Local-first:** Jul works with or without a remote.
@@ -977,19 +1329,43 @@ checkpoint_keep_days = -1    # Never expire (infinite)
 
 **Future multi-user consideration:** Don't enable `uploadpack.allowAnySHA1InWant` in multi-tenant scenarios. Keep-refs are the safe path.
 
-### 5.6 Three Classes of Attestations
+### 5.6 Four Classes of Attestations
 
 **Problem:** Rebase/squash changes SHAs. An attestation for checkpoint `abc123` doesn't apply to the rebased commit `xyz789` on main.
 
 **Solution: Separate attestations by lifecycle.**
 
-| Attestation Type | Attached To | Scope | Purpose |
-|------------------|-------------|-------|---------|
-| **Draft** | Current draft SHA | Device-local | Continuous feedback, ephemeral |
-| **Checkpoint** | Original checkpoint SHA | Synced | Pre-integration CI, review |
-| **Published** | Post-rebase SHA on target | Synced | Final verification on main |
+| Attestation Type | Attached To | Scope | CI Level | Purpose |
+|------------------|-------------|-------|----------|---------|
+| **Trace** | Trace SHA | Synced | Cheap (lint, typecheck) | Per-trace provenance |
+| **Draft** | Current draft SHA | Device-local | Full (optional) | Continuous feedback, ephemeral |
+| **Checkpoint** | Original checkpoint SHA | Synced | Full (required) | Pre-integration CI, review |
+| **Published** | Post-rebase SHA on target | Synced | Full (optional) | Final verification on main |
 
-**Draft attestations (continuous CI):**
+**Trace attestations (lightweight, per-trace):**
+
+Each trace gets cheap, fast checks:
+
+```bash
+$ jul trace --prompt "add auth" --agent claude-code
+Trace created (sha:abc1234).
+  ⚡ Running lint, typecheck...
+  ✓ lint: pass
+  ✓ typecheck: pass
+```
+
+Trace attestations are:
+- **Cheap checks only** — lint, typecheck, maybe fast unit tests
+- **Synced** — stored in notes, available for `jul blame`
+- **Provenance data** — "what was CI saying when this line was written?"
+
+```toml
+[ci]
+run_on_trace = true                    # Default: cheap checks on each trace
+trace_checks = ["lint", "typecheck"]   # What to run per-trace
+```
+
+**Draft attestations (full CI, ephemeral):**
 
 By default, CI runs in the background every time the workspace ref updates:
 
@@ -1150,27 +1526,24 @@ Notes refs can have non-fast-forward conflicts. Avoid with clear ownership:
 | `refs/notes/jul/attestations` | CI runner | Test results (summaries only) |
 | `refs/notes/jul/review` | Review agent | Review comments |
 | `refs/notes/jul/suggestions` | Review agent | Suggestion metadata |
-| `refs/notes/jul/prompts` | Client | Prompt metadata |
+| `refs/notes/jul/traces` | Client | Trace metadata (prompt hash, agent, session) |
 
 **Suggestions storage:**
 
 Suggestions have two parts:
-- **Patch commits**: `refs/jul/suggest/<change_id>/<suggestion_id>` — actual code
+- **Patch commits**: `refs/jul/suggest/<Change-Id>/<suggestion_id>` — actual code
 - **Metadata**: `refs/notes/jul/suggestions` — reasoning, confidence, status
 
 Commits carry the heavy diffs; notes stay small.
 
-**Prompts privacy:**
+**Trace prompt privacy:**
 
-Prompts often contain secrets. By default, prompts are local-only:
+See section 2.6 for full privacy settings. Summary:
+- `sync_prompt_hash = true` (default) — hash always syncs, cannot leak secrets
+- `sync_prompt_summary = false` (default) — summaries stay local (can leak paraphrased secrets)
+- `sync_prompt_full = false` (default) — full text stays local
 
-```toml
-[prompts]
-storage = "local"   # local | sync
-```
-
-`local`: stored in notes but never pushed
-`sync`: pushed to remote (opt-in only)
+Local storage for prompts and summaries: `.jul/traces/`
 
 ### 5.8 Summary: Git Object Model
 
@@ -1363,9 +1736,58 @@ Flags:
 - `--daemon` — Run as background watcher (continuous mode)
 - `--json` — JSON output
 
+#### `jul trace`
+
+Create a trace (provenance snapshot) with optional prompt/agent metadata.
+
+```bash
+# Explicit trace (no prompt)
+$ jul trace
+Trace created (sha:abc1234).
+
+# With prompt (harness calls this)
+$ jul trace --prompt "add user authentication" --agent claude-code
+Trace created (sha:def5678).
+  Agent: claude-code
+  Prompt: "add user authentication" [synced as hash]
+
+# With full session context
+$ jul trace \
+  --prompt "fix the failing test" \
+  --agent claude-code \
+  --session-id abc123 \
+  --turn 5
+Trace created (sha:ghi9012).
+  Agent: claude-code (session abc123, turn 5)
+  Prompt: "fix the failing test"
+```
+
+For long prompts, use stdin:
+```bash
+$ echo "$PROMPT" | jul trace --prompt-stdin --agent claude-code
+```
+
+**When to use:**
+
+| Scenario | Command |
+|----------|---------|
+| Harness integration | Harness calls `jul trace --prompt "..." --agent ...` after each turn |
+| Manual trace boundary | User calls `jul trace` |
+| No explicit traces | `jul sync` creates trace implicitly (no prompt attached) |
+
+Traces are stored as side history (not in checkpoint ancestry). Use `jul blame` to query.
+
+Flags:
+- `--prompt <text>` — Attach prompt text
+- `--prompt-stdin` — Read prompt from stdin
+- `--agent <name>` — Agent that created this trace
+- `--session-id <id>` — Session identifier (for multi-turn tracking)
+- `--turn <n>` — Turn number within session
+- `--json` — JSON output
+
 #### `jul merge`
 
-Resolve diverged state. Agent handles conflicts automatically.
+Resolve diverged state. Agent handles conflicts automatically. See [6.6 Merge Command](#66-merge-command) for full details.
 
 ```bash
 $ jul merge
@@ -1381,9 +1803,6 @@ Accept? [y/n] y
   ✓ Workspace ref updated
   ✓ workspace_base updated
 ```
-
-Flags:
-- `--json` — JSON output
 
 #### `jul checkpoint`
 
@@ -1921,9 +2340,32 @@ Ief6a... (1d ago) "initial project structure"
         ✓ CI passed
 ```
 
+With trace history (provenance):
+```bash
+$ jul log --traces
+
+Icd5e... (2h ago) "fix: null check on token"
+        Author: george
+        ✓ CI passed
+  └── 1 trace:
+      (sha:abc1) claude-code "fix the failing test" (auth.py)
+          ✓ lint, ✓ typecheck
+
+Iab4f... (4h ago) "feat: add JWT validation"
+        Author: george
+        ✓ CI passed, 1 suggestion
+  └── 3 traces:
+      (sha:def2) george (manual) (auth.py, models.py)
+      (sha:ghi3) claude-code "use JWT instead" (auth.py)
+          ✓ lint, ✗ typecheck
+      (sha:jkl4) claude-code "fix type error" (auth.py)
+          ✓ lint, ✓ typecheck
+```
+
 Flags:
 - `--limit <n>` — Show last n checkpoints
 - `--change-id <id>` — Filter by Change-Id
+- `--traces` — Show trace history (prompts, agents, per-trace CI)
 - `--json` — JSON output
 
 #### `jul diff`
@@ -1972,6 +2414,88 @@ Files changed:
   A src/jwt_utils.py (+128)
   M tests/test_auth.py (+67 -12)
 ```
+
+#### `jul blame`
+
+Show line-by-line provenance: checkpoint, trace, prompt, agent.
+
+```bash
+$ jul blame src/auth.py
+
+42 │ def validate_token(request):     Iab4f... (sha:abc1) george (manual)
+43 │     token = request.headers...   Iab4f... (sha:abc1) george (manual)
+44 │     if not token:                 Iab4f... (sha:def2) claude-code
+45 │         raise AuthError(...)      Iab4f... (sha:def2) claude-code
+46 │     user = validate_jwt(token)    Iab4f... (sha:abc1) george (manual)
+```
+
+With prompts:
+```bash
+$ jul blame src/auth.py --prompts
+
+42-43 │ Iab4f... (sha:abc1) george (manual)
+      │ No prompt (manual edit)
+
+44-45 │ Iab4f... (sha:def2) claude-code
+      │ Prompt: [hash only, summary stored locally]
+```
+
+With full prompt text (if available locally):
+```bash
+$ jul blame src/auth.py --prompts --local
+
+44-45 │ Iab4f... (sha:def2) claude-code
+      │ Summary: "Added null check for auth token"
+      │ Prompt: "add null check for missing auth token"
+```
+
+With full context:
+```bash
+$ jul blame src/auth.py --verbose
+
+44-45 │ Iab4f... (sha:def2) claude-code
+      │ Checkpoint: "feat: add JWT validation"
+      │ Trace: def2... (2026-01-19 15:32:00)
+      │ Agent: claude-code
+      │ Session: abc123, turn 5
+      │ Summary: "Added null check for auth token"
+      │ Prompt: [stored locally]
+      │ CI at trace: ✓ lint, ✓ typecheck
+```
+
+Line range:
+```bash
+$ jul blame src/auth.py:40-50
+```
+
+Flags:
+- `--prompts` — Show prompts/summaries that led to each line
+- `--local` — Include full prompt text from local storage
+- `--verbose` — Show full context (session, CI state)
+- `--json` — JSON output (for tooling integration)
+- `--no-trace` — Show only checkpoint, not trace-level detail
+
+**JSON output** (for IDE integration):
+```json
+{
+  "file": "src/auth.py",
+  "lines": [
+    {
+      "line": 44,
+      "content": "    if not token:",
+      "checkpoint_change_id": "Iab4f...",
+      "trace_sha": "def2abc...",
+      "agent": "claude-code",
+      "prompt_hash": "sha256:abc123...",
+      "prompt_summary": null,
+      "session_id": "abc123",
+      "turn": 5
+    }
+  ]
+}
+```
+
+Note: `prompt_summary` is null by default (stays local). Only populated if `sync_prompt_summary = true` and the summary was synced.
 
 #### `jul query`
 
@@ -2083,8 +2607,10 @@ enabled = true
 run_on_checkpoint = true
 min_confidence = 70
 
-[prompts]
-storage = "local"                # local | sync
+[traces]
+sync_prompt_hash = true          # Always sync (cannot leak)
+sync_prompt_summary = false      # Summaries stay local by default
+sync_prompt_full = false         # Full text stays local by default
 ```
 
 ### 7.2 Device Config
@@ -2107,20 +2633,14 @@ provider = "opencode"
 [providers.opencode]
 command = "opencode"
 protocol = "jul-agent-v1"
-headless = "opencode run --format json --file $ATTACHMENT $PROMPT"
 
 [providers.claude-code]
 command = "claude"
 protocol = "jul-agent-v1"
-headless = "claude -p $PROMPT --output-format json --permission-mode acceptEdits"
 
 [providers.codex]
 command = "codex"
 protocol = "jul-agent-v1"
-headless = "codex exec --output-format json --full-auto $PROMPT"
-
-[providers.codex.actions.review]
-headless = "codex exec \"/review $PROMPT\" --output-format json --full-auto"
 ```
 
 ### 7.4 Repo Config
@@ -2538,7 +3058,7 @@ provider = "opencode"              # Bundled, works out of box
 [providers.opencode]
 command = "opencode"
 bundled = true
-headless = "opencode run --format json --file $ATTACHMENT $PROMPT"
+headless = "opencode run --model $MODEL \"$PROMPT\" -f json"
 timeout_seconds = 300
 
 [providers.claude-code]
@@ -2552,9 +3072,6 @@ command = "codex"
 bundled = false                    # User must install
 headless = "codex exec \"$PROMPT\" --output-format json --full-auto"
 timeout_seconds = 300
-
-[providers.codex.actions.review]
-headless = "codex exec \"/review $PROMPT\" --output-format json --full-auto"
 
 [sandbox]
 enable_network = false             # Agent can't make network calls
@@ -2649,11 +3166,13 @@ All commands support `--json` for external agent consumption:
 ```bash
 $ jul status --json
 $ jul sync --json
+$ jul trace --json
 $ jul merge --json
 $ jul checkpoint --json  
 $ jul log --json
 $ jul diff --json
 $ jul show <id> --json
+$ jul blame <file> --json
 $ jul suggestions --json
 $ jul apply 01HX... --json
 $ jul reject 01HX... --json
@@ -2765,33 +3284,49 @@ This is future work. For v1, any git remote works.
 | Term | Definition |
 |------|------------|
 | **Agent Workspace** | Isolated git worktree (`.jul/agent-workspace/worktree/`) where internal agent works |
-| **Attestation** | CI/test/coverage results attached to a commit (draft, checkpoint, or published) |
+| **Attestation** | CI/test/coverage results attached to a commit (trace, draft, checkpoint, or published) |
 | **Auto-merge** | 3-way merge producing single-parent draft commit (NOT a 2-parent merge commit) |
-| **Change-Id** | Stable identifier (`Iab4f...`) for a checkpoint |
-| **Checkpoint** | Locked unit of work with message and Change-Id |
+| **Change-Id** | Gerrit-style stable identifier (`Iab4f...`) for a checkpoint |
+| **Checkpoint** | Locked unit of work with message, Change-Id, and trace_base/trace_head refs |
 | **Checkpoint Base Divergence** | When one device checkpointed while another has draft on old base |
+| **Checkpoint Flush** | Rule that `jul checkpoint` must create final trace so trace_head tree = checkpoint tree |
 | **CI Coalescing** | Only latest draft SHA runs CI; older runs cancelled/ignored |
 | **Device ID** | Random word pair (e.g., "swift-tiger") identifying this machine |
 | **Draft** | Ephemeral commit snapshotting working tree (parent = last checkpoint) |
 | **Draft Attestation** | Device-local CI results for current draft (ephemeral, not synced) |
 | **External Agent** | Coding agent (Claude Code, Codex) that uses Jul for feedback |
+| **Harness Integration** | Agent harness calls `jul trace --prompt "..."` to attach rich provenance |
 | **Headless Mode** | Non-interactive agent invocation for automation |
 | **Internal Agent** | Configured provider (OpenCode bundled) that runs reviews/merge resolution |
+| **jul blame** | Command showing line-by-line provenance: checkpoint → trace → prompt → agent |
 | **Keep-ref** | Ref that anchors a checkpoint for retention |
 | **Local Workspace** | Client-side saved state for fast context switching |
 | **Merge** | Agent-assisted resolution when sync has actual conflicts |
 | **Promote** | Move checkpoints to a target branch (main) |
-| **Prompt** | Optional metadata: the instruction that led to a checkpoint |
+| **Prompt Hash** | SHA-256 hash of prompt text (always synced, cannot leak secrets) |
+| **Prompt Summary** | AI-generated summary of prompt (local-only by default, opt-in sync with scrubbing) |
+| **Secret Scrubber** | Pre-sync filter that detects API keys, passwords, tokens in summaries |
+| **Session Summary** | AI-generated summary of multi-turn conversation that produced a checkpoint |
 | **Shadow Index** | Separate index file so Jul doesn't interfere with git staging |
+| **Side History** | Trace refs stored separately from main commit ancestry (for provenance without pollution) |
 | **Stale Suggestion** | Suggestion created against an old checkpoint SHA (checkpoint was amended) |
 | **Suggestion** | Agent-proposed fix tied to a Change-Id and base SHA, with apply/reject lifecycle |
 | **Suggestion Base SHA** | The exact checkpoint SHA a suggestion was created against |
 | **Sync** | Fetch, push to sync ref, auto-merge if no conflicts, defer if conflicts |
 | **Sync Ref** | Device's backup stream (`refs/jul/sync/<user>/<device>/...`) |
+| **Trace** | Fine-grained provenance unit with prompt/agent/session metadata (side history), keyed by SHA |
+| **Trace Attestation** | Lightweight CI results (lint, typecheck) attached to a trace |
+| **Trace Merge** | Merge commit in trace side-history with two parents; uses strategy `ours` for tree |
+| **Trace Sync Ref** | Device's trace backup (`refs/jul/trace-sync/<user>/<device>/...`), always pushes |
+| **trace_base** | Checkpoint metadata: previous checkpoint's trace tip SHA (or null) |
+| **trace_head** | Checkpoint metadata: current trace tip SHA |
+| **Trace Tip** | Canonical trace ref (`refs/jul/traces/<user>/<ws>`), advances with workspace |
 | **Transplant** | (Future) Rebase draft from one checkpoint base to another |
 | **Workspace** | Named stream of work (replaces branches) |
 | **Workspace Base** | Per-workspace file (`.jul/workspaces/<ws>/base`) tracking last merged SHA |
 | **Workspace Ref** | Canonical state (`refs/jul/workspaces/...`) — shared across devices |
+
+**Note:** "Trace ID" (e.g., "t1", "t2") is display-only for human readability. Internally, everything is keyed by trace commit SHA.
 
 ---
 

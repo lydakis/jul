@@ -1,5 +1,13 @@
 # Jul Build Tracker
 
+## Current Focus (v0.4 Trace/Provenance)
+- [ ] Trace system (side history) + refs (`refs/jul/traces`, `refs/jul/trace-sync`)
+- [ ] `jul trace` command + trace metadata (prompt hash/summary/agent/session)
+- [ ] Trace privacy + local storage (`.jul/traces/`, scrubber)
+- [ ] Trace CI (lightweight attestations) + config (`run_on_trace`, `trace_checks`)
+- [ ] `jul blame` (checkpoint + trace provenance)
+- [ ] Replace prompt notes with trace metadata (remove `refs/notes/jul/prompts`)
+
 ## Current Focus (v0.3 Pivot: Local-First)
 - [x] Local sync engine: shadow-index draft commits + `refs/jul/sync/<user>/<device>/<ws>`
 - [x] Device ID + `workspace_base` tracking per workspace
@@ -13,7 +21,7 @@
 - [x] Workspace ref lease + auto-merge flow (`jul sync`, `jul merge`)
 - [x] Local metadata in notes (attestations, suggestions)
 - [x] Notes for review (local-only by default)
-- [x] Notes for prompts (optional, local-only by default)
+- [x] Notes for prompts (optional, local-only by default) [superseded by trace metadata]
 - [x] Agent sandbox + review pipeline (internal agent)
 - [x] Agent headless prompt mode (external providers)
 - [x] `jul ws checkout` + local workspace save/restore integration
