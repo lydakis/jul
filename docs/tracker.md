@@ -5,10 +5,10 @@
 - [x] Remove server API dependency (`JUL_BASE_URL`/client calls); all commands operate locally + git remote only
 - [x] Implement `jul merge` (conflict resolution flow) per spec
 - [ ] Implement `jul submit` (one workspace = one review) + `review-state`/`review-comments` notes
-- [ ] Implement `jul ws stack` (stacked workspaces, based on latest checkpoint; require checkpoint)
+- [x] Implement `jul ws stack` (stacked workspaces, based on latest checkpoint; require checkpoint)
 - [x] Implement `jul local` save/restore/list/delete (client-side workspace states)
-- [ ] Implement `jul ws new` to create workspace + start draft (not just set config)
-- [ ] Implement `jul ws switch` to save/restore local state + sync + fetch + lease update
+- [x] Implement `jul ws new` to create workspace + start draft (not just set config)
+- [x] Implement `jul ws switch` to save/restore local state + sync + fetch + lease update
 - [ ] Add `jul remote clear` to unset remote selection
 - [ ] Align `jul init` with spec: start draft, ensure workspace ready, align output
 - [ ] Align `jul suggestions` default to current base (exclude stale suggestions unless requested)

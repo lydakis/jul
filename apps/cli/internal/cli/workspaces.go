@@ -12,6 +12,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
+	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
 func newWorkspaceCommand() Command {
@@ -30,10 +31,14 @@ func newWorkspaceCommand() Command {
 				return runWorkspaceList(args[1:])
 			case "checkout":
 				return runWorkspaceCheckout(args[1:])
-			case "set", "new":
+			case "set":
 				return runWorkspaceSet(args[1:])
+			case "new":
+				return runWorkspaceNew(args[1:])
 			case "switch":
 				return runWorkspaceSwitch(args[1:])
+			case "stack":
+				return runWorkspaceStack(args[1:])
 			case "rename":
 				return runWorkspaceRename(args[1:])
 			case "delete":
@@ -80,16 +85,10 @@ func runWorkspaceSet(args []string) int {
 		return 1
 	}
 
-	wsID := name
-	if !strings.Contains(name, "/") {
-		owner := strings.TrimSpace(*user)
-		if owner == "" {
-			owner = config.ServerUser()
-		}
-		if owner == "" {
-			owner = strings.Split(config.WorkspaceID(), "/")[0]
-		}
-		wsID = owner + "/" + name
+	wsID, _, _, err := resolveWorkspaceID(name, *user)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
 	}
 
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
@@ -97,6 +96,152 @@ func runWorkspaceSet(args []string) int {
 		return 1
 	}
 	fmt.Fprintf(os.Stdout, "Workspace set to %s\n", wsID)
+	return 0
+}
+
+func runWorkspaceNew(args []string) int {
+	fs := flag.NewFlagSet("ws new", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	user := fs.String("user", "", "Override user for workspace id")
+	_ = fs.Parse(args)
+
+	name := strings.TrimSpace(fs.Arg(0))
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "workspace name required")
+		return 1
+	}
+	wsID, wsUser, wsName, err := resolveWorkspaceID(name, *user)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	_, currentWorkspace := workspaceParts()
+	if err := saveWorkspaceState(currentWorkspace); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		return 1
+	}
+	if _, err := syncer.Sync(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		return 1
+	}
+
+	baseSHA, err := currentBaseSHA()
+	if err != nil {
+		if head, err := gitutil.Git("rev-parse", "HEAD"); err == nil {
+			baseSHA = strings.TrimSpace(head)
+		}
+	}
+	treeSHA, err := gitutil.DraftTree()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to snapshot working tree: %v\n", err)
+		return 1
+	}
+	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, baseSHA, treeSHA)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create workspace: %v\n", err)
+		return 1
+	}
+	if err := runGitConfig("jul.workspace", wsID); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "Created workspace '%s'\n", wsName)
+	fmt.Fprintf(os.Stdout, "Draft %s started.\n", strings.TrimSpace(newDraftSHA))
+	return 0
+}
+
+func runWorkspaceSwitch(args []string) int {
+	fs := flag.NewFlagSet("ws switch", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	_ = fs.Parse(args)
+	name := strings.TrimSpace(fs.Arg(0))
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "workspace name required")
+		return 1
+	}
+	_, currentWorkspace := workspaceParts()
+	if err := saveWorkspaceState(currentWorkspace); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		return 1
+	}
+	if _, err := syncer.Sync(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		return 1
+	}
+
+	wsID, wsUser, wsName, err := resolveWorkspaceID(name, "")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	if err := runGitConfig("jul.workspace", wsID); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		return 1
+	}
+	if err := switchToWorkspace(wsUser, wsName); err != nil {
+		fmt.Fprintf(os.Stderr, "switch failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "Switched to workspace '%s'\n", wsName)
+	return 0
+}
+
+func runWorkspaceStack(args []string) int {
+	fs := flag.NewFlagSet("ws stack", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	user := fs.String("user", "", "Override user for workspace id")
+	_ = fs.Parse(args)
+
+	name := strings.TrimSpace(fs.Arg(0))
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "workspace name required")
+		return 1
+	}
+	wsID, wsUser, wsName, err := resolveWorkspaceID(name, *user)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+
+	currentName := workspaceNameOnly()
+	if err := saveWorkspaceState(currentName); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		return 1
+	}
+	if _, err := syncer.Sync(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		return 1
+	}
+
+	checkpoint, err := latestCheckpoint()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read checkpoints: %v\n", err)
+		return 1
+	}
+	if checkpoint == nil {
+		fmt.Fprintln(os.Stderr, "checkpoint required before stacking; run 'jul checkpoint' first")
+		return 1
+	}
+	treeSHA, err := gitutil.TreeOf(checkpoint.SHA)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read checkpoint tree: %v\n", err)
+		return 1
+	}
+	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, checkpoint.SHA, treeSHA)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create stacked workspace: %v\n", err)
+		return 1
+	}
+	if err := runGitConfig("jul.workspace", wsID); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		return 1
+	}
+	if err := resetToDraft(newDraftSHA); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to reset to new workspace: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "Created workspace '%s' (stacked on %s)\n", wsName, currentName)
+	fmt.Fprintf(os.Stdout, "Draft %s started.\n", strings.TrimSpace(newDraftSHA))
 	return 0
 }
 
@@ -201,10 +346,6 @@ func runWorkspaceCheckout(args []string) int {
 	return 0
 }
 
-func runWorkspaceSwitch(args []string) int {
-	return runWorkspaceSet(args)
-}
-
 func runWorkspaceRename(args []string) int {
 	fs := flag.NewFlagSet("ws rename", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
@@ -255,6 +396,145 @@ func runWorkspaceDelete(args []string) int {
 	}
 	fmt.Fprintf(os.Stdout, "Deleted workspace %s\n", target)
 	return 0
+}
+
+func resolveWorkspaceID(name, userOverride string) (string, string, string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", "", "", fmt.Errorf("workspace name required")
+	}
+	if strings.Contains(name, "/") {
+		parts := strings.SplitN(name, "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", "", "", fmt.Errorf("invalid workspace name")
+		}
+		return name, parts[0], parts[1], nil
+	}
+	owner := strings.TrimSpace(userOverride)
+	if owner == "" {
+		owner = config.ServerUser()
+	}
+	if owner == "" {
+		owner = strings.Split(config.WorkspaceID(), "/")[0]
+	}
+	if owner == "" {
+		return "", "", "", fmt.Errorf("workspace user required")
+	}
+	return owner + "/" + name, owner, name, nil
+}
+
+func workspaceNameOnly() string {
+	_, workspace := workspaceParts()
+	if workspace == "" {
+		return "@"
+	}
+	return workspace
+}
+
+func saveWorkspaceState(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	if err := localDelete(name); err == nil {
+		// removed existing snapshot
+	}
+	_, err := localSave(name)
+	return err
+}
+
+func switchToWorkspace(user, workspace string) error {
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return err
+	}
+	remote, rerr := remotesel.Resolve()
+	if rerr == nil {
+		if err := ensureJulRefspecs(repoRoot, remote.Name); err != nil {
+			return err
+		}
+		if _, err := gitutil.Git("-C", repoRoot, "fetch", remote.Name); err != nil {
+			return err
+		}
+	} else if rerr != remotesel.ErrNoRemote && rerr != remotesel.ErrMultipleRemote && rerr != remotesel.ErrRemoteMissing {
+		return rerr
+	}
+
+	ref := workspaceRef(user, workspace)
+	if !gitutil.RefExists(ref) {
+		return fmt.Errorf("workspace ref not found: %s", ref)
+	}
+	sha, err := gitutil.ResolveRef(ref)
+	if err != nil {
+		return err
+	}
+	if err := resetToDraft(sha); err != nil {
+		return err
+	}
+	syncRef, err := syncRef(user, workspace)
+	if err != nil {
+		return err
+	}
+	if err := gitutil.UpdateRef(syncRef, sha); err != nil {
+		return err
+	}
+	if err := writeWorkspaceLease(repoRoot, workspace, sha); err != nil {
+		return err
+	}
+	if err := localRestore(workspace); err != nil {
+		if !strings.Contains(err.Error(), "local state not found") {
+			return err
+		}
+	}
+	return nil
+}
+
+func createWorkspaceDraft(user, workspace, parentSHA, treeSHA string) (string, error) {
+	if strings.TrimSpace(parentSHA) == "" {
+		return "", fmt.Errorf("base commit required")
+	}
+	if strings.TrimSpace(treeSHA) == "" {
+		return "", fmt.Errorf("tree sha required")
+	}
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return "", err
+	}
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return "", err
+	}
+	changeID, err := gitutil.NewChangeID()
+	if err != nil {
+		return "", err
+	}
+	draftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, parentSHA, changeID)
+	if err != nil {
+		return "", err
+	}
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
+	if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
+		return "", err
+	}
+	if err := gitutil.UpdateRef(workspaceRef, draftSHA); err != nil {
+		return "", err
+	}
+	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
+		return "", err
+	}
+	return draftSHA, nil
+}
+
+func resetToDraft(draftSHA string) error {
+	if strings.TrimSpace(draftSHA) == "" {
+		return fmt.Errorf("draft sha required")
+	}
+	if _, err := gitutil.Git("reset", "--hard", draftSHA); err != nil {
+		return err
+	}
+	if _, err := gitutil.Git("clean", "-fd"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func localWorkspaces() ([]client.Workspace, error) {
@@ -347,5 +627,5 @@ func runGitConfig(key, value string) error {
 }
 
 func printWorkspaceUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|checkout|set|new|switch|rename|delete|current]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|checkout|set|new|stack|switch|rename|delete|current]")
 }
