@@ -21,17 +21,25 @@ goreleaser release --snapshot --clean
 ## Publishing releases + Homebrew
 
 1. Create a tap repo (e.g. `lydakis/homebrew-jul`).
-2. Ensure `GITHUB_TOKEN` is set with access to both repos.
-3. Tag and release:
+2. Create a GitHub Actions secret `GORELEASER_TOKEN` with repo access to:
+   - `lydakis/jul`
+   - `lydakis/homebrew-jul`
+3. Tag and push (GitHub Actions runs GoReleaser on tags):
 
 ```bash
 git tag v0.0.1
 git push --tags
-goreleaser release
 ```
 
 GoReleaser writes the brew formula into the tap and installs the bundled agent
 under `libexec/jul/opencode`.
+
+Install:
+
+```bash
+brew tap lydakis/jul
+brew install jul
+```
 
 ## OpenCode version pin
 
