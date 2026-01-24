@@ -188,8 +188,11 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	if err != nil {
 		return CheckpointResult{}, err
 	}
-	if syncRes.Diverged && strings.Contains(syncRes.RemoteProblem, "baseline") {
-		return CheckpointResult{}, errors.New(syncRes.RemoteProblem)
+	if syncRes.Diverged || strings.Contains(syncRes.RemoteProblem, "base divergence") || strings.Contains(syncRes.RemoteProblem, "workspace lease missing") {
+		if strings.TrimSpace(syncRes.RemoteProblem) != "" {
+			return CheckpointResult{}, errors.New(syncRes.RemoteProblem)
+		}
+		return CheckpointResult{}, errors.New("workspace diverged; run 'jul merge' or 'jul ws checkout' to realign")
 	}
 
 	repoRoot, err := gitutil.RepoTopLevel()
