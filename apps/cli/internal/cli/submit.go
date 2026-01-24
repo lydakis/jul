@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
 )
 
@@ -54,14 +55,23 @@ func runSubmit(args []string) int {
 }
 
 func submitReview() (metadata.ReviewState, error) {
-	checkpoint, err := latestCheckpoint()
+	draftSHA, err := currentDraftSHA()
+	if err != nil {
+		return metadata.ReviewState{}, err
+	}
+	draftMsg, _ := gitutil.CommitMessage(draftSHA)
+	changeID := gitutil.ExtractChangeID(draftMsg)
+	if changeID == "" {
+		changeID = changeIDForCommit(draftSHA)
+	}
+
+	checkpoint, err := latestCheckpointForChange(changeID)
 	if err != nil {
 		return metadata.ReviewState{}, err
 	}
 	if checkpoint == nil {
 		return metadata.ReviewState{}, fmt.Errorf("checkpoint required before submit")
 	}
-	changeID := checkpoint.ChangeID
 	anchorSHA, checkpoints, err := changeMetaFromCheckpoints(changeID)
 	if err != nil {
 		return metadata.ReviewState{}, err

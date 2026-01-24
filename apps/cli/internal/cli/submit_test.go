@@ -82,3 +82,34 @@ func TestSubmitWritesReviewState(t *testing.T) {
 		t.Fatalf("expected anchor %s, got %s", first.CheckpointSHA, state.AnchorSHA)
 	}
 }
+
+func TestSubmitRequiresCheckpointForCurrentChange(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	writeFilePath(t, repo, "base.txt", "base\n")
+	runGitCmd(t, repo, "add", "base.txt")
+	runGitCmd(t, repo, "commit", "-m", "base")
+
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	runGitCmd(t, repo, "config", "jul.workspace", "tester/@")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	writeFilePath(t, repo, "feature.txt", "first\n")
+	checkpoint, err := syncer.Checkpoint("feat: first")
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if err := promoteLocal("main", checkpoint.CheckpointSHA, false); err != nil {
+		t.Fatalf("promote failed: %v", err)
+	}
+
+	if code := runSubmit([]string{}); code == 0 {
+		t.Fatalf("expected submit to fail without checkpoint for current change")
+	}
+}
