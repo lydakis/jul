@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lydakis/jul/cli/internal/client"
+	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
 	"github.com/lydakis/jul/cli/internal/metadata"
@@ -242,10 +243,17 @@ func promoteLocal(branch, sha string, force bool) error {
 			}
 		}
 	}
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return err
+	}
 	if err := gitutil.UpdateRef(ref, sha); err != nil {
 		return err
 	}
-	return recordPromoteMeta(branch, sha)
+	if err := recordPromoteMeta(branch, sha); err != nil {
+		return err
+	}
+	return startNewDraftAfterPromote(repoRoot, sha)
 }
 
 func recordPromoteMeta(branch, sha string) error {
@@ -284,6 +292,50 @@ func recordPromoteMeta(branch, sha string) error {
 		Published: []string{sha},
 	})
 	return metadata.WriteChangeMeta(meta)
+}
+
+func startNewDraftAfterPromote(repoRoot, publishedSHA string) error {
+	if strings.TrimSpace(publishedSHA) == "" {
+		return nil
+	}
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return err
+	}
+	newChangeID, err := gitutil.NewChangeID()
+	if err != nil {
+		return err
+	}
+	treeSHA, err := gitutil.TreeOf(publishedSHA)
+	if err != nil {
+		return err
+	}
+	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, publishedSHA, newChangeID)
+	if err != nil {
+		return err
+	}
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
+	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
+		return err
+	}
+	if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+		return err
+	}
+	if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+		return err
+	}
+	if _, err := gitutil.Git("reset", "--hard", newDraftSHA); err != nil {
+		return err
+	}
+	if _, err := gitutil.Git("clean", "-fd"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func changeIDForCommit(sha string) string {

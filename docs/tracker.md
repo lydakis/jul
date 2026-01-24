@@ -16,7 +16,7 @@
 - [ ] Implement `jul doctor` to verify remote refspecs + non‑FF support for `refs/jul/*`
 - [x] Sync idempotency: reuse draft commit when tree unchanged (avoid new commit per status)
 - [x] Base divergence detection: compare draft parents before auto-merge
-- [ ] Change-Id lifecycle: new Change-Id after promote
+- [x] Change-Id lifecycle: new Change-Id after promote
 - [x] Change-Id lifecycle: keep same Change-Id across checkpoints
 - [x] Promote writes `promote_events` + `anchor_sha` into `refs/notes/jul/meta` (for revert)
 - [ ] Add sync modes (`on-command`/`continuous`/`explicit`) and config wiring

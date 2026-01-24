@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
 )
 
@@ -29,7 +31,6 @@ func TestPromoteRecordsChangeMeta(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 	t.Setenv("JUL_WORKSPACE", "tester/@")
 	t.Setenv("HOME", filepath.Join(repo, "home"))
-
 	if err := promoteLocal("main", sha, false); err != nil {
 		t.Fatalf("promote failed: %v", err)
 	}
@@ -55,5 +56,69 @@ func TestPromoteRecordsChangeMeta(t *testing.T) {
 	}
 	if len(meta.PromoteEvents[0].Published) != 1 || meta.PromoteEvents[0].Published[0] != sha {
 		t.Fatalf("expected published [%s], got %+v", sha, meta.PromoteEvents[0].Published)
+	}
+}
+
+func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+
+	changeID := "I3333333333333333333333333333333333333333"
+	writeFilePath(t, repo, "README.md", "hello\n")
+	runGitCmd(t, repo, "add", "README.md")
+	runGitCmd(t, repo, "commit", "-m", "test commit\n\nChange-Id: "+changeID)
+	sha := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	keepRef := "refs/jul/keep/tester/@/" + changeID + "/" + sha
+	runGitCmd(t, repo, "update-ref", keepRef, sha)
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+	t.Setenv("HOME", filepath.Join(repo, "home"))
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		t.Fatalf("failed to get device id: %v", err)
+	}
+
+	if err := promoteLocal("main", sha, false); err != nil {
+		t.Fatalf("promote failed: %v", err)
+	}
+
+	user, workspace := workspaceParts()
+	workspaceRef := workspaceRef(user, workspace)
+	draftSHA, err := gitutil.ResolveRef(workspaceRef)
+	if err != nil {
+		t.Fatalf("failed to resolve workspace ref: %v", err)
+	}
+	if strings.TrimSpace(draftSHA) == "" {
+		t.Fatalf("expected new draft sha")
+	}
+	if strings.TrimSpace(draftSHA) == sha {
+		t.Fatalf("expected new draft sha to differ from promoted sha")
+	}
+
+	draftMsg, err := gitutil.CommitMessage(draftSHA)
+	if err != nil {
+		t.Fatalf("failed to read draft message: %v", err)
+	}
+	draftChangeID := gitutil.ExtractChangeID(draftMsg)
+	if draftChangeID == "" {
+		t.Fatalf("expected Change-Id in new draft message")
+	}
+	if draftChangeID == changeID {
+		t.Fatalf("expected new Change-Id after promote, got %s", draftChangeID)
+	}
+
+	syncRef := "refs/jul/sync/" + user + "/" + deviceID + "/" + workspace
+	syncSHA, err := gitutil.ResolveRef(syncRef)
+	if err != nil {
+		t.Fatalf("failed to resolve sync ref: %v", err)
+	}
+	if strings.TrimSpace(syncSHA) != strings.TrimSpace(draftSHA) {
+		t.Fatalf("expected sync ref to match draft %s, got %s", draftSHA, syncSHA)
 	}
 }
