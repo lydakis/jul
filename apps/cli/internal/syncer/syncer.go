@@ -178,6 +178,16 @@ func finalizeSync(res Result, allowCanonical bool) (Result, error) {
 	return res, nil
 }
 
+func ensureWorkspaceAligned(syncRes Result) error {
+	if syncRes.Diverged || strings.Contains(syncRes.RemoteProblem, "base divergence") || strings.Contains(syncRes.RemoteProblem, "workspace lease missing") {
+		if strings.TrimSpace(syncRes.RemoteProblem) != "" {
+			return errors.New(syncRes.RemoteProblem)
+		}
+		return errors.New("workspace diverged; run 'jul merge' or 'jul ws checkout' to realign")
+	}
+	return nil
+}
+
 func Checkpoint(message string) (CheckpointResult, error) {
 	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true})
 	if err != nil {
@@ -188,11 +198,8 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	if err != nil {
 		return CheckpointResult{}, err
 	}
-	if syncRes.Diverged || strings.Contains(syncRes.RemoteProblem, "base divergence") || strings.Contains(syncRes.RemoteProblem, "workspace lease missing") {
-		if strings.TrimSpace(syncRes.RemoteProblem) != "" {
-			return CheckpointResult{}, errors.New(syncRes.RemoteProblem)
-		}
-		return CheckpointResult{}, errors.New("workspace diverged; run 'jul merge' or 'jul ws checkout' to realign")
+	if err := ensureWorkspaceAligned(syncRes); err != nil {
+		return CheckpointResult{}, err
 	}
 
 	repoRoot, err := gitutil.RepoTopLevel()
@@ -316,11 +323,8 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 	if err != nil {
 		return CheckpointResult{}, err
 	}
-	if syncRes.Diverged || strings.Contains(syncRes.RemoteProblem, "base divergence") || strings.Contains(syncRes.RemoteProblem, "workspace lease missing") {
-		if strings.TrimSpace(syncRes.RemoteProblem) != "" {
-			return CheckpointResult{}, errors.New(syncRes.RemoteProblem)
-		}
-		return CheckpointResult{}, errors.New("workspace diverged; run 'jul merge' or 'jul ws checkout' to realign")
+	if err := ensureWorkspaceAligned(syncRes); err != nil {
+		return CheckpointResult{}, err
 	}
 
 	repoRoot, err := gitutil.RepoTopLevel()
