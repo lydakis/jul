@@ -6,8 +6,14 @@
 - [ ] Implement `jul submit` (one workspace = one review) + `review-state`/`review-comments` notes
 - [ ] Implement `jul ws stack` (stacked workspaces, based on latest checkpoint; require checkpoint)
 - [ ] Implement `jul local` save/restore/list/delete (client-side workspace states)
+- [ ] Implement `jul ws new` to create workspace + start draft (not just set config)
+- [ ] Implement `jul ws switch` to save/restore local state + sync + fetch + lease update
+- [ ] Add `jul remote clear` to unset remote selection
+- [ ] Align `jul init` with spec: start draft, ensure workspace ready, align output
+- [ ] Align `jul suggestions` default to current base (exclude stale suggestions unless requested)
+- [ ] Add `jul log --traces` (trace history in log output)
 - [ ] Implement `jul doctor` to verify remote refspecs + non‑FF support for `refs/jul/*`
-- [ ] Sync idempotency: reuse draft commit when tree unchanged (avoid new commit per status)
+- [x] Sync idempotency: reuse draft commit when tree unchanged (avoid new commit per status)
 - [ ] Base divergence detection: compare draft parents before auto-merge
 - [ ] Change-Id lifecycle: keep same Change-Id across checkpoints; new Change-Id after promote
 - [ ] Promote writes `promote_events` + `anchor_sha` into `refs/notes/jul/meta` (for revert)
@@ -18,8 +24,8 @@
 - [ ] Pin review anchor keep-refs while review is open (retention is last-touched)
 - [ ] Align CLI human output with spec (icons/colors/layout for status/sync/ci/checkpoint/log)
 - [ ] Align Change-Id lifecycle + base-commit terminology in outputs/errors (e.g., `base_diverged`)
-- [ ] Rename workspace lease file (`.jul/workspaces/<ws>/lease`) and update code/config from `workspace_base`
-- [ ] Suggestion staleness uses `suggestion.base_sha == parent(current_draft)`
+- [x] Rename workspace lease file (`.jul/workspaces/<ws>/lease`) and update code/config from `workspace_base`
+- [x] Suggestion staleness uses `suggestion.base_sha == parent(current_draft)`
 - [ ] Add `trace_type` metadata and have `jul blame` skip merge traces
 - [ ] Trace merge tree should use canonical workspace tip after sync (not local draft tree)
 - [ ] Fix sync draft creation when `.jul` is gitignored (no hard failure)
@@ -31,7 +37,7 @@
 - [ ] Draft smoke-test design doc (happy paths, sad paths, edge cases, complex interactions)
 - [ ] Implement comprehensive smoke/integration tests from the design doc
 - [ ] Replace review notes: move from `refs/notes/jul/review` to `review-state` + `review-comments`
-- [ ] Remove legacy commands not in spec (e.g., `jul changes`) or reintroduce in spec
+- [ ] Remove legacy commands not in spec (e.g., `jul changes`, `jul clone`) or reintroduce in spec
 
 ## Current Focus (v0.4 Trace/Provenance)
 - [x] Trace system (side history) + refs (`refs/jul/traces`, `refs/jul/trace-sync`)
