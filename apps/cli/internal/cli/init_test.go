@@ -1,39 +1,65 @@
 package cli
 
 import (
-	"reflect"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
 )
 
-func TestNormalizeInitArgs(t *testing.T) {
-	tests := []struct {
-		name string
-		in   []string
-		want []string
-	}{
-		{
-			name: "flags-first",
-			in:   []string{"--server", "/tmp/repos", "--create-remote", "demo"},
-			want: []string{"--server", "/tmp/repos", "--create-remote", "demo"},
-		},
-		{
-			name: "positional-first",
-			in:   []string{"demo", "--server", "/tmp/repos", "--create-remote"},
-			want: []string{"--server", "/tmp/repos", "--create-remote", "demo"},
-		},
-		{
-			name: "equals-flag",
-			in:   []string{"demo", "--remote=origin", "--no-hooks"},
-			want: []string{"--remote=origin", "--no-hooks", "demo"},
-		},
+func TestInitStartsDraftAndLease(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeInitArgs(tc.in)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("unexpected args: got %v, want %v", got, tc.want)
-			}
-		})
+	deviceID, err := config.DeviceID()
+	if err != nil || deviceID == "" {
+		t.Fatalf("expected device id, got %v", err)
+	}
+
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	workspaceRef := workspaceRef(user, workspace)
+	if !gitutil.RefExists(workspaceRef) {
+		t.Fatalf("expected workspace ref %s", workspaceRef)
+	}
+	syncRef, err := syncRef(user, workspace)
+	if err != nil {
+		t.Fatalf("sync ref error: %v", err)
+	}
+	if !gitutil.RefExists(syncRef) {
+		t.Fatalf("expected sync ref %s", syncRef)
+	}
+
+	sha, err := gitutil.ResolveRef(workspaceRef)
+	if err != nil {
+		t.Fatalf("resolve workspace ref failed: %v", err)
+	}
+	msg, _ := gitutil.CommitMessage(sha)
+	if gitutil.ExtractChangeID(msg) == "" {
+		t.Fatalf("expected Change-Id in draft message, got %q", msg)
+	}
+
+	leasePath := filepath.Join(repo, ".jul", "workspaces", workspace, "lease")
+	data, err := os.ReadFile(leasePath)
+	if err != nil {
+		t.Fatalf("expected workspace lease, got %v", err)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(sha) {
+		t.Fatalf("expected lease %s, got %s", sha, strings.TrimSpace(string(data)))
 	}
 }
