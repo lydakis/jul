@@ -317,6 +317,24 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	if strings.TrimSpace(promoteOut) == "" {
 		t.Fatalf("expected promote output")
 	}
+	checkpointMsg := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", checkpointRes.CheckpointSHA)
+	oldChangeID := extractChangeID(checkpointMsg)
+	if oldChangeID == "" {
+		t.Fatalf("expected Change-Id on checkpoint")
+	}
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", "tester", "@")
+	newDraftSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", workspaceRef))
+	if newDraftSHA == "" {
+		t.Fatalf("expected workspace ref after promote")
+	}
+	if newDraftSHA == checkpointRes.CheckpointSHA {
+		t.Fatalf("expected new draft after promote")
+	}
+	newDraftMsg := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", newDraftSHA)
+	newChangeID := extractChangeID(newDraftMsg)
+	if newChangeID == "" || newChangeID == oldChangeID {
+		t.Fatalf("expected new Change-Id after promote")
+	}
 	changesOut := runCmd(t, repo, env, julPath, "changes")
 	if strings.TrimSpace(changesOut) == "" {
 		t.Fatalf("expected changes output")
@@ -346,4 +364,14 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	}
 	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", "tester", strings.TrimSpace(string(deviceID)), "@")
 	runCmd(t, repo, nil, "git", "show-ref", syncRef)
+}
+
+func extractChangeID(message string) string {
+	for _, line := range strings.Split(message, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Change-Id:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Change-Id:"))
+		}
+	}
+	return ""
 }
