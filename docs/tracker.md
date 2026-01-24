@@ -9,9 +9,10 @@
 - [ ] Implement `jul doctor` to verify remote refspecs + non‑FF support for `refs/jul/*`
 - [ ] Sync idempotency: reuse draft commit when tree unchanged (avoid new commit per status)
 - [ ] Base divergence detection: compare draft parents before auto-merge
+- [ ] Change-Id lifecycle: keep same Change-Id across checkpoints; new Change-Id after promote
+- [ ] Promote writes `promote_events` + `anchor_sha` into `refs/notes/jul/meta` (for revert)
 - [ ] Add sync modes (`on-command`/`continuous`/`explicit`) and config wiring
 - [ ] Enforce promote policies + strategies (`.jul/policy.toml`, rebase/squash/merge)
-- [ ] Promote writes change-id → checkpoint/published mappings into `refs/notes/jul/meta`
 - [ ] Add retention cleanup for keep-refs + cascading suggestion/notes cleanup
 - [ ] Add explicit cleanup commands (`jul ws close`, `jul prune`) per retention policy
 - [ ] Pin review anchor keep-refs while review is open (retention is last-touched)
@@ -20,8 +21,17 @@
 - [ ] Rename workspace lease file (`.jul/workspaces/<ws>/lease`) and update code/config from `workspace_base`
 - [ ] Suggestion staleness uses `suggestion.base_sha == parent(current_draft)`
 - [ ] Add `trace_type` metadata and have `jul blame` skip merge traces
+- [ ] Trace merge tree should use canonical workspace tip after sync (not local draft tree)
 - [ ] Fix sync draft creation when `.jul` is gitignored (no hard failure)
 - [ ] Expand smoke tests: full local-only flow, remote flow, opencode review, CI config/no-config
+- [ ] Define server scope: git-remote compatibility only + frontend API/static hosting
+- [ ] Remove legacy server API endpoints not needed for git-remote + frontend
+- [ ] Implement git-remote HTTP service (upload-pack/receive-pack) with non‑FF custom refs for `refs/jul/*`
+- [ ] Server repo management: bare repo create/list + auth/ACLs for refs (future)
+- [ ] Draft smoke-test design doc (happy paths, sad paths, edge cases, complex interactions)
+- [ ] Implement comprehensive smoke/integration tests from the design doc
+- [ ] Replace review notes: move from `refs/notes/jul/review` to `review-state` + `review-comments`
+- [ ] Remove legacy commands not in spec (e.g., `jul changes`) or reintroduce in spec
 
 ## Current Focus (v0.4 Trace/Provenance)
 - [x] Trace system (side history) + refs (`refs/jul/traces`, `refs/jul/trace-sync`)
