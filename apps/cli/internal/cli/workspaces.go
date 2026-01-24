@@ -326,7 +326,7 @@ func runWorkspaceCheckout(args []string) int {
 		return 1
 	}
 
-	if _, err := gitutil.Git("-C", repoRoot, "reset", "--hard", sha); err != nil {
+	if _, err := gitutil.Git("-C", repoRoot, "read-tree", "--reset", "-u", sha); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to update working tree: %v\n", err)
 		return 1
 	}

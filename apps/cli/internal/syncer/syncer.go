@@ -450,11 +450,15 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 
 	var parentSHA string
 	var changeID string
+	var baseSHA string
+	baseWasDraft := false
 	if baseRef != "" {
 		if sha, err := gitutil.ResolveRef(baseRef); err == nil {
+			baseSHA = sha
 			if msg, err := gitutil.CommitMessage(sha); err == nil {
 				changeID = gitutil.ExtractChangeID(msg)
 				if isDraftMessage(msg) {
+					baseWasDraft = true
 					if parent, err := gitutil.ParentOf(sha); err == nil {
 						parentSHA = parent
 					} else {
@@ -463,6 +467,13 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 				} else {
 					parentSHA = sha
 				}
+			}
+		}
+	}
+	if baseWasDraft && baseSHA != "" && parentSHA == baseSHA {
+		if head, err := gitutil.ResolveRef("HEAD"); err == nil && strings.TrimSpace(head) != "" && head != parentSHA {
+			if headMsg, err := gitutil.CommitMessage(head); err == nil && !isDraftMessage(headMsg) {
+				parentSHA = head
 			}
 		}
 	}
