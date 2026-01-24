@@ -11,7 +11,7 @@ The bundled agent binary is expected at `libexec/jul/opencode` relative to `jul`
 ## GoReleaser (snapshot)
 
 ```bash
-# Fetch the pinned OpenCode assets into build/opencode/*
+# Fetch the pinned OpenCode assets into dist/opencode/*
 ./scripts/fetch-opencode.sh
 
 # Build archives without publishing
@@ -21,25 +21,17 @@ goreleaser release --snapshot --clean
 ## Publishing releases + Homebrew
 
 1. Create a tap repo (e.g. `lydakis/homebrew-jul`).
-2. Create a GitHub Actions secret `GORELEASER_TOKEN` with repo access to:
-   - `lydakis/jul`
-   - `lydakis/homebrew-jul`
-3. Tag and push (GitHub Actions runs GoReleaser on tags):
+2. Ensure `GITHUB_TOKEN` is set with access to both repos.
+3. Tag and release:
 
 ```bash
 git tag v0.0.1
 git push --tags
+goreleaser release
 ```
 
 GoReleaser writes the brew formula into the tap and installs the bundled agent
 under `libexec/jul/opencode`.
-
-Install:
-
-```bash
-brew tap lydakis/jul
-brew install jul
-```
 
 ## OpenCode version pin
 

@@ -10,12 +10,11 @@ import (
 )
 
 type checkpointInfo struct {
-	SHA       string
-	ChangeID  string
-	Message   string
-	Author    string
-	When      time.Time
-	TraceHead string
+	SHA      string
+	ChangeID string
+	Message  string
+	Author   string
+	When     time.Time
 }
 
 func listCheckpoints() ([]checkpointInfo, error) {
@@ -75,7 +74,6 @@ func checkpointFromRef(ref keepRefInfo) (checkpointInfo, error) {
 	if err != nil {
 		return checkpointInfo{}, err
 	}
-	traceHead := gitutil.ExtractTraceHead(msg)
 	author, _ := gitutil.Git("log", "-1", "--format=%an", ref.CheckpointSHA)
 	whenStr, _ := gitutil.Git("log", "-1", "--format=%cI", ref.CheckpointSHA)
 	when, _ := time.Parse(time.RFC3339, strings.TrimSpace(whenStr))
@@ -87,11 +85,10 @@ func checkpointFromRef(ref keepRefInfo) (checkpointInfo, error) {
 		changeID = gitutil.FallbackChangeID(ref.CheckpointSHA)
 	}
 	return checkpointInfo{
-		SHA:       ref.CheckpointSHA,
-		ChangeID:  changeID,
-		Message:   strings.TrimSpace(msg),
-		Author:    strings.TrimSpace(author),
-		When:      when,
-		TraceHead: strings.TrimSpace(traceHead),
+		SHA:      ref.CheckpointSHA,
+		ChangeID: changeID,
+		Message:  strings.TrimSpace(msg),
+		Author:   strings.TrimSpace(author),
+		When:     when,
 	}, nil
 }

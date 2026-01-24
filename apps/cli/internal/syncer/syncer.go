@@ -29,8 +29,6 @@ type CheckpointResult struct {
 	CheckpointSHA    string
 	DraftSHA         string
 	ChangeID         string
-	TraceBase        string
-	TraceHead        string
 	WorkspaceRef     string
 	SyncRef          string
 	KeepRef          string
@@ -106,29 +104,20 @@ func Sync() (Result, error) {
 		}
 	}
 
-	baseSHA, _ := readWorkspaceLease(repoRoot, workspace)
+	baseSHA, _ := readWorkspaceBase(repoRoot, workspace)
 	if baseSHA == "" && workspaceRemote != "" {
 		res.Diverged = true
-		res.RemoteProblem = "workspace lease missing; run 'jul ws checkout' first"
-		return finalizeSync(res, false)
+		res.RemoteProblem = "workspace baseline missing; run 'jul ws checkout' first"
+		return res, nil
 	}
 	if workspaceRemote != "" && baseSHA != "" && workspaceRemote != baseSHA {
-		localBase, _ := gitutil.ParentOf(draftSHA)
-		remoteBase, _ := gitutil.ParentOf(workspaceRemote)
-		localBase = strings.TrimSpace(localBase)
-		remoteBase = strings.TrimSpace(remoteBase)
-		if localBase != "" && remoteBase != "" && localBase != remoteBase {
-			res.Diverged = true
-			res.RemoteProblem = "base divergence; run 'jul merge' or 'jul ws checkout' to realign"
-			return finalizeSync(res, false)
-		}
 		mergedSHA, merged, err := autoMerge(repoRoot, workspaceRemote, draftSHA, changeID)
 		if err != nil {
 			return res, err
 		}
 		if !merged {
 			res.Diverged = true
-			return finalizeSync(res, false)
+			return res, nil
 		}
 		if err := gitutil.UpdateRef(syncRef, mergedSHA); err != nil {
 			return res, err
@@ -139,7 +128,7 @@ func Sync() (Result, error) {
 		if err := updateWorktree(repoRoot, mergedSHA); err != nil {
 			return res, err
 		}
-		if err := writeWorkspaceLease(repoRoot, workspace, mergedSHA); err != nil {
+		if err := writeWorkspaceBase(repoRoot, workspace, mergedSHA); err != nil {
 			return res, err
 		}
 		res.DraftSHA = mergedSHA
@@ -153,7 +142,7 @@ func Sync() (Result, error) {
 				return res, err
 			}
 		}
-		return finalizeSync(res, true)
+		return res, nil
 	}
 
 	if err := gitutil.UpdateRef(workspaceRef, draftSHA); err != nil {
@@ -165,41 +154,19 @@ func Sync() (Result, error) {
 			return res, err
 		}
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
-		return res, err
-	}
-	return finalizeSync(res, true)
-}
-
-func finalizeSync(res Result, allowCanonical bool) (Result, error) {
-	if _, err := Trace(TraceOptions{Implicit: true, UpdateCanonical: allowCanonical}); err != nil {
+	if err := writeWorkspaceBase(repoRoot, workspace, draftSHA); err != nil {
 		return res, err
 	}
 	return res, nil
 }
 
-func ensureWorkspaceAligned(syncRes Result) error {
-	if syncRes.Diverged || strings.Contains(syncRes.RemoteProblem, "base divergence") || strings.Contains(syncRes.RemoteProblem, "workspace lease missing") {
-		if strings.TrimSpace(syncRes.RemoteProblem) != "" {
-			return errors.New(syncRes.RemoteProblem)
-		}
-		return errors.New("workspace diverged; run 'jul merge' or 'jul ws checkout' to realign")
-	}
-	return nil
-}
-
 func Checkpoint(message string) (CheckpointResult, error) {
-	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true})
-	if err != nil {
-		return CheckpointResult{}, err
-	}
-
 	syncRes, err := Sync()
 	if err != nil {
 		return CheckpointResult{}, err
 	}
-	if err := ensureWorkspaceAligned(syncRes); err != nil {
-		return CheckpointResult{}, err
+	if syncRes.Diverged && strings.Contains(syncRes.RemoteProblem, "baseline") {
+		return CheckpointResult{}, errors.New(syncRes.RemoteProblem)
 	}
 
 	repoRoot, err := gitutil.RepoTopLevel()
@@ -235,12 +202,6 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		message = "checkpoint"
 	}
 	message = ensureChangeID(message, changeID)
-	if traceRes.CanonicalSHA != "" {
-		message = ensureTrailer(message, "Trace-Head", traceRes.CanonicalSHA)
-	}
-	if traceRes.TraceBase != "" {
-		message = ensureTrailer(message, "Trace-Base", traceRes.TraceBase)
-	}
 
 	treeSHA, err := gitutil.TreeOf(draftSHA)
 	if err != nil {
@@ -257,7 +218,11 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		return CheckpointResult{}, err
 	}
 
-	newDraftSHA, err := gitutil.CreateDraftCommit(checkpointSHA, changeID)
+	newChangeID, err := gitutil.NewChangeID()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	newDraftSHA, err := gitutil.CreateDraftCommit(checkpointSHA, newChangeID)
 	if err != nil {
 		return CheckpointResult{}, err
 	}
@@ -269,8 +234,6 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		CheckpointSHA: checkpointSHA,
 		DraftSHA:      newDraftSHA,
 		ChangeID:      changeID,
-		TraceBase:     traceRes.TraceBase,
-		TraceHead:     traceRes.CanonicalSHA,
 		WorkspaceRef:  workspaceRef,
 		SyncRef:       syncRef,
 		KeepRef:       keepRef,
@@ -285,7 +248,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 			return res, err
 		}
 		res.WorkspaceUpdated = true
-		if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+		if err := writeWorkspaceBase(repoRoot, workspace, newDraftSHA); err != nil {
 			return res, err
 		}
 	}
@@ -314,17 +277,12 @@ func Checkpoint(message string) (CheckpointResult, error) {
 }
 
 func AdoptCheckpoint() (CheckpointResult, error) {
-	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true})
-	if err != nil {
-		return CheckpointResult{}, err
-	}
-
 	syncRes, err := Sync()
 	if err != nil {
 		return CheckpointResult{}, err
 	}
-	if err := ensureWorkspaceAligned(syncRes); err != nil {
-		return CheckpointResult{}, err
+	if syncRes.Diverged && strings.Contains(syncRes.RemoteProblem, "baseline") {
+		return CheckpointResult{}, errors.New(syncRes.RemoteProblem)
 	}
 
 	repoRoot, err := gitutil.RepoTopLevel()
@@ -365,11 +323,15 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		return CheckpointResult{}, err
 	}
 
+	newChangeID, err := gitutil.NewChangeID()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
 		return CheckpointResult{}, err
 	}
-	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, headSHA, changeID)
+	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, headSHA, newChangeID)
 	if err != nil {
 		return CheckpointResult{}, err
 	}
@@ -381,8 +343,6 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		CheckpointSHA: headSHA,
 		DraftSHA:      newDraftSHA,
 		ChangeID:      changeID,
-		TraceBase:     traceRes.TraceBase,
-		TraceHead:     traceRes.CanonicalSHA,
 		WorkspaceRef:  workspaceRef,
 		SyncRef:       syncRef,
 		KeepRef:       keepRef,
@@ -397,7 +357,7 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 			return res, err
 		}
 		res.WorkspaceUpdated = true
-		if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+		if err := writeWorkspaceBase(repoRoot, workspace, newDraftSHA); err != nil {
 			return res, err
 		}
 	}
@@ -514,19 +474,6 @@ func ensureChangeID(message, changeID string) string {
 		return message
 	}
 	return strings.TrimSpace(message) + "\n\nChange-Id: " + changeID + "\n"
-}
-
-func ensureTrailer(message, key, value string) string {
-	if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-		return message
-	}
-	if strings.TrimSpace(gitutil.ExtractTraceHead(message)) != "" && key == "Trace-Head" {
-		return message
-	}
-	if strings.TrimSpace(gitutil.ExtractTraceBase(message)) != "" && key == "Trace-Base" {
-		return message
-	}
-	return strings.TrimSpace(message) + "\n\n" + key + ": " + value + "\n"
 }
 
 func keepRefPath(user, workspace, changeID, checkpointSHA string) string {
@@ -653,8 +600,8 @@ func pushWorkspace(remoteName, sha, ref, old string) error {
 	return err
 }
 
-func readWorkspaceLease(repoRoot, workspace string) (string, error) {
-	path := workspaceLeasePath(repoRoot, workspace)
+func readWorkspaceBase(repoRoot, workspace string) (string, error) {
+	path := workspaceBasePath(repoRoot, workspace)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -662,17 +609,17 @@ func readWorkspaceLease(repoRoot, workspace string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func writeWorkspaceLease(repoRoot, workspace, sha string) error {
+func writeWorkspaceBase(repoRoot, workspace, sha string) error {
 	if strings.TrimSpace(sha) == "" {
-		return errors.New("workspace lease sha required")
+		return errors.New("workspace base sha required")
 	}
-	path := workspaceLeasePath(repoRoot, workspace)
+	path := workspaceBasePath(repoRoot, workspace)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(sha+"\n"), 0o644)
 }
 
-func workspaceLeasePath(repoRoot, workspace string) string {
-	return filepath.Join(repoRoot, ".jul", "workspaces", workspace, "lease")
+func workspaceBasePath(repoRoot, workspace string) string {
+	return filepath.Join(repoRoot, ".jul", "workspaces", workspace, "base")
 }

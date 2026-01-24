@@ -4,7 +4,7 @@ These integration tests build the CLI, create temporary git repos, and exercise 
 
 Covered flows:
 - **Local-only**: `jul init`, `jul sync`, `jul checkpoint`, `jul ci run`, `jul status`, `jul log`, `jul show`, `jul diff`,
-  `jul blame`, `jul review` (stub agent), `jul suggestions`, `jul apply`, `jul reflog` with no remotes configured.
+  `jul review` (stub agent), `jul suggestions`, `jul apply`, `jul reflog` with no remotes configured.
 - **Draft CI on sync**: when `ci.run_on_draft = true`, `jul sync` triggers CI (blocking or background) and updates `.jul/ci/results.json`.
 - **CI config**: if `.jul/ci.toml` exists, CI uses its `[commands]` list instead of the default `go test ./...`.
 - **CI config command**: `jul ci config --set name=cmd` writes `.jul/ci.toml` and is used in smoke tests.
@@ -15,7 +15,7 @@ Covered flows:
 - **Adopt git commits**: when `checkpoint.adopt_on_commit = true`, a git commit triggers `jul checkpoint --adopt` via post-commit hook.
 - **Sync CI output**: `jul sync` prints when draft CI is triggered and points to `jul ci status` for background runs.
 - **Go workspaces**: when a repo has `go.work` (no root `go.mod`), default CI runs `go test ./...` inside each `use` module.
-- **Traces**: `jul trace --prompt` stores metadata in `refs/notes/jul/traces` and local prompt text in `.jul/traces/`.
+- **Prompt notes**: `jul checkpoint --prompt` stores metadata in `refs/notes/jul/prompts`.
 - **Git remote**: bare repo as `origin`, `jul sync` pushes sync/workspace refs, `jul checkpoint` pushes keep refs.
 - **Jul remote config**: `jul init --server <path> --create-remote` sets a remote and runs the same flow.
 - **Review agent**: `jul review` runs against a stub agent and creates suggestions.
@@ -40,4 +40,4 @@ go test ./integration -run Smoke
 - Real agent smoke test is opt-in:
   - Set `JUL_REAL_AGENT=1`
   - Ensure OpenCode is configured (e.g., `~/.config/opencode` or env vars) so it can run headless.
-  - If the bundled binary is missing, the test downloads it into `build/opencode/` before running.
+  - If the bundled binary is missing, the test downloads it into `dist/opencode/` before running.

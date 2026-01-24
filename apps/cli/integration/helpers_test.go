@@ -90,13 +90,3 @@ func writeFile(t *testing.T, dir, name, content string) {
 		t.Fatalf("write file failed: %v", err)
 	}
 }
-
-func readFile(t *testing.T, dir, name string) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read file failed: %v", err)
-	}
-	return string(data)
-}

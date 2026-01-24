@@ -9,7 +9,7 @@ else
   VERSION="${OPENCODE_VERSION}"
 fi
 BASE_URL="https://github.com/anomalyco/opencode/releases/download/v${VERSION}"
-DEST_ROOT="${OPENCODE_DEST_ROOT:-${ROOT_DIR}/build/opencode}"
+DEST_ROOT="${ROOT_DIR}/dist/opencode"
 
 PLATFORMS=(
   "darwin amd64 x64 zip"

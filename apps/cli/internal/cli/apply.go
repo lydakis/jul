@@ -42,18 +42,19 @@ func newApplyCommand() Command {
 				return 1
 			}
 
-			draftSHA, parentSHA, err := currentDraftAndBase()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to resolve base commit: %v\n", err)
+			currentCheckpoint, _ := latestCheckpoint()
+			staleBase := ""
+			if currentCheckpoint != nil {
+				staleBase = currentCheckpoint.SHA
+			} else if draftSHA, err := currentDraftSHA(); err == nil {
+				staleBase = strings.TrimSpace(draftSHA)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to resolve current draft: %v\n", err)
 				return 1
 			}
 
-			if suggestionIsStale(sug.BaseCommitSHA, draftSHA, parentSHA) && !*force {
-				currentBase := parentSHA
-				if currentBase == "" {
-					currentBase = draftSHA
-				}
-				fmt.Fprintf(os.Stderr, "Suggestion is stale (created for %s, current base is %s)\n", sug.BaseCommitSHA, currentBase)
+			if staleBase != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != staleBase && !*force {
+				fmt.Fprintf(os.Stderr, "Suggestion is stale (created for %s, current is %s)\n", sug.BaseCommitSHA, staleBase)
 				fmt.Fprintln(os.Stderr, "Use --force to apply anyway.")
 				return 1
 			}

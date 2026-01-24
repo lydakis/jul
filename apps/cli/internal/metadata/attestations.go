@@ -12,14 +12,6 @@ import (
 )
 
 func WriteAttestation(att client.Attestation) (client.Attestation, error) {
-	return WriteAttestationTo(notes.RefAttestationsCheckpoint, att)
-}
-
-func WriteTraceAttestation(att client.Attestation) (client.Attestation, error) {
-	return WriteAttestationTo(notes.RefAttestationsTrace, att)
-}
-
-func WriteAttestationTo(ref string, att client.Attestation) (client.Attestation, error) {
 	if att.AttestationID == "" {
 		att.AttestationID = newID()
 	}
@@ -28,7 +20,7 @@ func WriteAttestationTo(ref string, att client.Attestation) (client.Attestation,
 	}
 	stored := att
 	for attempt := 0; attempt < 3; attempt++ {
-		if err := notes.AddJSON(ref, stored.CommitSHA, stored); err != nil {
+		if err := notes.AddJSON(notes.RefAttestationsCheckpoint, stored.CommitSHA, stored); err != nil {
 			if errors.Is(err, notes.ErrNoteTooLarge) {
 				stored = shrinkAttestationSignals(stored, attempt)
 				continue
@@ -41,16 +33,8 @@ func WriteAttestationTo(ref string, att client.Attestation) (client.Attestation,
 }
 
 func GetAttestation(commitSHA string) (*client.Attestation, error) {
-	return GetAttestationFrom(notes.RefAttestationsCheckpoint, commitSHA)
-}
-
-func GetTraceAttestation(commitSHA string) (*client.Attestation, error) {
-	return GetAttestationFrom(notes.RefAttestationsTrace, commitSHA)
-}
-
-func GetAttestationFrom(ref, commitSHA string) (*client.Attestation, error) {
 	var att client.Attestation
-	found, err := notes.ReadJSON(ref, commitSHA, &att)
+	found, err := notes.ReadJSON(notes.RefAttestationsCheckpoint, commitSHA, &att)
 	if err != nil {
 		return nil, err
 	}

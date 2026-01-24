@@ -22,26 +22,24 @@ builds:
 
 archives:
   - id: jul
-    ids:
+    builds:
       - jul
     name_template: "jul_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    formats: ["tar.gz"]
+    format: tar.gz
     files:
-      - src: build/opencode/{{ .Os }}_{{ .Arch }}/opencode
+      - src: dist/opencode/{{ .Os }}_{{ .Arch }}/opencode
         dst: libexec/jul/opencode
 
 checksum:
   name_template: "checksums.txt"
 
-homebrew_casks:
+brews:
   - name: jul
     homepage: https://github.com/lydakis/jul
     description: Jul CLI with bundled OpenCode agent
-    ids:
-      - jul
-    binaries:
-      - jul
-    repository:
+    tap:
       owner: lydakis
       name: homebrew-jul
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    install: |
+      bin.install "jul"
+      libexec.install "libexec/jul/opencode" => "jul/opencode"

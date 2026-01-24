@@ -22,8 +22,6 @@ func ensureJulRefspecs(repoRoot, remoteName string) error {
 		"+refs/heads/*:refs/remotes/" + remoteName + "/*",
 		"+refs/jul/workspaces/*:refs/jul/workspaces/*",
 		"+refs/jul/sync/*:refs/jul/sync/*",
-		"+refs/jul/traces/*:refs/jul/traces/*",
-		"+refs/jul/trace-sync/*:refs/jul/trace-sync/*",
 		"+refs/jul/suggest/*:refs/jul/suggest/*",
 		"+refs/jul/keep/*:refs/jul/keep/*",
 		"+refs/notes/jul/*:refs/notes/jul/*",

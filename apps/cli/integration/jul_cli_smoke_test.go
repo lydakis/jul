@@ -43,25 +43,8 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "show-ref", syncRes.SyncRef)
 	runCmd(t, repo, nil, "git", "show-ref", syncRes.WorkspaceRef)
 
-	// Create an explicit trace with prompt metadata.
-	traceOut := runCmd(t, repo, env, julPath, "trace", "--prompt", "write a trace", "--json")
-	var traceRes struct {
-		TraceSHA   string `json:"trace_sha"`
-		PromptHash string `json:"prompt_hash"`
-	}
-	if err := json.NewDecoder(strings.NewReader(traceOut)).Decode(&traceRes); err != nil {
-		t.Fatalf("failed to decode trace output: %v", err)
-	}
-	if traceRes.TraceSHA == "" {
-		t.Fatalf("expected trace sha")
-	}
-	traceNote := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/traces", "show", traceRes.TraceSHA)
-	if !strings.Contains(traceNote, traceRes.PromptHash) {
-		t.Fatalf("expected trace note prompt hash, got %s", traceNote)
-	}
-
 	// Checkpoint locally (keep-ref)
-	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
+	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--prompt", "write a checkpoint", "--no-ci", "--no-review", "--json")
 	var checkpointRes struct {
 		CheckpointSHA string `json:"CheckpointSHA"`
 		KeepRef       string `json:"KeepRef"`
@@ -73,6 +56,10 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 		t.Fatalf("expected keep ref and checkpoint sha")
 	}
 	runCmd(t, repo, nil, "git", "show-ref", checkpointRes.KeepRef)
+	promptNote := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/prompts", "show", checkpointRes.CheckpointSHA)
+	if !strings.Contains(promptNote, "write a checkpoint") {
+		t.Fatalf("expected prompt note, got %s", promptNote)
+	}
 
 	agentPath := filepath.Join(t.TempDir(), "agent.sh")
 	agentScript := `#!/bin/sh
@@ -241,26 +228,6 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		t.Fatalf("expected checkpoint show output")
 	}
 
-	blameOut := runCmd(t, repo, env, julPath, "blame", "README.md", "--json")
-	var blameRes struct {
-		File  string `json:"file"`
-		Lines []struct {
-			Line             int    `json:"line"`
-			Content          string `json:"content"`
-			CheckpointSHA    string `json:"checkpoint_sha"`
-			CheckpointChange string `json:"checkpoint_change_id"`
-		} `json:"lines"`
-	}
-	if err := json.NewDecoder(strings.NewReader(blameOut)).Decode(&blameRes); err != nil {
-		t.Fatalf("failed to decode blame output: %v", err)
-	}
-	if blameRes.File != "README.md" || len(blameRes.Lines) == 0 {
-		t.Fatalf("expected blame lines for README.md")
-	}
-	if blameRes.Lines[0].CheckpointSHA == "" || blameRes.Lines[0].CheckpointChange == "" {
-		t.Fatalf("expected blame checkpoint metadata")
-	}
-
 	queryOut := runCmd(t, repo, env, julPath, "query", "--limit", "5", "--json")
 	var queryRes []struct {
 		CommitSHA string `json:"commit_sha"`
@@ -281,14 +248,6 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	}
 	if strings.TrimSpace(diffRes.Diff) == "" {
 		t.Fatalf("expected diff output")
-	}
-
-	writeFile(t, repo, "LOCAL.txt", "snap\n")
-	runCmd(t, repo, env, julPath, "local", "save", "snap1")
-	writeFile(t, repo, "LOCAL.txt", "changed\n")
-	runCmd(t, repo, env, julPath, "local", "restore", "snap1")
-	if got := readFile(t, repo, "LOCAL.txt"); strings.TrimSpace(got) != "snap" {
-		t.Fatalf("expected local restore to revert file, got %q", strings.TrimSpace(got))
 	}
 
 	ciStatusOut, _ := runCmdAllowFailure(t, repo, env, julPath, "ci", "status", "--json")
@@ -325,24 +284,6 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	if strings.TrimSpace(promoteOut) == "" {
 		t.Fatalf("expected promote output")
 	}
-	checkpointMsg := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", checkpointRes.CheckpointSHA)
-	oldChangeID := extractChangeID(checkpointMsg)
-	if oldChangeID == "" {
-		t.Fatalf("expected Change-Id on checkpoint")
-	}
-	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", "tester", "@")
-	newDraftSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", workspaceRef))
-	if newDraftSHA == "" {
-		t.Fatalf("expected workspace ref after promote")
-	}
-	if newDraftSHA == checkpointRes.CheckpointSHA {
-		t.Fatalf("expected new draft after promote")
-	}
-	newDraftMsg := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", newDraftSHA)
-	newChangeID := extractChangeID(newDraftMsg)
-	if newChangeID == "" || newChangeID == oldChangeID {
-		t.Fatalf("expected new Change-Id after promote")
-	}
 	changesOut := runCmd(t, repo, env, julPath, "changes")
 	if strings.TrimSpace(changesOut) == "" {
 		t.Fatalf("expected changes output")
@@ -362,9 +303,9 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	}
 
 	runCmd(t, repo, env, julPath, "ws", "checkout", "@")
-	leasePath := filepath.Join(repo, ".jul", "workspaces", "@", "lease")
-	if _, err := os.Stat(leasePath); err != nil {
-		t.Fatalf("expected workspace lease file: %v", err)
+	basePath := filepath.Join(repo, ".jul", "workspaces", "@", "base")
+	if _, err := os.Stat(basePath); err != nil {
+		t.Fatalf("expected workspace base file: %v", err)
 	}
 	deviceID, err := os.ReadFile(filepath.Join(home, ".config", "jul", "device"))
 	if err != nil {
@@ -372,14 +313,4 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	}
 	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", "tester", strings.TrimSpace(string(deviceID)), "@")
 	runCmd(t, repo, nil, "git", "show-ref", syncRef)
-}
-
-func extractChangeID(message string) string {
-	for _, line := range strings.Split(message, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Change-Id:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "Change-Id:"))
-		}
-	}
-	return ""
 }

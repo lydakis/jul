@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/client"
+	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
@@ -26,25 +27,15 @@ func newSuggestionsCommand() Command {
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
+			currentCheckpoint, _ := latestCheckpoint()
 			currentChangeID := strings.TrimSpace(*changeID)
-			draftSHA := ""
-			parentSHA := ""
-			baseSHA := ""
+			currentCheckpointSHA := ""
 			currentMessage := ""
-			if draft, parent, err := currentDraftAndBase(); err == nil {
-				draftSHA = draft
-				parentSHA = parent
-				baseSHA = draftSHA
-				if checkpoint, _ := latestCheckpoint(); checkpoint != nil && strings.TrimSpace(parentSHA) != "" && checkpoint.SHA == parentSHA {
-					baseSHA = parentSHA
-				}
-				if msg, err := gitutil.CommitMessage(baseSHA); err == nil {
-					currentMessage = firstLine(msg)
-				}
-			}
-			if currentChangeID == "" {
-				if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
-					currentChangeID = checkpoint.ChangeID
+			if currentCheckpoint != nil {
+				currentCheckpointSHA = currentCheckpoint.SHA
+				currentMessage = firstLine(currentCheckpoint.Message)
+				if currentChangeID == "" {
+					currentChangeID = currentCheckpoint.ChangeID
 				}
 			}
 
@@ -70,7 +61,8 @@ func newSuggestionsCommand() Command {
 			if statusFilter == "stale" {
 				staleOnly := make([]client.Suggestion, 0, len(results))
 				for _, sug := range results {
-					if suggestionIsStale(sug.BaseCommitSHA, draftSHA, parentSHA) {
+					stale := currentCheckpointSHA != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != currentCheckpointSHA
+					if stale {
 						staleOnly = append(staleOnly, sug)
 					}
 				}
@@ -88,10 +80,70 @@ func newSuggestionsCommand() Command {
 			output.RenderSuggestions(os.Stdout, output.SuggestionsView{
 				ChangeID:          currentChangeID,
 				Status:            statusFilter,
-				CheckpointSHA:     baseSHA,
+				CheckpointSHA:     currentCheckpointSHA,
 				CheckpointMessage: currentMessage,
 				Suggestions:       results,
 			}, output.DefaultOptions())
+			return 0
+		},
+	}
+}
+
+func newSuggestCommand() Command {
+	return Command{
+		Name:    "suggest",
+		Summary: "Create a suggestion for the current change",
+		Run: func(args []string) int {
+			fs := flag.NewFlagSet("suggest", flag.ContinueOnError)
+			fs.SetOutput(os.Stdout)
+			baseSHA := fs.String("base", "", "Base commit SHA (default: HEAD)")
+			suggestedSHA := fs.String("suggested", "", "Suggested commit SHA")
+			reason := fs.String("reason", "unspecified", "Suggestion reason")
+			description := fs.String("description", "", "Suggestion description")
+			confidence := fs.Float64("confidence", 0, "Suggestion confidence")
+			jsonOut := fs.Bool("json", false, "Output JSON")
+			_ = fs.Parse(args)
+
+			if strings.TrimSpace(*suggestedSHA) == "" {
+				fmt.Fprintln(os.Stderr, "--suggested is required")
+				return 1
+			}
+
+			base := strings.TrimSpace(*baseSHA)
+			if base == "" {
+				base = "HEAD"
+			}
+			baseResolved, err := gitutil.Git("rev-parse", base)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to resolve base: %v\n", err)
+				return 1
+			}
+
+			created, err := metadata.CreateSuggestion(metadata.SuggestionCreate{
+				ChangeID:           "",
+				BaseCommitSHA:      strings.TrimSpace(baseResolved),
+				SuggestedCommitSHA: strings.TrimSpace(*suggestedSHA),
+				CreatedBy:          config.UserName(),
+				Reason:             strings.TrimSpace(*reason),
+				Description:        strings.TrimSpace(*description),
+				Confidence:         *confidence,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to create suggestion: %v\n", err)
+				return 1
+			}
+
+			if *jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(created); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+					return 1
+				}
+				return 0
+			}
+
+			output.RenderSuggestionCreated(os.Stdout, created)
 			return 0
 		},
 	}
