@@ -175,6 +175,46 @@ func TestWorkspaceSwitchKeepsConfigOnFailure(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSwitchRollsBackOnConfigFailure(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	writeFilePath(t, repo, "base.txt", "base\n")
+	runGitCmd(t, repo, "add", "base.txt")
+	runGitCmd(t, repo, "commit", "-m", "base")
+
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	runGitCmd(t, repo, "config", "jul.workspace", "tester/@")
+
+	writeFilePath(t, repo, "a.txt", "from @\n")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	if code := runWorkspaceNew([]string{"feature"}); code != 0 {
+		t.Fatalf("ws new failed with %d", code)
+	}
+	writeFilePath(t, repo, "b.txt", "from feature\n")
+
+	lockPath := filepath.Join(repo, ".git", "config.lock")
+	if err := os.WriteFile(lockPath, []byte("lock"), 0o644); err != nil {
+		t.Fatalf("failed to create config lock: %v", err)
+	}
+
+	if code := runWorkspaceSwitch([]string{"@"}); code == 0 {
+		t.Fatalf("expected ws switch to fail when config is read-only")
+	}
+	if got := config.WorkspaceID(); got != "tester/feature" {
+		t.Fatalf("expected workspace to remain tester/feature, got %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "b.txt")); err != nil {
+		t.Fatalf("expected feature file to remain after rollback: %v", err)
+	}
+}
+
 func TestWorkspaceStackUsesCheckpointBase(t *testing.T) {
 	repo := t.TempDir()
 	runGitCmd(t, repo, "init")
@@ -216,6 +256,45 @@ func TestWorkspaceStackUsesCheckpointBase(t *testing.T) {
 	}
 	if strings.TrimSpace(parent) != strings.TrimSpace(checkpoint.SHA) {
 		t.Fatalf("expected stacked draft parent %s, got %s", checkpoint.SHA, parent)
+	}
+}
+
+func TestWorkspaceStackRollsBackOnConfigFailure(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	writeFilePath(t, repo, "base.txt", "base\n")
+	runGitCmd(t, repo, "add", "base.txt")
+	runGitCmd(t, repo, "commit", "-m", "base")
+
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	runGitCmd(t, repo, "config", "jul.workspace", "tester/@")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	writeFilePath(t, repo, "feature.txt", "feature\n")
+	if _, err := syncer.Checkpoint("feat: base"); err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	writeFilePath(t, repo, "local.txt", "local\n")
+
+	lockPath := filepath.Join(repo, ".git", "config.lock")
+	if err := os.WriteFile(lockPath, []byte("lock"), 0o644); err != nil {
+		t.Fatalf("failed to create config lock: %v", err)
+	}
+
+	if code := runWorkspaceStack([]string{"stacked"}); code == 0 {
+		t.Fatalf("expected ws stack to fail when config is read-only")
+	}
+	if got := config.WorkspaceID(); got != "tester/@" {
+		t.Fatalf("expected workspace to remain tester/@, got %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "local.txt")); err != nil {
+		t.Fatalf("expected local file to remain after rollback: %v", err)
 	}
 }
 

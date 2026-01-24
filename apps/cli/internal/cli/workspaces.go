@@ -159,7 +159,7 @@ func runWorkspaceSwitch(args []string) int {
 		fmt.Fprintln(os.Stderr, "workspace name required")
 		return 1
 	}
-	_, currentWorkspace := workspaceParts()
+	currentUser, currentWorkspace := workspaceParts()
 	if err := saveWorkspaceState(currentWorkspace); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
 		return 1
@@ -179,7 +179,15 @@ func runWorkspaceSwitch(args []string) int {
 		return 1
 	}
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
+		rollbackErr := switchToWorkspace(currentUser, currentWorkspace)
+		if rollbackErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+			fmt.Fprintf(os.Stderr, "switch rollback failed: %v\n", rollbackErr)
+			fmt.Fprintf(os.Stderr, "workspace is now '%s' but config remains '%s'\n", wsName, config.WorkspaceID())
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		fmt.Fprintln(os.Stderr, "switch rolled back")
 		return 1
 	}
 	fmt.Fprintf(os.Stdout, "Switched to workspace '%s'\n", wsName)
@@ -203,7 +211,7 @@ func runWorkspaceStack(args []string) int {
 		return 1
 	}
 
-	currentName := workspaceNameOnly()
+	currentUser, currentName := workspaceParts()
 	if err := saveWorkspaceState(currentName); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
 		return 1
@@ -237,7 +245,15 @@ func runWorkspaceStack(args []string) int {
 		return 1
 	}
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
+		rollbackErr := switchToWorkspace(currentUser, currentName)
+		if rollbackErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+			fmt.Fprintf(os.Stderr, "switch rollback failed: %v\n", rollbackErr)
+			fmt.Fprintf(os.Stderr, "workspace is now '%s' but config remains '%s'\n", wsName, config.WorkspaceID())
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		fmt.Fprintln(os.Stderr, "switch rolled back")
 		return 1
 	}
 	fmt.Fprintf(os.Stdout, "Created workspace '%s' (stacked on %s)\n", wsName, currentName)
