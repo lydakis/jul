@@ -64,7 +64,7 @@ func TestReviewPromptKeepsDiffInAttachment(t *testing.T) {
 		},
 	}
 	attachment := buildReviewAttachment(req)
-	prompt := buildReviewPrompt("/tmp/review.txt")
+	prompt := buildReviewPrompt("review", "/tmp/review.txt")
 	if !strings.Contains(attachment, "diff --git") || !strings.Contains(attachment, "file.txt") {
 		t.Fatalf("expected diff and file content in attachment")
 	}

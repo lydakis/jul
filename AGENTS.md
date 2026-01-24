@@ -30,11 +30,22 @@
 - Run smoke tests with `cd apps/server && go test ./integration -run Smoke`.
 - Track coverage with `./scripts/coverage.sh` (generates `coverage.out` in `apps/cli` and `apps/server`).
 
+## Jul‑First Development Workflow
+- Use Jul commands only for day‑to‑day work in this repo.
+- Always start with `jul status` to see draft and CI state.
+- Typical loop:
+  - `jul trace --prompt "<intent>"` (record intent)
+  - `jul sync` (update draft + refs)
+  - `jul checkpoint` (lock a snapshot)
+  - `jul promote --to main` (publish to Git branch)
+- Use `jul ci` for local checks; rely on `jul submit` (CR) only when review state is needed.
+- Do not use git commands unless explicitly requested.
+
 ## Commit & Pull Request Guidelines
 - Commit messages in this repo use imperative, sentence‑case style (e.g., “Add auto-sync hooks”, “Fix sync consistency”).
 - PRs should include: a clear summary, tests run, and any relevant screenshots/logs.
 - If adding API changes, update `apps/server/README.md` and consider the design spec in `docs/jul-spec.md`.
 
 ## Configuration Tips
-- CLI uses `JUL_BASE_URL` and `JUL_WORKSPACE`. Hooks respect `JUL_HOOK_CMD`, `JUL_NO_SYNC`, and `JUL_HOOK_VERBOSE`.
+- CLI uses `JUL_WORKSPACE`. Hooks respect `JUL_HOOK_CMD`, `JUL_NO_SYNC`, and `JUL_HOOK_VERBOSE`.
 - Server storage defaults to SQLite; keep paths under `apps/server/data/` for local dev.
