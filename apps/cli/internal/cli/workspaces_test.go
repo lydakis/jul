@@ -24,6 +24,16 @@ func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
 	t.Setenv("HOME", home)
 	runGitCmd(t, repo, "config", "jul.workspace", "tester/@")
 
+	remoteDir := filepath.Join(t.TempDir(), "remote")
+	if err := os.MkdirAll(remoteDir, 0o755); err != nil {
+		t.Fatalf("failed to create remote dir: %v", err)
+	}
+	runGitCmd(t, remoteDir, "init", "--bare")
+	runGitCmd(t, repo, "remote", "add", "origin", remoteDir)
+	if err := ensureJulRefspecs(repo, "origin"); err != nil {
+		t.Fatalf("failed to configure remote refspecs: %v", err)
+	}
+
 	writeFilePath(t, repo, "a.txt", "from @\n")
 
 	cwd, _ := os.Getwd()
@@ -82,6 +92,16 @@ func TestWorkspaceNewFailsWhenWorkspaceExists(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
 	runGitCmd(t, repo, "config", "jul.workspace", "tester/@")
+
+	remoteDir := filepath.Join(t.TempDir(), "remote")
+	if err := os.MkdirAll(remoteDir, 0o755); err != nil {
+		t.Fatalf("failed to create remote dir: %v", err)
+	}
+	runGitCmd(t, remoteDir, "init", "--bare")
+	runGitCmd(t, repo, "remote", "add", "origin", remoteDir)
+	if err := ensureJulRefspecs(repo, "origin"); err != nil {
+		t.Fatalf("failed to configure remote refspecs: %v", err)
+	}
 
 	cwd, _ := os.Getwd()
 	_ = os.Chdir(repo)

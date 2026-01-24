@@ -179,7 +179,7 @@ func runWorkspaceSwitch(args []string) int {
 		return 1
 	}
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
-		rollbackErr := switchToWorkspace(currentUser, currentWorkspace)
+		rollbackErr := switchToWorkspaceLocal(currentUser, currentWorkspace)
 		if rollbackErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
 			fmt.Fprintf(os.Stderr, "switch rollback failed: %v\n", rollbackErr)
@@ -245,7 +245,7 @@ func runWorkspaceStack(args []string) int {
 		return 1
 	}
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
-		rollbackErr := switchToWorkspace(currentUser, currentName)
+		rollbackErr := switchToWorkspaceLocal(currentUser, currentName)
 		if rollbackErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
 			fmt.Fprintf(os.Stderr, "switch rollback failed: %v\n", rollbackErr)
@@ -474,6 +474,14 @@ func switchToWorkspace(user, workspace string) error {
 		return rerr
 	}
 
+	return switchToWorkspaceLocal(user, workspace)
+}
+
+func switchToWorkspaceLocal(user, workspace string) error {
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return err
+	}
 	ref := workspaceRef(user, workspace)
 	if !gitutil.RefExists(ref) {
 		return fmt.Errorf("workspace ref not found: %s", ref)
