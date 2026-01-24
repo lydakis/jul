@@ -113,6 +113,15 @@ func Sync() (Result, error) {
 		return finalizeSync(res, false)
 	}
 	if workspaceRemote != "" && baseSHA != "" && workspaceRemote != baseSHA {
+		localBase, _ := gitutil.ParentOf(draftSHA)
+		remoteBase, _ := gitutil.ParentOf(workspaceRemote)
+		localBase = strings.TrimSpace(localBase)
+		remoteBase = strings.TrimSpace(remoteBase)
+		if localBase != "" && remoteBase != "" && localBase != remoteBase {
+			res.Diverged = true
+			res.RemoteProblem = "base divergence; run 'jul merge' or 'jul ws checkout' to realign"
+			return finalizeSync(res, false)
+		}
 		mergedSHA, merged, err := autoMerge(repoRoot, workspaceRemote, draftSHA, changeID)
 		if err != nil {
 			return res, err
@@ -238,11 +247,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		return CheckpointResult{}, err
 	}
 
-	newChangeID, err := gitutil.NewChangeID()
-	if err != nil {
-		return CheckpointResult{}, err
-	}
-	newDraftSHA, err := gitutil.CreateDraftCommit(checkpointSHA, newChangeID)
+	newDraftSHA, err := gitutil.CreateDraftCommit(checkpointSHA, changeID)
 	if err != nil {
 		return CheckpointResult{}, err
 	}
@@ -350,15 +355,11 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		return CheckpointResult{}, err
 	}
 
-	newChangeID, err := gitutil.NewChangeID()
-	if err != nil {
-		return CheckpointResult{}, err
-	}
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
 		return CheckpointResult{}, err
 	}
-	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, headSHA, newChangeID)
+	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, headSHA, changeID)
 	if err != nil {
 		return CheckpointResult{}, err
 	}

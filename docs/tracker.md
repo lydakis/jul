@@ -15,9 +15,10 @@
 - [ ] Add `jul log --traces` (trace history in log output)
 - [ ] Implement `jul doctor` to verify remote refspecs + non‑FF support for `refs/jul/*`
 - [x] Sync idempotency: reuse draft commit when tree unchanged (avoid new commit per status)
-- [ ] Base divergence detection: compare draft parents before auto-merge
-- [ ] Change-Id lifecycle: keep same Change-Id across checkpoints; new Change-Id after promote
-- [ ] Promote writes `promote_events` + `anchor_sha` into `refs/notes/jul/meta` (for revert)
+- [x] Base divergence detection: compare draft parents before auto-merge
+- [ ] Change-Id lifecycle: new Change-Id after promote
+- [x] Change-Id lifecycle: keep same Change-Id across checkpoints
+- [x] Promote writes `promote_events` + `anchor_sha` into `refs/notes/jul/meta` (for revert)
 - [ ] Add sync modes (`on-command`/`continuous`/`explicit`) and config wiring
 - [ ] Enforce promote policies + strategies (`.jul/policy.toml`, rebase/squash/merge)
 - [ ] Add retention cleanup for keep-refs + cascading suggestion/notes cleanup

@@ -12,6 +12,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
+	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
@@ -241,7 +242,111 @@ func promoteLocal(branch, sha string, force bool) error {
 			}
 		}
 	}
-	return gitutil.UpdateRef(ref, sha)
+	if err := gitutil.UpdateRef(ref, sha); err != nil {
+		return err
+	}
+	return recordPromoteMeta(branch, sha)
+}
+
+func recordPromoteMeta(branch, sha string) error {
+	if strings.TrimSpace(sha) == "" {
+		return nil
+	}
+	changeID := changeIDForCommit(sha)
+	anchorSHA, checkpoints, err := changeMetaFromCheckpoints(changeID)
+	if err != nil {
+		return err
+	}
+	if anchorSHA == "" {
+		anchorSHA = sha
+	}
+
+	meta, ok, err := metadata.ReadChangeMeta(anchorSHA)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		meta = metadata.ChangeMeta{}
+	}
+	if meta.ChangeID == "" {
+		meta.ChangeID = changeID
+	}
+	if meta.AnchorSHA == "" {
+		meta.AnchorSHA = anchorSHA
+	}
+	if len(checkpoints) > 0 {
+		meta.Checkpoints = checkpoints
+	}
+	meta.PromoteEvents = append(meta.PromoteEvents, metadata.PromoteEvent{
+		Target:    strings.TrimSpace(branch),
+		Strategy:  "fast-forward",
+		Timestamp: time.Now().UTC(),
+		Published: []string{sha},
+	})
+	return metadata.WriteChangeMeta(meta)
+}
+
+func changeIDForCommit(sha string) string {
+	message, _ := gitutil.CommitMessage(sha)
+	changeID := gitutil.ExtractChangeID(message)
+	if changeID != "" {
+		return changeID
+	}
+	if checkpoint, _ := checkpointForSHA(sha); checkpoint != nil && checkpoint.ChangeID != "" {
+		return checkpoint.ChangeID
+	}
+	return gitutil.FallbackChangeID(sha)
+}
+
+func checkpointForSHA(sha string) (*checkpointInfo, error) {
+	entries, err := listCheckpoints()
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.SHA == sha {
+			return &entry, nil
+		}
+	}
+	return nil, nil
+}
+
+func changeMetaFromCheckpoints(changeID string) (string, []metadata.ChangeCheckpoint, error) {
+	if strings.TrimSpace(changeID) == "" {
+		return "", nil, nil
+	}
+	entries, err := listCheckpoints()
+	if err != nil {
+		return "", nil, err
+	}
+	type entry struct {
+		metadata.ChangeCheckpoint
+		when time.Time
+	}
+	matched := make([]entry, 0)
+	for _, cp := range entries {
+		if cp.ChangeID != changeID {
+			continue
+		}
+		matched = append(matched, entry{
+			ChangeCheckpoint: metadata.ChangeCheckpoint{
+				SHA:     cp.SHA,
+				Message: firstLine(cp.Message),
+			},
+			when: cp.When,
+		})
+	}
+	if len(matched) == 0 {
+		return "", nil, nil
+	}
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].when.Before(matched[j].when)
+	})
+	checkpoints := make([]metadata.ChangeCheckpoint, 0, len(matched))
+	for _, cp := range matched {
+		checkpoints = append(checkpoints, cp.ChangeCheckpoint)
+	}
+	return matched[0].SHA, checkpoints, nil
 }
 
 func newChangesCommand() Command {
