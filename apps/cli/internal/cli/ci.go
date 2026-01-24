@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	cicmd "github.com/lydakis/jul/cli/internal/ci"
@@ -24,14 +23,12 @@ func newCICommand() Command {
 		Summary: "Run local CI and record attestation",
 		Run: func(args []string) int {
 			if len(args) == 0 {
-				return runCIRun(args)
+				printCIUsage()
+				return 1
 			}
 			if args[0] == "help" || args[0] == "--help" {
 				printCIUsage()
 				return 0
-			}
-			if strings.HasPrefix(args[0], "-") {
-				return runCIRun(args)
 			}
 
 			sub := args[0]
@@ -40,8 +37,8 @@ func newCICommand() Command {
 				return runCIRun(args[1:])
 			case "status":
 				return runCIStatus(args[1:])
-			case "watch":
-				return runCIWatch(args[1:])
+			case "list":
+				return runCIList(args[1:])
 			case "config":
 				return runCIConfig(args[1:])
 			case "cancel":
@@ -55,14 +52,10 @@ func newCICommand() Command {
 }
 
 func runCIRun(args []string) int {
-	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr, "")
+	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr, "", "manual")
 }
 
-func runCIWatch(args []string) int {
-	return runCIRunWithStream(args, os.Stdout, os.Stdout, os.Stderr, "")
-}
-
-func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer, targetSHA string) int {
+func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer, targetSHA string, mode string) int {
 	fs := flag.NewFlagSet("ci run", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var commands stringList
@@ -74,12 +67,10 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	coverageLine := fs.Float64("coverage-line", -1, "Coverage line percentage (optional)")
 	coverageBranch := fs.Float64("coverage-branch", -1, "Coverage branch percentage (optional)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
+	watch := fs.Bool("watch", false, "Stream output")
 	_ = fs.Parse(args)
 
 	cmds := []string(commands)
-	if len(cmds) == 0 {
-		cmds = []string{"go test ./..."}
-	}
 
 	if targetSHA == "" {
 		targetSHA = strings.TrimSpace(*target)
@@ -116,14 +107,51 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		return 1
 	}
 
-	_ = cicmd.WriteRunning(cicmd.Running{
+	if len(cmds) == 0 {
+		if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
+			for _, cmd := range cfg.Commands {
+				if strings.TrimSpace(cmd.Command) == "" {
+					continue
+				}
+				cmds = append(cmds, cmd.Command)
+			}
+		}
+	}
+	if len(cmds) == 0 {
+		cmds = cicmd.InferDefaultCommands(workdir)
+	}
+
+	if *watch {
+		stream = out
+	}
+	mode = resolveCIMode(mode)
+	runID := strings.TrimSpace(os.Getenv("JUL_CI_RUN_ID"))
+	if runID == "" {
+		runID = cicmd.NewRunID()
+	}
+	logPath := strings.TrimSpace(os.Getenv("JUL_CI_LOG_PATH"))
+	record := cicmd.RunRecord{
+		ID:        runID,
 		CommitSHA: info.SHA,
+		Status:    "running",
+		Mode:      mode,
+		Commands:  cmds,
 		StartedAt: time.Now().UTC(),
+		LogPath:   logPath,
 		PID:       os.Getpid(),
-	})
-	defer func() {
-		_ = cicmd.ClearRunning()
-	}()
+	}
+	_ = cicmd.WriteRun(record)
+
+	if mode == "draft" {
+		_ = cicmd.WriteRunning(cicmd.Running{
+			CommitSHA: info.SHA,
+			StartedAt: time.Now().UTC(),
+			PID:       os.Getpid(),
+		})
+		defer func() {
+			_ = cicmd.ClearRunning()
+		}()
+	}
 
 	var result cicmd.Result
 	if stream != nil && !*jsonOut {
@@ -133,6 +161,9 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		result, err = cicmd.RunCommands(cmds, workdir)
 	}
 	if err != nil {
+		record.Status = "error"
+		record.FinishedAt = time.Now().UTC()
+		_ = cicmd.WriteRun(record)
 		fmt.Fprintf(errOut, "ci run failed: %v\n", err)
 		return 1
 	}
@@ -189,6 +220,10 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		CoverageBranchPct: coverageBranchPtr,
 	})
 
+	record.Status = result.Status
+	record.FinishedAt = time.Now().UTC()
+	_ = cicmd.WriteRun(record)
+
 	if *jsonOut {
 		payload := buildCIJSON(result, created)
 		if err := renderCIJSON(payload); err != nil {
@@ -203,9 +238,9 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 }
 
 func printCIUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ci [run] [--cmd <command>] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--target <rev>] [--change <id>] [--json]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ci run [--cmd <command>] [--watch] [--type ci] [--coverage-line <pct>] [--coverage-branch <pct>] [--target <rev>] [--change <id>] [--json]")
 	fmt.Fprintln(os.Stdout, "       jul ci status [--json]")
-	fmt.Fprintln(os.Stdout, "       jul ci watch [--cmd <command>] [--target <rev>] [--change <id>]")
+	fmt.Fprintln(os.Stdout, "       jul ci list [--limit N] [--json]")
 	fmt.Fprintln(os.Stdout, "       jul ci config")
 	fmt.Fprintln(os.Stdout, "       jul ci cancel")
 }
@@ -286,12 +321,106 @@ func runCIStatus(args []string) int {
 }
 
 func runCIConfig(args []string) int {
-	_ = args
+	fs := flag.NewFlagSet("ci config", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	initCfg := fs.Bool("init", false, "Create a default .jul/ci.toml if missing")
+	showCfg := fs.Bool("show", false, "Show resolved commands")
+	var sets stringList
+	fs.Var(&sets, "set", "Add command (name=command)")
+	_ = fs.Parse(args)
+
+	if *showCfg {
+		return showCIConfigResolved()
+	}
+
+	if *initCfg || len(sets) > 0 {
+		if *initCfg && len(sets) == 0 {
+			if path, err := cicmd.ConfigPath(); err == nil {
+				if _, statErr := os.Stat(path); statErr == nil {
+					fmt.Fprintln(os.Stdout, "CI configuration already exists.")
+					return 0
+				}
+			}
+		}
+		commands := []cicmd.CommandSpec{}
+		if len(sets) > 0 {
+			for i, raw := range sets {
+				name, cmd := splitCommandSpec(raw)
+				if name == "" {
+					name = fmt.Sprintf("cmd%d", i+1)
+				}
+				if strings.TrimSpace(cmd) == "" {
+					fmt.Fprintf(os.Stderr, "invalid --set value: %s\n", raw)
+					return 1
+				}
+				commands = append(commands, cicmd.CommandSpec{Name: name, Command: cmd})
+			}
+		} else {
+			commands = []cicmd.CommandSpec{{Name: "test", Command: "go test ./..."}}
+		}
+		if err := cicmd.WriteConfig(commands); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to write ci config: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "CI configuration saved to .jul/ci.toml")
+		return 0
+	}
+
 	fmt.Fprintln(os.Stdout, "CI configuration:")
 	fmt.Fprintf(os.Stdout, "  run_on_checkpoint: %t\n", config.CIRunOnCheckpoint())
 	fmt.Fprintf(os.Stdout, "  run_on_draft: %t\n", config.CIRunOnDraft())
 	fmt.Fprintf(os.Stdout, "  draft_ci_blocking: %t\n", config.CIDraftBlocking())
-	fmt.Fprintln(os.Stdout, "  default command: go test ./...")
+	if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
+		fmt.Fprintln(os.Stdout, "  commands (.jul/ci.toml):")
+		for _, cmd := range cfg.Commands {
+			if strings.TrimSpace(cmd.Command) == "" {
+				continue
+			}
+			label := cmd.Command
+			if strings.TrimSpace(cmd.Name) != "" {
+				label = fmt.Sprintf("%s: %s", cmd.Name, cmd.Command)
+			}
+			fmt.Fprintf(os.Stdout, "    - %s\n", label)
+		}
+	} else {
+		fmt.Fprintln(os.Stdout, "  default command: go test ./...")
+	}
+	return 0
+}
+
+func splitCommandSpec(raw string) (string, string) {
+	if strings.Contains(raw, "=") {
+		parts := strings.SplitN(raw, "=", 2)
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return "", strings.TrimSpace(raw)
+}
+
+func showCIConfigResolved() int {
+	root, err := gitutil.RepoTopLevel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read repo root: %v\n", err)
+		return 1
+	}
+	var cmds []string
+	source := "inferred"
+	if cfg, ok, err := cicmd.LoadConfig(); err == nil && ok && len(cfg.Commands) > 0 {
+		for _, cmd := range cfg.Commands {
+			if strings.TrimSpace(cmd.Command) == "" {
+				continue
+			}
+			cmds = append(cmds, cmd.Command)
+		}
+		source = ".jul/ci.toml"
+	} else {
+		cmds = cicmd.InferDefaultCommands(root)
+	}
+	fmt.Fprintln(os.Stdout, "CI configuration (resolved):")
+	fmt.Fprintf(os.Stdout, "  source: %s\n", source)
+	fmt.Fprintln(os.Stdout, "  commands:")
+	for _, cmd := range cmds {
+		fmt.Fprintf(os.Stdout, "    - %s\n", cmd)
+	}
 	return 0
 }
 
@@ -306,11 +435,7 @@ func runCICancel(args []string) int {
 		fmt.Fprintln(os.Stdout, "No running CI job.")
 		return 0
 	}
-	proc, err := os.FindProcess(running.PID)
-	if err == nil {
-		_ = proc.Signal(syscall.SIGTERM)
-	}
-	_ = cicmd.ClearRunning()
+	_ = cancelRunningCI(running)
 	fmt.Fprintf(os.Stdout, "Cancelled CI run for %s\n", running.CommitSHA)
 	return 0
 }
@@ -352,6 +477,42 @@ func buildCIJSON(result cicmd.Result, att client.Attestation) output.CIJSON {
 		details.Results = checks
 	}
 	return output.CIJSON{CI: details}
+}
+
+func resolveCIMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		mode = strings.TrimSpace(os.Getenv("JUL_CI_MODE"))
+	}
+	if mode == "" {
+		mode = "manual"
+	}
+	return mode
+}
+
+func runCIList(args []string) int {
+	fs := flag.NewFlagSet("ci list", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	limit := fs.Int("limit", 10, "Max runs to show")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	_ = fs.Parse(args)
+
+	runs, err := cicmd.ListRuns(*limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to list ci runs: %v\n", err)
+		return 1
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(output.CIRunsJSON{Runs: runs}); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	output.RenderCIRuns(os.Stdout, runs, output.DefaultOptions())
+	return 0
 }
 
 func renderCIJSON(payload output.CIJSON) error {

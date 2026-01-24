@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,7 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 	runCmd(t, repo, nil, "git", "show-ref", syncRes.WorkspaceRef)
 
 	// Checkpoint locally (keep-ref)
-	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
+	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--prompt", "write a checkpoint", "--no-ci", "--no-review", "--json")
 	var checkpointRes struct {
 		CheckpointSHA string `json:"CheckpointSHA"`
 		KeepRef       string `json:"KeepRef"`
@@ -55,6 +56,10 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 		t.Fatalf("expected keep ref and checkpoint sha")
 	}
 	runCmd(t, repo, nil, "git", "show-ref", checkpointRes.KeepRef)
+	promptNote := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/prompts", "show", checkpointRes.CheckpointSHA)
+	if !strings.Contains(promptNote, "write a checkpoint") {
+		t.Fatalf("expected prompt note, got %s", promptNote)
+	}
 
 	agentPath := filepath.Join(t.TempDir(), "agent.sh")
 	agentScript := `#!/bin/sh
@@ -148,7 +153,7 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		t.Fatalf("expected applied suggestions")
 	}
 
-	ciOut := runCmd(t, repo, env, julPath, "ci", "--cmd", "true", "--target", checkpointRes.CheckpointSHA, "--json")
+	ciOut := runCmd(t, repo, env, julPath, "ci", "run", "--cmd", "true", "--target", checkpointRes.CheckpointSHA, "--json")
 	var ciRes struct {
 		CI struct {
 			Status string `json:"status"`
@@ -160,6 +165,20 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	if ciRes.CI.Status == "" {
 		t.Fatalf("expected ci status")
 	}
+	listOut := runCmd(t, repo, env, julPath, "ci", "list", "--json")
+	var listRes struct {
+		Runs []struct {
+			ID        string `json:"id"`
+			CommitSHA string `json:"commit_sha"`
+			Status    string `json:"status"`
+		} `json:"runs"`
+	}
+	if err := json.NewDecoder(strings.NewReader(listOut)).Decode(&listRes); err != nil {
+		t.Fatalf("failed to decode ci list output: %v", err)
+	}
+	if len(listRes.Runs) == 0 || listRes.Runs[0].ID == "" {
+		t.Fatalf("expected ci runs list")
+	}
 	note := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", checkpointRes.CheckpointSHA)
 	if !strings.Contains(note, "\"status\"") {
 		t.Fatalf("expected attestation note, got %s", note)
@@ -170,12 +189,20 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		WorkspaceID string `json:"workspace_id"`
 		DraftSHA    string `json:"draft_sha"`
 		ChangeID    string `json:"change_id"`
+		WorkingTree struct {
+			Untracked []struct {
+				Path string `json:"path"`
+			} `json:"untracked"`
+		} `json:"working_tree"`
 	}
 	if err := json.NewDecoder(strings.NewReader(statusOut)).Decode(&statusRes); err != nil {
 		t.Fatalf("failed to decode status output: %v", err)
 	}
 	if statusRes.DraftSHA == "" || statusRes.ChangeID == "" {
 		t.Fatalf("expected status draft/change, got %+v", statusRes)
+	}
+	if len(statusRes.WorkingTree.Untracked) == 0 {
+		t.Fatalf("expected working tree untracked entries")
 	}
 
 	logOut := runCmd(t, repo, env, julPath, "log", "--json")
@@ -236,7 +263,7 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		t.Fatalf("expected ci completed sha")
 	}
 
-	runCmd(t, repo, env, julPath, "ci", "watch", "--cmd", "true")
+	runCmd(t, repo, env, julPath, "ci", "run", "--watch", "--cmd", "true")
 
 	remoteOut := runCmd(t, repo, env, julPath, "remote", "show")
 	if !strings.Contains(remoteOut, "No git remotes configured") {
@@ -274,4 +301,16 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	if err := json.NewDecoder(strings.NewReader(reflogOut)).Decode(&reflogRes); err != nil {
 		t.Fatalf("failed to decode reflog output: %v", err)
 	}
+
+	runCmd(t, repo, env, julPath, "ws", "checkout", "@")
+	basePath := filepath.Join(repo, ".jul", "workspaces", "@", "base")
+	if _, err := os.Stat(basePath); err != nil {
+		t.Fatalf("expected workspace base file: %v", err)
+	}
+	deviceID, err := os.ReadFile(filepath.Join(home, ".config", "jul", "device"))
+	if err != nil {
+		t.Fatalf("failed to read device id: %v", err)
+	}
+	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", "tester", strings.TrimSpace(string(deviceID)), "@")
+	runCmd(t, repo, nil, "git", "show-ref", syncRef)
 }

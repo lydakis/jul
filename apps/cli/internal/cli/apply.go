@@ -176,6 +176,10 @@ func draftFilesChanged(draftSHA string) int {
 		files, _ := diffNameOnly(checkpoint.SHA, draftSHA)
 		return len(files)
 	}
+	if parent, err := gitutil.ParentOf(draftSHA); err == nil && strings.TrimSpace(parent) != "" {
+		files, _ := diffNameOnly(parent, draftSHA)
+		return len(files)
+	}
 	files, _ := diffNameOnly("", draftSHA)
 	return len(files)
 }

@@ -200,6 +200,29 @@ func ReviewMinConfidence() float64 {
 	return configFloat("review.min_confidence", 0)
 }
 
+func PromptsStorage() string {
+	if cfg := configValue("prompts.storage"); cfg != "" {
+		return cfg
+	}
+	return "local"
+}
+
+func PromptsSyncEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(PromptsStorage()), "sync")
+}
+
+func CheckpointAdoptOnCommit() bool {
+	return configBool("checkpoint.adopt_on_commit", false)
+}
+
+func CheckpointAdoptRunCI() bool {
+	return configBool("checkpoint.adopt_run_ci", false)
+}
+
+func CheckpointAdoptRunReview() bool {
+	return configBool("checkpoint.adopt_run_review", false)
+}
+
 func hostnameFallback() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {

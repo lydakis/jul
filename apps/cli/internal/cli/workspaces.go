@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	remotesel "github.com/lydakis/jul/cli/internal/remote"
 )
 
 func newWorkspaceCommand() Command {
@@ -27,6 +28,8 @@ func newWorkspaceCommand() Command {
 			switch sub {
 			case "list":
 				return runWorkspaceList(args[1:])
+			case "checkout":
+				return runWorkspaceCheckout(args[1:])
 			case "set", "new":
 				return runWorkspaceSet(args[1:])
 			case "switch":
@@ -101,6 +104,107 @@ func runWorkspaceSet(args []string) int {
 		return 1
 	}
 	fmt.Fprintf(os.Stdout, "Workspace set to %s\n", wsID)
+	return 0
+}
+
+func runWorkspaceCheckout(args []string) int {
+	fs := flag.NewFlagSet("ws checkout", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	_ = fs.Parse(args)
+
+	name := strings.TrimSpace(fs.Arg(0))
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "workspace name required")
+		return 1
+	}
+
+	user, _ := workspaceParts()
+	targetName := name
+	if strings.Contains(name, "/") {
+		parts := strings.SplitN(name, "/", 2)
+		if len(parts) == 2 {
+			user = parts[0]
+			targetName = parts[1]
+		}
+	}
+	if user == "" {
+		user = config.UserName()
+	}
+	if user == "" {
+		fmt.Fprintln(os.Stderr, "workspace user required")
+		return 1
+	}
+	wsID := user + "/" + targetName
+
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to locate repo: %v\n", err)
+		return 1
+	}
+
+	remote, rerr := remotesel.Resolve()
+	if rerr == nil {
+		if err := ensureJulRefspecs(repoRoot, remote.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to configure remote: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stdout, "Fetching workspace '%s'...\n", targetName)
+		if _, err := gitutil.Git("-C", repoRoot, "fetch", remote.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "fetch failed: %v\n", err)
+			return 1
+		}
+	} else if rerr != remotesel.ErrNoRemote {
+		fmt.Fprintf(os.Stderr, "remote resolution failed: %v\n", rerr)
+		return 1
+	} else {
+		fmt.Fprintf(os.Stdout, "Checking out workspace '%s'...\n", targetName)
+	}
+
+	ref := workspaceRef(user, targetName)
+	if !gitutil.RefExists(ref) {
+		fmt.Fprintf(os.Stderr, "workspace ref not found: %s\n", ref)
+		fmt.Fprintln(os.Stderr, "Run 'jul sync' or create a workspace first.")
+		return 1
+	}
+	sha, err := gitutil.ResolveRef(ref)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve workspace ref: %v\n", err)
+		return 1
+	}
+
+	if _, err := gitutil.Git("-C", repoRoot, "reset", "--hard", sha); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update working tree: %v\n", err)
+		return 1
+	}
+	if _, err := gitutil.Git("-C", repoRoot, "clean", "-fd"); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to clean working tree: %v\n", err)
+		return 1
+	}
+
+	syncRef, err := syncRef(user, targetName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve sync ref: %v\n", err)
+		return 1
+	}
+	if err := gitutil.UpdateRef(syncRef, sha); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update sync ref: %v\n", err)
+		return 1
+	}
+	if err := writeWorkspaceBase(repoRoot, targetName, sha); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update workspace base: %v\n", err)
+		return 1
+	}
+
+	if err := runGitConfig("jul.workspace", wsID); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "  ✓ Workspace ref: %s\n", strings.TrimSpace(sha))
+	fmt.Fprintln(os.Stdout, "  ✓ Working tree updated")
+	fmt.Fprintln(os.Stdout, "  ✓ Sync ref initialized")
+	fmt.Fprintln(os.Stdout, "  ✓ workspace_base set")
+	fmt.Fprintf(os.Stdout, "Switched to workspace '%s'\n", targetName)
 	return 0
 }
 
@@ -237,6 +341,17 @@ func deleteWorkspaceLocal(target string) error {
 	return nil
 }
 
+func writeWorkspaceBase(repoRoot, workspace, sha string) error {
+	if strings.TrimSpace(sha) == "" {
+		return fmt.Errorf("workspace base sha required")
+	}
+	path := filepath.Join(repoRoot, ".jul", "workspaces", workspace, "base")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(strings.TrimSpace(sha)+"\n"), 0o644)
+}
+
 func runGitConfig(key, value string) error {
 	cmd := exec.Command("git", "config", key, value)
 	output, err := cmd.CombinedOutput()
@@ -247,5 +362,5 @@ func runGitConfig(key, value string) error {
 }
 
 func printWorkspaceUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|set|new|switch|rename|delete|current]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|checkout|set|new|switch|rename|delete|current]")
 }

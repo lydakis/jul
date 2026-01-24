@@ -101,6 +101,33 @@ func TestSuggestionLifecycle(t *testing.T) {
 	})
 }
 
+func TestPromptNoteRoundTrip(t *testing.T) {
+	repo := initRepo(t)
+	commit := commitFile(t, repo, "README.md", "hello\n", "prompt commit")
+
+	withRepo(t, repo, func() {
+		note := PromptNote{
+			CommitSHA: commit,
+			ChangeID:  gitutil.FallbackChangeID(commit),
+			Source:    "checkpoint",
+			Prompt:    "write a test prompt",
+		}
+		if err := WritePrompt(note); err != nil {
+			t.Fatalf("WritePrompt failed: %v", err)
+		}
+		got, err := GetPrompt(commit)
+		if err != nil {
+			t.Fatalf("GetPrompt failed: %v", err)
+		}
+		if got == nil {
+			t.Fatalf("expected prompt note")
+		}
+		if got.Prompt != note.Prompt {
+			t.Fatalf("expected prompt %q, got %q", note.Prompt, got.Prompt)
+		}
+	})
+}
+
 func initRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

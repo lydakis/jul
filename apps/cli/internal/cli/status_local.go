@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	cicmd "github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
@@ -104,6 +105,10 @@ func buildLocalStatus() (output.Status, error) {
 		ChangeID:     changeID,
 		FilesChanged: filesChanged,
 	}
+	status.DraftCI = buildDraftCIStatus(draftSHA)
+	if tree, err := readWorkingTreeStatus(); err == nil {
+		status.WorkingTree = tree
+	}
 
 	checkpoints, err := listCheckpoints()
 	if err != nil {
@@ -128,6 +133,127 @@ func buildLocalStatus() (output.Status, error) {
 	status.Checkpoints = summaries
 	status.PromoteStatus = buildPromoteStatus(checkpoints)
 	return status, nil
+}
+
+func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
+	completed, err := cicmd.ReadCompleted()
+	if err != nil {
+		return nil
+	}
+	running, _ := cicmd.ReadRunning()
+	if completed == nil && running == nil {
+		return nil
+	}
+	configured := hasCIConfig()
+	if !configured {
+		if root, err := gitutil.RepoTopLevel(); err == nil {
+			configured = hasCIInference(root)
+		}
+	}
+	status := "unknown"
+	resultsCurrent := false
+	if completed != nil {
+		resultsCurrent = completed.CommitSHA == draftSHA
+		if resultsCurrent {
+			status = completed.Result.Status
+		} else {
+			status = "stale"
+		}
+	}
+	if running != nil && running.CommitSHA == draftSHA {
+		status = "running"
+	}
+	if completed != nil && hasRealCIResult(completed.Result.Commands) {
+		configured = true
+	}
+	if running != nil && running.CommitSHA == draftSHA {
+		configured = true
+	}
+	if !configured && !resultsCurrent && (running == nil || running.CommitSHA != draftSHA) {
+		return nil
+	}
+	details := &output.CIStatusDetails{
+		Status:          status,
+		CurrentDraftSHA: draftSHA,
+		ResultsCurrent:  resultsCurrent,
+	}
+	if completed != nil {
+		details.CompletedSHA = completed.CommitSHA
+		if !completed.Result.StartedAt.IsZero() && !completed.Result.FinishedAt.IsZero() {
+			details.DurationMs = completed.Result.FinishedAt.Sub(completed.Result.StartedAt).Milliseconds()
+		}
+		checks := make([]output.CICheck, 0, len(completed.Result.Commands))
+		for _, cmd := range completed.Result.Commands {
+			checks = append(checks, output.CICheck{
+				Name:       output.LabelForCommand(cmd.Command),
+				Status:     cmd.Status,
+				DurationMs: cmd.DurationMs,
+				Output:     cmd.OutputExcerpt,
+			})
+		}
+		if completed.CoverageLinePct != nil {
+			checks = append(checks, output.CICheck{
+				Name:   "coverage_line",
+				Status: "pass",
+				Value:  *completed.CoverageLinePct,
+			})
+		}
+		if completed.CoverageBranchPct != nil {
+			checks = append(checks, output.CICheck{
+				Name:   "coverage_branch",
+				Status: "pass",
+				Value:  *completed.CoverageBranchPct,
+			})
+		}
+		details.Results = checks
+	}
+	if running != nil {
+		details.RunningSHA = running.CommitSHA
+	}
+	return details
+}
+
+func hasCIConfig() bool {
+	cfg, ok, err := cicmd.LoadConfig()
+	if err != nil || !ok || len(cfg.Commands) == 0 {
+		return false
+	}
+	for _, cmd := range cfg.Commands {
+		if isRealCICommand(cmd.Command) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCIInference(root string) bool {
+	cmds := cicmd.InferDefaultCommands(root)
+	for _, cmd := range cmds {
+		if isRealCICommand(cmd) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRealCIResult(cmds []cicmd.CommandResult) bool {
+	for _, cmd := range cmds {
+		if isRealCICommand(cmd.Command) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRealCICommand(cmd string) bool {
+	trimmed := strings.TrimSpace(cmd)
+	if trimmed == "" {
+		return false
+	}
+	if strings.EqualFold(trimmed, "true") {
+		return false
+	}
+	return true
 }
 
 func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
@@ -158,6 +284,55 @@ func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
 		Eligible:         true,
 		CheckpointsAhead: ahead,
 	}
+}
+
+func readWorkingTreeStatus() (*output.WorkingTreeStatus, error) {
+	out, err := gitutil.Git("status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return &output.WorkingTreeStatus{Clean: true}, nil
+	}
+
+	status := &output.WorkingTreeStatus{}
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		if len(line) < 2 {
+			continue
+		}
+		code := line[:2]
+		path := strings.TrimSpace(line[2:])
+		if path == "" {
+			continue
+		}
+		if code == "??" {
+			status.Untracked = append(status.Untracked, output.WorkingTreeEntry{
+				Path:   path,
+				Status: "?",
+			})
+			continue
+		}
+		staged := code[0]
+		unstaged := code[1]
+		if staged != ' ' {
+			status.Staged = append(status.Staged, output.WorkingTreeEntry{
+				Path:   path,
+				Status: string(staged),
+			})
+		}
+		if unstaged != ' ' && unstaged != '?' {
+			status.Unstaged = append(status.Unstaged, output.WorkingTreeEntry{
+				Path:   path,
+				Status: string(unstaged),
+			})
+		}
+	}
+	if len(status.Staged) == 0 && len(status.Unstaged) == 0 && len(status.Untracked) == 0 {
+		status.Clean = true
+	}
+	return status, nil
 }
 
 func fallbackCommitInfo() (gitutil.CommitInfo, error) {

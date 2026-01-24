@@ -40,6 +40,10 @@ type CIStatusDetails struct {
 	Results         []CICheck `json:"results,omitempty"`
 }
 
+type CIRunsJSON struct {
+	Runs []ci.RunRecord `json:"runs"`
+}
+
 func RenderCIResult(out io.Writer, result ci.Result, opts Options) {
 	fmt.Fprintln(out, "Running CI...")
 	for _, cmd := range result.Commands {
@@ -120,8 +124,36 @@ func RenderCIStatus(out io.Writer, payload CIStatusJSON, opts Options) {
 	}
 }
 
+func RenderCIRuns(out io.Writer, runs []ci.RunRecord, opts Options) {
+	if len(runs) == 0 {
+		fmt.Fprintln(out, "No CI runs recorded.")
+		return
+	}
+	fmt.Fprintln(out, "CI Runs:")
+	for _, run := range runs {
+		icon := statusIconColored(run.Status, opts)
+		if icon == "" {
+			icon = statusIcon(run.Status, opts)
+		}
+		start := ""
+		if !run.StartedAt.IsZero() {
+			start = run.StartedAt.Format("2006-01-02 15:04:05")
+		}
+		mode := run.Mode
+		if mode == "" {
+			mode = "manual"
+		}
+		sha := shortID(run.CommitSHA, 6)
+		line := fmt.Sprintf("  %s%s %s %s %s", icon, start, mode, sha, run.ID)
+		fmt.Fprintln(out, strings.TrimSpace(line))
+	}
+}
+
 func LabelForCommand(command string) string {
 	normalized := strings.ToLower(strings.TrimSpace(command))
+	if base, path := splitChdirCommand(normalized, command); base != "" && path != "" {
+		return fmt.Sprintf("%s (%s)", base, path)
+	}
 	switch {
 	case strings.Contains(normalized, "lint"):
 		return "lint"
@@ -137,4 +169,32 @@ func LabelForCommand(command string) string {
 		}
 		return "command"
 	}
+}
+
+func splitChdirCommand(normalized, original string) (string, string) {
+	trimmed := strings.TrimSpace(original)
+	if !strings.HasPrefix(strings.ToLower(trimmed), "cd ") {
+		return "", ""
+	}
+	rest := strings.TrimSpace(trimmed[3:])
+	sep := "&&"
+	idx := strings.Index(rest, sep)
+	if idx < 0 {
+		sep = ";"
+		idx = strings.Index(rest, sep)
+	}
+	if idx < 0 {
+		return "", ""
+	}
+	path := strings.TrimSpace(rest[:idx])
+	path = strings.Trim(path, "\"'")
+	cmd := strings.TrimSpace(rest[idx+len(sep):])
+	if path == "" || cmd == "" {
+		return "", ""
+	}
+	base := LabelForCommand(cmd)
+	if base == "" {
+		return "", ""
+	}
+	return base, path
 }
