@@ -174,12 +174,12 @@ func runWorkspaceSwitch(args []string) int {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1
 	}
-	if err := runGitConfig("jul.workspace", wsID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
-		return 1
-	}
 	if err := switchToWorkspace(wsUser, wsName); err != nil {
 		fmt.Fprintf(os.Stderr, "switch failed: %v\n", err)
+		return 1
+	}
+	if err := runGitConfig("jul.workspace", wsID); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
 		return 1
 	}
 	fmt.Fprintf(os.Stdout, "Switched to workspace '%s'\n", wsName)
@@ -232,12 +232,12 @@ func runWorkspaceStack(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to create stacked workspace: %v\n", err)
 		return 1
 	}
-	if err := runGitConfig("jul.workspace", wsID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
-		return 1
-	}
 	if err := resetToDraft(newDraftSHA); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to reset to new workspace: %v\n", err)
+		return 1
+	}
+	if err := runGitConfig("jul.workspace", wsID); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
 		return 1
 	}
 	fmt.Fprintf(os.Stdout, "Created workspace '%s' (stacked on %s)\n", wsName, currentName)
@@ -314,7 +314,7 @@ func runWorkspaceCheckout(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to update working tree: %v\n", err)
 		return 1
 	}
-	if _, err := gitutil.Git("-C", repoRoot, "clean", "-fd"); err != nil {
+	if _, err := gitutil.Git("-C", repoRoot, "clean", "-fd", "--exclude=.jul"); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to clean working tree: %v\n", err)
 		return 1
 	}
@@ -502,6 +502,14 @@ func createWorkspaceDraft(user, workspace, parentSHA, treeSHA string) (string, e
 	if err != nil {
 		return "", err
 	}
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
+	if gitutil.RefExists(workspaceRef) {
+		return "", fmt.Errorf("workspace already exists: %s/%s", user, workspace)
+	}
+	if gitutil.RefExists(syncRef) {
+		return "", fmt.Errorf("workspace already exists: %s/%s", user, workspace)
+	}
 	changeID, err := gitutil.NewChangeID()
 	if err != nil {
 		return "", err
@@ -510,8 +518,6 @@ func createWorkspaceDraft(user, workspace, parentSHA, treeSHA string) (string, e
 	if err != nil {
 		return "", err
 	}
-	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
-	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
 	if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
 		return "", err
 	}
@@ -531,7 +537,7 @@ func resetToDraft(draftSHA string) error {
 	if _, err := gitutil.Git("reset", "--hard", draftSHA); err != nil {
 		return err
 	}
-	if _, err := gitutil.Git("clean", "-fd"); err != nil {
+	if _, err := gitutil.Git("clean", "-fd", "--exclude=.jul"); err != nil {
 		return err
 	}
 	return nil
