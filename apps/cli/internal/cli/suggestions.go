@@ -27,11 +27,18 @@ func newSuggestionsCommand() Command {
 			_ = fs.Parse(args)
 
 			currentChangeID := strings.TrimSpace(*changeID)
+			draftSHA := ""
+			parentSHA := ""
 			baseSHA := ""
 			currentMessage := ""
-			if resolved, err := currentBaseSHA(); err == nil {
-				baseSHA = resolved
-				if msg, err := gitutil.CommitMessage(resolved); err == nil {
+			if draft, parent, err := currentDraftAndBase(); err == nil {
+				draftSHA = draft
+				parentSHA = parent
+				baseSHA = draftSHA
+				if checkpoint, _ := latestCheckpoint(); checkpoint != nil && strings.TrimSpace(parentSHA) != "" && checkpoint.SHA == parentSHA {
+					baseSHA = parentSHA
+				}
+				if msg, err := gitutil.CommitMessage(baseSHA); err == nil {
 					currentMessage = firstLine(msg)
 				}
 			}
@@ -63,8 +70,7 @@ func newSuggestionsCommand() Command {
 			if statusFilter == "stale" {
 				staleOnly := make([]client.Suggestion, 0, len(results))
 				for _, sug := range results {
-					stale := baseSHA != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != baseSHA
-					if stale {
+					if suggestionIsStale(sug.BaseCommitSHA, draftSHA, parentSHA) {
 						staleOnly = append(staleOnly, sug)
 					}
 				}
