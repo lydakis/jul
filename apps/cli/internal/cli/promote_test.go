@@ -87,6 +87,10 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 	if err := promoteLocal("main", sha, false); err != nil {
 		t.Fatalf("promote failed: %v", err)
 	}
+	headSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+	if headSHA != sha {
+		t.Fatalf("expected HEAD to remain %s after promote, got %s", sha, headSHA)
+	}
 
 	user, workspace := workspaceParts()
 	workspaceRef := workspaceRef(user, workspace)
