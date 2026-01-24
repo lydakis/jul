@@ -284,7 +284,7 @@ func acceptMergeResolution(repoRoot, workspace, workspaceRef, syncRef, mergedSHA
 	if err := gitutil.UpdateRef(workspaceRef, mergedSHA); err != nil {
 		return err
 	}
-	if err := writeWorkspaceBase(repoRoot, workspace, mergedSHA); err != nil {
+	if err := writeWorkspaceLease(repoRoot, workspace, mergedSHA); err != nil {
 		return err
 	}
 	if err := updateWorktreeTo(repoRoot, mergedSHA); err != nil {

@@ -336,9 +336,9 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	}
 
 	runCmd(t, repo, env, julPath, "ws", "checkout", "@")
-	basePath := filepath.Join(repo, ".jul", "workspaces", "@", "base")
-	if _, err := os.Stat(basePath); err != nil {
-		t.Fatalf("expected workspace base file: %v", err)
+	leasePath := filepath.Join(repo, ".jul", "workspaces", "@", "lease")
+	if _, err := os.Stat(leasePath); err != nil {
+		t.Fatalf("expected workspace lease file: %v", err)
 	}
 	deviceID, err := os.ReadFile(filepath.Join(home, ".config", "jul", "device"))
 	if err != nil {

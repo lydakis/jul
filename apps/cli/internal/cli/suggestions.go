@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/client"
+	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
 )
@@ -25,15 +26,18 @@ func newSuggestionsCommand() Command {
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			currentCheckpoint, _ := latestCheckpoint()
 			currentChangeID := strings.TrimSpace(*changeID)
-			currentCheckpointSHA := ""
+			baseSHA := ""
 			currentMessage := ""
-			if currentCheckpoint != nil {
-				currentCheckpointSHA = currentCheckpoint.SHA
-				currentMessage = firstLine(currentCheckpoint.Message)
-				if currentChangeID == "" {
-					currentChangeID = currentCheckpoint.ChangeID
+			if resolved, err := currentBaseSHA(); err == nil {
+				baseSHA = resolved
+				if msg, err := gitutil.CommitMessage(resolved); err == nil {
+					currentMessage = firstLine(msg)
+				}
+			}
+			if currentChangeID == "" {
+				if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
+					currentChangeID = checkpoint.ChangeID
 				}
 			}
 
@@ -59,7 +63,7 @@ func newSuggestionsCommand() Command {
 			if statusFilter == "stale" {
 				staleOnly := make([]client.Suggestion, 0, len(results))
 				for _, sug := range results {
-					stale := currentCheckpointSHA != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != currentCheckpointSHA
+					stale := baseSHA != "" && sug.BaseCommitSHA != "" && sug.BaseCommitSHA != baseSHA
 					if stale {
 						staleOnly = append(staleOnly, sug)
 					}
@@ -78,7 +82,7 @@ func newSuggestionsCommand() Command {
 			output.RenderSuggestions(os.Stdout, output.SuggestionsView{
 				ChangeID:          currentChangeID,
 				Status:            statusFilter,
-				CheckpointSHA:     currentCheckpointSHA,
+				CheckpointSHA:     baseSHA,
 				CheckpointMessage: currentMessage,
 				Suggestions:       results,
 			}, output.DefaultOptions())

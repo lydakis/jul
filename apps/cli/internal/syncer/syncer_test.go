@@ -73,11 +73,11 @@ func TestCheckpointErrorsOnKeepRefPushFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	basePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "base")
-	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+	leasePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "lease")
+	if err := os.MkdirAll(filepath.Dir(leasePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(basePath, []byte(workspaceSHA+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(leasePath, []byte(workspaceSHA+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,11 +178,11 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	basePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "base")
-	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+	leasePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "lease")
+	if err := os.MkdirAll(filepath.Dir(leasePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(basePath, []byte(baseSHA+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(leasePath, []byte(baseSHA+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -320,11 +320,11 @@ func TestSyncAutoMergeDeletesFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	basePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "base")
-	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+	leasePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "lease")
+	if err := os.MkdirAll(filepath.Dir(leasePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(basePath, []byte(baseSHA+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(leasePath, []byte(baseSHA+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

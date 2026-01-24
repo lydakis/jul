@@ -106,10 +106,10 @@ func Sync() (Result, error) {
 		}
 	}
 
-	baseSHA, _ := readWorkspaceBase(repoRoot, workspace)
+	baseSHA, _ := readWorkspaceLease(repoRoot, workspace)
 	if baseSHA == "" && workspaceRemote != "" {
 		res.Diverged = true
-		res.RemoteProblem = "workspace baseline missing; run 'jul ws checkout' first"
+		res.RemoteProblem = "workspace lease missing; run 'jul ws checkout' first"
 		return finalizeSync(res, false)
 	}
 	if workspaceRemote != "" && baseSHA != "" && workspaceRemote != baseSHA {
@@ -130,7 +130,7 @@ func Sync() (Result, error) {
 		if err := updateWorktree(repoRoot, mergedSHA); err != nil {
 			return res, err
 		}
-		if err := writeWorkspaceBase(repoRoot, workspace, mergedSHA); err != nil {
+		if err := writeWorkspaceLease(repoRoot, workspace, mergedSHA); err != nil {
 			return res, err
 		}
 		res.DraftSHA = mergedSHA
@@ -156,7 +156,7 @@ func Sync() (Result, error) {
 			return res, err
 		}
 	}
-	if err := writeWorkspaceBase(repoRoot, workspace, draftSHA); err != nil {
+	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
 		return res, err
 	}
 	return finalizeSync(res, true)
@@ -270,7 +270,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 			return res, err
 		}
 		res.WorkspaceUpdated = true
-		if err := writeWorkspaceBase(repoRoot, workspace, newDraftSHA); err != nil {
+		if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
 			return res, err
 		}
 	}
@@ -386,7 +386,7 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 			return res, err
 		}
 		res.WorkspaceUpdated = true
-		if err := writeWorkspaceBase(repoRoot, workspace, newDraftSHA); err != nil {
+		if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
 			return res, err
 		}
 	}
@@ -642,8 +642,8 @@ func pushWorkspace(remoteName, sha, ref, old string) error {
 	return err
 }
 
-func readWorkspaceBase(repoRoot, workspace string) (string, error) {
-	path := workspaceBasePath(repoRoot, workspace)
+func readWorkspaceLease(repoRoot, workspace string) (string, error) {
+	path := workspaceLeasePath(repoRoot, workspace)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -651,17 +651,17 @@ func readWorkspaceBase(repoRoot, workspace string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func writeWorkspaceBase(repoRoot, workspace, sha string) error {
+func writeWorkspaceLease(repoRoot, workspace, sha string) error {
 	if strings.TrimSpace(sha) == "" {
-		return errors.New("workspace base sha required")
+		return errors.New("workspace lease sha required")
 	}
-	path := workspaceBasePath(repoRoot, workspace)
+	path := workspaceLeasePath(repoRoot, workspace)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(sha+"\n"), 0o644)
 }
 
-func workspaceBasePath(repoRoot, workspace string) string {
-	return filepath.Join(repoRoot, ".jul", "workspaces", workspace, "base")
+func workspaceLeasePath(repoRoot, workspace string) string {
+	return filepath.Join(repoRoot, ".jul", "workspaces", workspace, "lease")
 }

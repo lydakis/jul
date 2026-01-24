@@ -69,9 +69,9 @@ func TestMergeConflictResolution(t *testing.T) {
 
 	runCmd(t, repo, nil, "git", "update-ref", oursRes.SyncRef, oursRes.DraftSHA)
 	runCmd(t, repo, nil, "git", "update-ref", oursRes.WorkspaceRef, theirsRes.DraftSHA)
-	basePath := filepath.Join(repo, ".jul", "workspaces", "@", "base")
-	if err := os.WriteFile(basePath, []byte(strings.TrimSpace(checkpointRes.CheckpointSHA)+"\n"), 0o644); err != nil {
-		t.Fatalf("failed to write workspace base: %v", err)
+	leasePath := filepath.Join(repo, ".jul", "workspaces", "@", "lease")
+	if err := os.WriteFile(leasePath, []byte(strings.TrimSpace(checkpointRes.CheckpointSHA)+"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write workspace lease: %v", err)
 	}
 
 	agentPath := filepath.Join(t.TempDir(), "agent.sh")

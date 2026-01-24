@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
@@ -25,6 +26,20 @@ func currentDraftSHA() (string, error) {
 		}
 	}
 	return gitutil.Git("rev-parse", "HEAD")
+}
+
+func currentBaseSHA() (string, error) {
+	draftSHA, err := currentDraftSHA()
+	if err != nil {
+		return "", err
+	}
+	if parent, err := gitutil.ParentOf(draftSHA); err == nil && strings.TrimSpace(parent) != "" {
+		return strings.TrimSpace(parent), nil
+	}
+	if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
+		return checkpoint.SHA, nil
+	}
+	return "", fmt.Errorf("base commit not found")
 }
 
 func isDraftMessage(message string) bool {

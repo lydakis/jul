@@ -183,8 +183,8 @@ func runWorkspaceCheckout(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to update sync ref: %v\n", err)
 		return 1
 	}
-	if err := writeWorkspaceBase(repoRoot, targetName, sha); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update workspace base: %v\n", err)
+	if err := writeWorkspaceLease(repoRoot, targetName, sha); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update workspace lease: %v\n", err)
 		return 1
 	}
 
@@ -196,7 +196,7 @@ func runWorkspaceCheckout(args []string) int {
 	fmt.Fprintf(os.Stdout, "  ✓ Workspace ref: %s\n", strings.TrimSpace(sha))
 	fmt.Fprintln(os.Stdout, "  ✓ Working tree updated")
 	fmt.Fprintln(os.Stdout, "  ✓ Sync ref initialized")
-	fmt.Fprintln(os.Stdout, "  ✓ workspace_base set")
+	fmt.Fprintln(os.Stdout, "  ✓ workspace_lease set")
 	fmt.Fprintf(os.Stdout, "Switched to workspace '%s'\n", targetName)
 	return 0
 }
@@ -320,17 +320,17 @@ func deleteWorkspaceLocal(target string) error {
 		}
 	}
 	if root, err := gitutil.RepoTopLevel(); err == nil {
-		basePath := filepath.Join(root, ".jul", "workspaces", name, "base")
-		_ = os.Remove(basePath)
+		leasePath := filepath.Join(root, ".jul", "workspaces", name, "lease")
+		_ = os.Remove(leasePath)
 	}
 	return nil
 }
 
-func writeWorkspaceBase(repoRoot, workspace, sha string) error {
+func writeWorkspaceLease(repoRoot, workspace, sha string) error {
 	if strings.TrimSpace(sha) == "" {
-		return fmt.Errorf("workspace base sha required")
+		return fmt.Errorf("workspace lease sha required")
 	}
-	path := filepath.Join(repoRoot, ".jul", "workspaces", workspace, "base")
+	path := filepath.Join(repoRoot, ".jul", "workspaces", workspace, "lease")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
