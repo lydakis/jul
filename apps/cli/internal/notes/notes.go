@@ -17,6 +17,8 @@ const (
 	RefTraces                 = "refs/notes/jul/traces"
 	RefSuggestions            = "refs/notes/jul/suggestions"
 	RefReview                 = "refs/notes/jul/review"
+	RefReviewState            = "refs/notes/jul/review-state"
+	RefReviewComments         = "refs/notes/jul/review-comments"
 	RefMeta                   = "refs/notes/jul/meta"
 )
 
