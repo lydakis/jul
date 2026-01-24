@@ -283,6 +283,14 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		t.Fatalf("expected diff output")
 	}
 
+	writeFile(t, repo, "LOCAL.txt", "snap\n")
+	runCmd(t, repo, env, julPath, "local", "save", "snap1")
+	writeFile(t, repo, "LOCAL.txt", "changed\n")
+	runCmd(t, repo, env, julPath, "local", "restore", "snap1")
+	if got := readFile(t, repo, "LOCAL.txt"); strings.TrimSpace(got) != "snap" {
+		t.Fatalf("expected local restore to revert file, got %q", strings.TrimSpace(got))
+	}
+
 	ciStatusOut, _ := runCmdAllowFailure(t, repo, env, julPath, "ci", "status", "--json")
 	var ciStatusRes struct {
 		CI struct {

@@ -6,7 +6,7 @@
 - [x] Implement `jul merge` (conflict resolution flow) per spec
 - [ ] Implement `jul submit` (one workspace = one review) + `review-state`/`review-comments` notes
 - [ ] Implement `jul ws stack` (stacked workspaces, based on latest checkpoint; require checkpoint)
-- [ ] Implement `jul local` save/restore/list/delete (client-side workspace states)
+- [x] Implement `jul local` save/restore/list/delete (client-side workspace states)
 - [ ] Implement `jul ws new` to create workspace + start draft (not just set config)
 - [ ] Implement `jul ws switch` to save/restore local state + sync + fetch + lease update
 - [ ] Add `jul remote clear` to unset remote selection
