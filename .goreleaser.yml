@@ -44,3 +44,4 @@ homebrew_casks:
     repository:
       owner: lydakis
       name: homebrew-jul
+    token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
