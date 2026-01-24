@@ -37,7 +37,7 @@ brews:
   - name: jul
     homepage: https://github.com/lydakis/jul
     description: Jul CLI with bundled OpenCode agent
-    tap:
+    repository:
       owner: lydakis
       name: homebrew-jul
     install: |
