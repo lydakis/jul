@@ -119,7 +119,7 @@ func runInit(args []string) int {
 		}
 		fmt.Fprintln(os.Stdout, "Run 'jul remote set <name>' to choose one.")
 		localOnly = true
-	} else if err == remotesel.ErrNoRemote {
+	} else if err == remotesel.ErrNoRemote || err == remotesel.ErrRemoteMissing {
 		fmt.Fprintln(os.Stdout, "No remote configured. Working locally.")
 		localOnly = true
 	} else if err != nil {

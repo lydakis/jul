@@ -63,3 +63,27 @@ func TestInitStartsDraftAndLease(t *testing.T) {
 		t.Fatalf("expected lease %s, got %s", sha, strings.TrimSpace(string(data)))
 	}
 }
+
+func TestInitWithMissingRemoteContinuesLocal(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	if code := runInit([]string{"--remote", "origin", "demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
+
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	workspaceRef := workspaceRef(user, workspace)
+	if !gitutil.RefExists(workspaceRef) {
+		t.Fatalf("expected workspace ref %s", workspaceRef)
+	}
+}
