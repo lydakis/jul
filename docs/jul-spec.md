@@ -43,11 +43,11 @@ Agent (Codex / Claude Code / OpenCode)
 
 **Jul is NOT:**
 - A new VCS (it's built on Git)
-- A special server (any git remote works: GitHub, GitLab, etc.)
+- A special server (standard git remotes work **if** they accept custom refs and non‑FF updates to `refs/jul/*`)
 - A CI service (tests run locally)
 - A remote execution platform (agents run locally)
 
-**Metadata travels with Git** via refs and notes — on hosts that accept custom refs. See Section 5.7 for portability details.
+**Metadata travels with Git** via refs and notes — on hosts that accept custom refs **and non‑FF updates**. See Section 5.7 for portability details.
 
 ---
 
@@ -61,7 +61,7 @@ Agent (Codex / Claude Code / OpenCode)
 - **Agent-native feedback**: Rich JSON responses for agents to act on
 - **Workspaces over branches**: Named streams of work
 - **Rich metadata**: CI/coverage/lint/traces attached to checkpoints
-- **Git compatibility**: Any git remote works (GitHub, GitLab, etc.)
+- **Git compatibility**: Any git remote that accepts custom refs + non‑FF updates to `refs/jul/*` (GitHub, GitLab, etc.)
 - **JJ friendliness**: Works with JJ's git backend
 
 ### 1.2 Non-Goals (v1)
@@ -84,16 +84,25 @@ Agent (Codex / Claude Code / OpenCode)
 | **Device** | A machine running Jul, identified by device ID (e.g., "swift-tiger") |
 | **Workspace** | A named stream of work. Replaces branches. Default: `@` |
 | **Workspace Ref** | Canonical state (`refs/jul/workspaces/...`) — shared across devices |
-| **Workspace Base** | Per-workspace file (`.jul/workspaces/<ws>/base`) — the semantic lease |
+| **Workspace Lease** | Per-workspace file (`.jul/workspaces/<ws>/lease`) — the semantic lease |
+| **Base Commit** | The parent for the current draft (latest checkpoint or latest published commit after promote) |
 | **Sync Ref** | Device backup (`refs/jul/sync/<user>/<device>/...`) — always pushes |
 | **Trace Sync Ref** | Device trace backup (`refs/jul/trace-sync/...`) — always pushes |
-| **Draft** | Ephemeral commit snapshotting working tree (parent = last checkpoint) |
+| **Draft** | Ephemeral commit snapshotting working tree (parent = base commit) |
 | **Trace** | Fine-grained provenance unit (prompt, agent, session) — side history, keyed by SHA |
-| **Checkpoint** | A locked unit of work with Change-Id, message, and trace_base/trace_head refs |
-| **Change-Id** | Gerrit-style stable identifier that survives amend/rebase (`Iab4f3c2d...`) |
+| **Checkpoint** | A locked unit of work with message, Change-Id, and trace_base/trace_head refs |
+| **Change-Id** | Stable identifier for a logical change (`Iab4f3c2d...`), created at first checkpoint and renewed after promote |
 | **Attestation** | CI/test/coverage results attached to a trace, draft, checkpoint, or published commit |
 | **Suggestion** | Agent-proposed fix targeting a checkpoint |
 | **Local Workspace** | Client-side saved state for fast context switching |
+
+**Change-Id scope:** A Change‑Id groups multiple checkpoints (and later published commits) until `jul promote` closes it.
+
+**Identifier formats (examples):**
+- **Change‑Id**: `Iab4f3c2d...` (logical change group)
+- **Checkpoint/Draft/Commit SHA**: `abc1234` (git object id)
+- **Trace SHA**: `def4567` (trace commits are just git commits)
+- **Suggestion ID**: `01HX7Y9A` (ULID‑ish)
 
 ### 2.2 The Trace → Draft → Checkpoint → Promote Model
 
@@ -112,7 +121,7 @@ Jul uses a four-stage model:
 │    • Shadow snapshot of your working tree                               │
 │    • Continuously updated (every save)                                  │
 │    • Synced to remote automatically                                     │
-│    • Has a Change-Id from creation                                      │
+│    • Change-Id assigned at first checkpoint (carried forward)           │
 │    • No commit message yet                                              │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                           jul checkpoint                                │
@@ -219,7 +228,7 @@ $ jul promote --to main --json
 Suggestions are agent-proposed fixes tied to a specific checkpoint SHA:
 
 ```
-checkpoint abc123 (Iab4f...)
+checkpoint abc123 (change Iab4f...)
          │
          ▼
 CI + review runs
@@ -251,10 +260,13 @@ suggestions created (base_sha: abc123)
 }
 ```
 
-**Staleness:** If you amend the checkpoint (same Change-Id, new SHA), existing suggestions become stale:
+**Staleness:** A suggestion is **fresh** iff `suggestion.base_sha == parent(current_draft)`.  
+If the base commit changes (amend **or** new checkpoint in the same change), existing suggestions become stale:
+
+> Example: create a new checkpoint in the same Change‑Id without amending; prior suggestions become stale because the draft’s base commit advanced.
 
 ```
-checkpoint abc123 (Iab4f...)
+checkpoint abc123 (change Iab4f...)
          │
          ├── suggestion created (base_sha: abc123)
          │
@@ -274,16 +286,50 @@ $ jul apply 01HX7Y9A
 **Status transitions:**
 - `pending` → `applied` (via `jul apply`)
 - `pending` → `rejected` (via `jul reject`)
-- `pending` → `stale` (checkpoint amended)
+- `pending` → `stale` (base commit changed)
 - `stale` → stays stale (must run fresh review)
 
 **Result**: Clean history with your work and agent fixes as separate checkpoints.
 
 ```
 main:
-  Iab4f... "feat: add auth"              ← your work
-  Icd5e... "fix: null check"             ← agent fix  
-  Ief6a... "feat: add refresh tokens"    ← your work
+  abc123 "feat: add auth"              ← your work (change Iab4f...)
+  def456 "fix: null check"             ← agent fix (change Iab4f...)
+  ghi789 "feat: add refresh tokens"    ← your work (change Iab4f...)
+```
+
+#### 2.5.1 Review Lifecycle (One Workspace = One Review)
+
+Jul keeps reviews simple: **one workspace equals one review**.
+
+- `jul submit` **creates or updates** the review for the current Change-Id.
+- There are **no review IDs** and no `submit --new`.
+- Each submit points the review at the **latest checkpoint** (a new revision).
+- If you created multiple checkpoints before the first submit, the review simply reflects the latest one (cumulative diff from the base commit).
+- After `jul promote`, the next checkpoint starts a **new Change-Id**, and the next submit opens a **new review**.
+- Submit is **optional** — solo workflows can go straight from checkpoint → promote.
+
+Review state lives in Git notes so it works offline and syncs with the repo:
+- `refs/notes/jul/review-state` — keyed by the **Change-Id anchor SHA** (the first checkpoint SHA at change creation); stores Change-Id, status, and latest checkpoint
+- `refs/notes/jul/review-comments` — keyed by checkpoint SHA; stores review comments/threads with `change_id` and optional file/line
+  - The anchor SHA is also recorded in `refs/notes/jul/meta` for lookup by Change-Id
+
+Comments can be **review-level** (no file/line, applies to the whole Change-Id) or **checkpoint-level** (anchored to a specific checkpoint/file/line). Threads can span multiple checkpoints by reusing the same `thread_id`.
+
+**Review anchor retention:** The Change‑Id anchor SHA never changes (even if the first checkpoint is amended). While a review is open, that anchor commit is pinned (its keep‑ref does not expire). Retention is based on **last‑touched** for open reviews.
+
+Example:
+```bash
+$ jul ws new feature-auth
+$ jul checkpoint
+$ jul checkpoint
+$ jul submit            # opens review for feature-auth
+$ jul checkpoint
+$ jul submit            # updates the same review
+
+$ jul ws stack feature-b  # create dependent workspace
+$ jul checkpoint
+$ jul submit            # opens review for feature-b (stacked)
 ```
 
 ### 2.6 Traces (Provenance Side History)
@@ -306,7 +352,7 @@ Side history (for blame/provenance):
 ```
 
 **Naming clarity:**
-- **Change-Id** (`Iab4f...`): Gerrit-style stable identifier for a checkpoint
+- **Change-Id** (`Iab4f...`): Stable identifier for a review/change (workspace)
 - **Trace ID** (`t1`, `t2`): Identifier for a provenance unit within the trace chain
 
 **Trace creation:**
@@ -345,13 +391,13 @@ jul trace --prompt "use JWT instead" --agent claude-code
 
 jul sync
   → pushes trace ref (single ref, not N refs)
-  → creates draft (tree = t2's tree, parent = last checkpoint)
+  → creates draft (tree = t2's tree, parent = base commit)
   → draft is STILL a sibling, not end of trace chain
 
 jul checkpoint "feat: add auth"
   → flushes final trace t3 if working tree changed since t2
-  → creates checkpoint (parent = last checkpoint)
-  → records in notes: {trace_base: t0, trace_head: t3}
+  → creates checkpoint (parent = base commit)
+  → writes trailers: trace_base = t0, trace_head = t3 (notes optional mirror)
   → trace chain stays for blame
 ```
 
@@ -401,8 +447,8 @@ This keeps main ancestry clean while letting `jul blame` traverse the DAG and at
 
 ```json
 {
-  "checkpoint": "Iab4f...",
-  "sha": "def456",
+  "checkpoint_sha": "def456",
+  "change_id": "Iab4f...",
   "trace_base": "t0_sha",       // Previous checkpoint's trace tip (or null)
   "trace_head": "t3_sha",       // Current trace tip
   "trace_heads": ["t3", "t5"],  // If merge produced multiple heads
@@ -416,7 +462,7 @@ Trace-Base: <sha>
 Trace-Head: <sha>
 ```
 
-Blame walks from head(s) to base. Tiny metadata, same power. Avoids blowing 16KB notes limit.
+Blame walks from head(s) to base. Tiny metadata, same power. Avoids blowing Jul’s 16KB per-note cap.
 
 **Privacy defaults (secrets can leak in summaries too!):**
 
@@ -438,13 +484,13 @@ If `sync_prompt_summary = true`, Jul runs a secret scrubber before syncing (dete
 ```bash
 $ jul blame src/auth.py --prompts
 
-44 │ Iab4f... (sha:abc123) claude-code
+44 │ change Iab4f... (checkpoint abc123) claude-code
    │ Prompt: [hash only, summary stored locally]
 
 # If you have summary locally:
 $ jul blame src/auth.py --prompts --local
 
-44 │ Iab4f... (sha:abc123) claude-code
+44 │ change Iab4f... (checkpoint abc123) claude-code
    │ Summary: "Added null check for auth token"
    │ Prompt: "add null check for missing auth token"
 ```
@@ -476,7 +522,7 @@ Traces get cheap, fast checks (lint, typecheck). Full CI runs on checkpoint.
 
 ```bash
 $ jul log --traces
-Iab4f... "feat: add auth"
+abc123 (change Iab4f...) "feat: add auth"
   ├── (sha:abc1) claude-code "add auth" (auth.py, models.py)
   │       ✓ lint pass, ✓ typecheck pass
   ├── (sha:def2) claude-code "use JWT instead" (auth.py)
@@ -590,7 +636,7 @@ refs/jul/traces/george/@  →  merge_sha  (merge trace)
                           def456   uvw012
 ```
 
-The merge trace commit uses strategy `ours` for its tree (tree = `workspace_remote^{tree}` from the fetched canonical workspace ref). This keeps both device histories reachable without requiring code conflict resolution just to unify traces.
+The merge trace commit uses strategy `ours` for its tree (tree = the **canonical workspace tip after sync**, i.e., the workspace ref we just updated). This keeps both device histories reachable without requiring code conflict resolution just to unify traces.
 
 This lets `jul blame` traverse the DAG to find the real origin trace.
 
@@ -599,6 +645,7 @@ This lets `jul blame` traverse the DAG to find the real origin trace.
 {
   "prompt_hash": "sha256:abc123...",
   "agent": "claude-code",
+  "trace_type": "prompt",       // prompt | sync | merge
   "session_id": "abc123",
   "turn": 5,
   "device": "swift-tiger",
@@ -608,7 +655,7 @@ This lets `jul blame` traverse the DAG to find the real origin trace.
 
 `prompt_summary` and `prompt_full` are **only present in synced notes** when `traces.sync_prompt_summary` / `traces.sync_prompt_full` are enabled. With defaults, only the hash is synced.
 
-Note: No "trace_id" field — use short SHA for display.
+Note: No "trace_id" field — use short SHA for display. `trace_type=merge` marks connective merge traces; `jul blame` skips attribution to merge traces.
 
 **Privacy defaults (secrets can leak in summaries too):**
 
@@ -647,12 +694,13 @@ refs/jul/suggest/<Change-Id>/<suggestion_id>
 ```
 
 - Points to suggested commit — the actual code changes
-- Tied to a Change-Id (checkpoint) AND a specific base SHA
+- Tied to a Change-Id **and** a specific base checkpoint SHA
 - Immutable once created
 - Can be fetched, inspected, cherry-picked
 - Metadata (reasoning, confidence, base_sha) stored in notes
 
-**Staleness:** If the checkpoint is amended (same Change-Id, new SHA), existing suggestions become stale because they were created against the old SHA.
+**Staleness:** A suggestion is **fresh** iff `suggestion.base_sha == parent(current_draft)`.  
+If the base commit changes (amend **or** new checkpoint in the same change), existing suggestions become stale.
 
 **Cleanup:** Suggestion refs are deleted when their parent checkpoint's keep-ref expires. This prevents ref accumulation:
 
@@ -667,7 +715,7 @@ Without this, suggestion refs would accumulate forever even after their checkpoi
 ### 3.6 Keep Refs
 
 ```
-refs/jul/keep/<workspace>/<change_id>/<sha>
+refs/jul/keep/<user>/<workspace>/<change_id>/<sha>
 ```
 
 Anchors checkpoints for retention/fetchability. Without a ref, git may GC unreachable commits.
@@ -680,7 +728,8 @@ refs/notes/jul/attestations/checkpoint   # Checkpoint CI results (keyed by SHA)
 refs/notes/jul/attestations/published    # Published CI results (keyed by SHA)
 refs/notes/jul/attestations/trace        # Trace CI results (keyed by trace SHA)
 refs/notes/jul/traces                    # Trace metadata (prompt hash, summary, agent)
-refs/notes/jul/review                    # Review comments  
+refs/notes/jul/review-comments           # Review comments/threads (keyed by checkpoint SHA)
+refs/notes/jul/review-state              # Review state (keyed by Change-Id anchor)
 refs/notes/jul/meta                      # Change-Id mappings
 refs/notes/jul/suggestions               # Suggestion metadata
 ```
@@ -688,7 +737,7 @@ refs/notes/jul/suggestions               # Suggestion metadata
 **Local-only storage (not synced):**
 ```
 .jul/ci/                  # Draft attestations (device-scoped, ephemeral)
-.jul/workspaces/<ws>/     # Per-workspace tracking (workspace_base)
+.jul/workspaces/<ws>/     # Per-workspace tracking (workspace_lease)
 .jul/local/               # Saved local workspace states
 .jul/traces/              # Full prompt text and summaries (local by default)
 ```
@@ -723,18 +772,21 @@ refs/
 │   │           ├── @
 │   │           └── <named>
 │   ├── suggest/
-│   │   └── <Change-Id>/             # Gerrit-style Change-Id (Iab4f...)
+│   │   └── <Change-Id>/             # Change-Id (Iab4f...)
 │   │       └── <suggestion_id>
 │   └── keep/
-│       └── <workspace>/
-│           └── <Change-Id>/
-│               └── <sha>
+│       └── <user>/
+│           └── <workspace>/
+│               └── <Change-Id>/
+│                   └── <sha>
 └── notes/jul/
     ├── attestations/
     │   ├── checkpoint
-    │   └── published
+    │   ├── published
+    │   └── trace
     ├── traces                       # Trace metadata (prompt hash, agent, session)
-    ├── review
+    ├── review-comments              # Review comments/threads (keyed by checkpoint SHA)
+    ├── review-state                 # Review state (keyed by Change-Id anchor)
     ├── meta
     └── suggestions
 ```
@@ -778,9 +830,9 @@ This section addresses how Jul concepts map to Git.
 **Drafts are real git commits.**
 
 A draft is a commit with:
-- A placeholder message (e.g., `[draft] Iab4f3c2d`)
-- A stable Change-Id in the message trailer
-- Parent = last checkpoint (always)
+- A placeholder message (e.g., `[draft] WIP`, or `[draft] Iab4f3c2d` after first checkpoint)
+- A Change-Id trailer **only after** the first checkpoint
+- Parent = base commit (latest checkpoint or latest published commit)
 - Always pointed to by this device's sync ref
 - Pointed to by workspace ref only when canonical (not diverged)
 
@@ -791,16 +843,18 @@ Date:   Mon Jan 19 15:30:00 2026
 
     [draft] Work in progress
     
-    Change-Id: Iab4f3c2d1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b
+    Change-Id: Iab4f3c2d1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b   (after first checkpoint)
 ```
 
-**Each sync creates a NEW draft commit:**
-- Same parent (last checkpoint)
+**Each sync creates a NEW draft commit only if the tree changed:**
+- Same parent (base commit)
 - New tree (current working directory state)
 - Force-updates sync ref
 - Old draft becomes unreachable (ephemeral)
 
-This avoids "infinite WIP commit chain" — there's always exactly one draft commit per workspace, with parent = last checkpoint. Drafts are siblings (same parent), not ancestors of each other.
+If the tree is unchanged, Jul reuses the existing draft SHA (still fetches/merges remote changes).
+
+This avoids "infinite WIP commit chain" — there's always exactly one draft commit per workspace, with parent = base commit. Drafts are siblings (same parent), not ancestors of each other.
 
 **Why commits, not sidecar snapshots:**
 - Git tools work (diff, log, bisect)
@@ -816,7 +870,7 @@ Jul uses a shadow index so it doesn't interfere with your normal git staging:
 # Jul sync implementation
 GIT_INDEX_FILE=.jul/draft-index git add -A
 GIT_INDEX_FILE=.jul/draft-index git write-tree
-# Create commit from tree with parent = last checkpoint
+# Create commit from tree with parent = base commit
 # Force-update sync ref
 # Update workspace ref only if not diverged (via force-with-lease)
 # User's .git/index is untouched
@@ -834,7 +888,7 @@ This means:
 | Aspect | Draft | Checkpoint |
 |--------|-------|------------|
 | Message | `[draft] WIP` | Agent-generated or user-provided |
-| Parent | Last checkpoint | Last checkpoint |
+| Parent | Base commit | Base commit |
 | Mutable | Yes (replaced on each sync) | No (immutable) |
 | CI runs | Optional | Always |
 | Retention | Ephemeral (no keep-ref) | Keep-ref created |
@@ -864,8 +918,8 @@ refs/jul/sync/george/swift-tiger/@        ← this device's backup
 **Plus local tracking files (per-workspace):**
 
 ```
-.jul/workspaces/@/base              ← SHA of last workspace state we merged
-.jul/workspaces/feature-auth/base  ← Same, for feature-auth workspace
+.jul/workspaces/@/lease              ← SHA of last workspace state we merged
+.jul/workspaces/feature-auth/lease  ← Same, for feature-auth workspace
 ```
 
 #### How sync works
@@ -881,27 +935,31 @@ Syncing...
 **The sync algorithm:**
 1. **Fetch** workspace ref → `workspace_remote`
 2. **Push** to device's sync ref with `--force` (always succeeds, it's yours)
-3. **Compare** `workspace_remote` to local `workspace_base` (per-workspace)
-4. **If** `workspace_remote == workspace_base`:
+3. **Detect base divergence early**:
+   - `local_base = parent(local_draft)`
+   - `remote_base = parent(workspace_remote)`
+   - If both exist and `local_base != remote_base` → **base_diverged** (abort; require `jul ws checkout`/`jul transplant`)
+4. **Compare** `workspace_remote` to local `workspace_lease` (per-workspace)
+5. **If** `workspace_remote == workspace_lease`:
    - Not diverged, safe to update
    - Update workspace ref with `--force-with-lease=<workspace_ref>:<workspace_remote>`
-   - Set `workspace_base = new_sha`
-5. **If** `workspace_remote != workspace_base`:
+   - Set `workspace_lease = new_sha`
+6. **If** `workspace_remote != workspace_lease`:
    - Another device pushed since we last merged
    - **Try auto-merge:**
-     - Merge base = merge-base of the two draft commits (typically the shared checkpoint)
+     - Merge base = merge-base of the two draft commits (typically the shared base commit)
      - 3-way merge: merge_base ↔ workspace_remote (theirs) ↔ sync (ours)
    - **If no conflicts**: 
      - Update workspace ref with `--force-with-lease=<workspace_ref>:<workspace_remote>`
      - If lease fails, re-fetch and retry (or fall back to "conflicts pending")
-     - Set `workspace_base = new_sha`
+     - Set `workspace_lease = new_sha`
    - **If conflicts**: mark diverged, defer to `jul merge`
 
-**Why workspace_base matters:** It's the semantic lease — it tracks the last workspace state we incorporated, so we know when we're behind.
+**Why workspace_lease matters:** It's the semantic lease — it tracks the last workspace state we incorporated, so we know when we're behind.
 
 **Why lease against workspace_remote:** When updating workspace ref after auto-merge, we guard against "someone else pushed while we were merging." If the lease fails, we re-fetch and try again.
 
-**Why merge-base of drafts:** Since drafts have parent = last checkpoint, the merge-base is the shared checkpoint. This avoids relying on old ephemeral draft commits.
+**Why merge-base of drafts:** Since drafts have parent = base commit, the merge-base is the shared base commit (checkpoint or published commit). This avoids relying on old ephemeral draft commits.
 
 #### Sync with auto-merge (no conflicts)
 
@@ -918,10 +976,10 @@ Syncing...
 
 No user action needed. Git's 3-way merge handles it.
 
-**Important:** Auto-merge produces a **new draft commit with single parent** (the checkpoint), NOT a 2-parent merge commit. Jul uses `git merge-tree` or equivalent to compute the merged tree, then creates a new draft commit:
+**Important:** Auto-merge produces a **new draft commit with single parent** (the base commit), NOT a 2-parent merge commit. Jul uses `git merge-tree` or equivalent to compute the merged tree, then creates a new draft commit:
 
 ```
-parent = checkpoint (single parent, preserving "draft parent = checkpoint" invariant)
+parent = base commit (single parent, preserving "draft parent = base commit" invariant)
 tree = result of 3-way merge
 ```
 
@@ -945,16 +1003,18 @@ Continue working. Run 'jul merge' when ready.
 
 #### Checkpoint base divergence
 
-**Failure mode:** What if Device A checkpointed while Device B has a local draft based on the OLD checkpoint?
+**Failure mode:** What if Device A advanced the base (new checkpoint or promote) while Device B has a local draft based on the OLD base commit?
 
 ```
 Device A: checkpoint1 → checkpoint2 (pushed)
 Device B: checkpoint1 → draft (still on old base)
 ```
 
-This is different from normal divergence (both on same checkpoint, different drafts). Here, the checkpoint histories have forked.
+This is different from normal divergence (both on same base, different drafts). Here, the base histories have forked.
 
-**Detection:** When auto-merge runs, the merge-base of the two drafts will be `checkpoint1`, not `checkpoint2`. If Device B's draft parent ≠ `checkpoint2`, we've got checkpoint base divergence.
+**Detection:** Compare draft parents directly:
+`local_base = parent(local_draft)`, `remote_base = parent(workspace_remote)`.  
+If they differ, we've got base divergence.
 
 **V1 behavior:** Fail with clear error:
 
@@ -962,7 +1022,7 @@ This is different from normal divergence (both on same checkpoint, different dra
 $ jul sync
 Syncing...
   ✓ Pushed to sync ref (your work is safe!)
-  ✗ Checkpoint base diverged
+  ✗ Base diverged
   
 Your draft is based on checkpoint1, but workspace is now at checkpoint2.
 Your work is safe on your sync ref.
@@ -972,7 +1032,7 @@ Options:
   jul transplant        # (future) Rebase your draft onto checkpoint2
 ```
 
-**Why not auto-fix?** Transplanting a draft from one checkpoint base to another is a rebase operation that can have complex conflicts. V1 takes the safe path: your work is preserved on sync ref, but you must explicitly decide how to proceed.
+**Why not auto-fix?** Transplanting a draft from one base commit to another is a rebase operation that can have complex conflicts. V1 takes the safe path: your work is preserved on sync ref, but you must explicitly decide how to proceed.
 
 #### Merge when ready
 
@@ -988,24 +1048,24 @@ Accept? [y/n] y
 
   ✓ Merged
   ✓ Workspace ref updated
-  ✓ workspace_base updated
+  ✓ workspace_lease updated
 ```
 
 **The merge algorithm:**
-1. Merge base = merge-base of workspace ref and sync ref (the shared checkpoint)
+1. Merge base = merge-base of workspace ref and sync ref (the shared base commit)
 2. 3-way merge: merge_base ↔ workspace (theirs) ↔ sync (ours)
 3. Agent resolves conflicts automatically
 4. Create resolution as suggestion
-5. If accepted: new draft commit (parent = last checkpoint, NOT a 2-parent merge)
-6. Update workspace ref, sync ref, AND `workspace_base`
+5. If accepted: new draft commit (parent = base commit, NOT a 2-parent merge)
+6. Update workspace ref, sync ref, AND `workspace_lease`
 
-**V1 constraint:** Both sides must share the same checkpoint base. If checkpoint histories have diverged, manual intervention required.
+**V1 constraint:** Both sides must share the same base commit. If base histories have diverged, manual intervention required.
 
 **The invariants:**
 - Sync ref = this device's backup (always pushes, device-scoped)
 - Workspace ref = canonical state (shared across devices)
-- `workspace_base` = last workspace SHA we incorporated (per-workspace)
-- Auto-merge produces single-parent commit (parent = checkpoint), not 2-parent merge
+- `workspace_lease` = last workspace SHA we incorporated (per-workspace)
+- Auto-merge produces single-parent commit (parent = base commit), not 2-parent merge
 - Diverged only when: auto-merge fails due to actual conflicts
 - Can't promote until divergence is resolved
 
@@ -1036,12 +1096,12 @@ Or when conflicts exist:
 }
 ```
 
-Or when checkpoint bases have diverged:
+Or when bases have diverged:
 
 ```json
 {
   "sync": {
-    "status": "checkpoint_base_diverged",
+    "status": "base_diverged",
     "sync_pushed": true,
     "workspace_updated": false,
     "local_base": "checkpoint1_sha",
@@ -1090,7 +1150,7 @@ refs/jul/trace-sync/george/swift-tiger/@    ← this device's trace backup
 4. **If same or fast-forward**: canonical trace = local (simple case)
 5. **If diverged** (both devices created traces) **and workspace is not diverged**:
    - Create **trace merge commit** with two parents: `trace_remote` and local tip
-   - Tree = **tree of fetched canonical workspace ref** (`workspace_remote^{tree}`), strategy `ours`
+   - Tree = **canonical workspace tip after sync** (strategy `ours`)
    - Push trace merge as new canonical tip
 6. **If workspace is diverged (conflicts pending)**:
    - Do **not** update `refs/jul/traces/...`
@@ -1104,11 +1164,11 @@ Before merge:
 
 After trace merge:
   Canonical:  t1 ← t2 ← t3 ─┐
-                             ├─ merge_trace (tree = workspace tree)
+                             ├─ merge_trace (tree = canonical workspace tip after sync)
               t1 ← t4 ← t5 ─┘
 ```
 
-**Why strategy `ours` for trace merge tree?** The trace merge exists purely to keep both device histories reachable for `jul blame`. The actual code state is determined by the workspace merge, not the trace merge. So we use the canonical workspace tree (which may be the result of a separate code merge) as the trace merge tree.
+**Why strategy `ours` for trace merge tree?** The trace merge exists purely to keep both device histories reachable for `jul blame`. The actual code state is determined by the workspace merge, not the trace merge. So we use the canonical workspace tree **after sync** (which may be the result of a separate code merge) as the trace merge tree.
 
 **Timing:** Trace sync happens atomically with workspace sync:
 - Workspace diverged + traces diverged → both get merge commits
@@ -1273,10 +1333,10 @@ On a fresh device:
 $ git clone git@github.com:george/myproject.git
 $ cd myproject
 $ jul init                    # Generates device ID (e.g., "quiet-mountain")
-$ jul ws checkout @           # Establishes baseline: sync ref + workspace_base
+$ jul ws checkout @           # Establishes baseline: sync ref + workspace_lease
 ```
 
-The checkout establishes your baseline: it sets `workspace_base` and initializes your sync ref. Now `jul sync` knows where you started.
+The checkout establishes your baseline: it sets `workspace_lease` and initializes your sync ref. Now `jul sync` knows where you started.
 
 Ongoing work across devices:
 ```bash
@@ -1302,7 +1362,7 @@ Note: `jul ws checkout` restores working tree + establishes baseline. Staging ar
 **Solution: Keep-refs at checkpoint boundaries only.**
 
 ```
-refs/jul/keep/<workspace>/<change-id>/<checkpoint-sha>
+refs/jul/keep/<user>/<workspace>/<change-id>/<checkpoint-sha>
 ```
 
 Example:
@@ -1314,7 +1374,8 @@ refs/jul/keep/george/feature/Icd5e6f7a/ghi789
 
 **Lifecycle:**
 - Created when checkpoint is locked
-- TTL-based expiration (configurable, default 90 days)
+- TTL-based expiration (configurable, default 90 days) based on **last-touched**
+- **Pinned while review open:** keep‑refs for review anchors do not expire until review is closed/promoted
 - Expired keep-refs deleted by Jul maintenance job
 - **Cascade cleanup:** When keep-ref expires, also delete:
   - Associated suggestion refs (`refs/jul/suggest/<change-id>/*`)
@@ -1342,6 +1403,16 @@ checkpoint_keep_days = -1    # Never expire (infinite)
 ```
 
 **Future multi-user consideration:** Don't enable `uploadpack.allowAnySHA1InWant` in multi-tenant scenarios. Keep-refs are the safe path.
+
+#### 5.5.1 Cleanup and Archiving (Default: none)
+
+Promote does **not** delete or rewrite Jul refs. By default, all workspace refs, sync refs, trace refs, and notes remain intact for provenance and recovery.
+
+Optional cleanup (explicit user intent) can be added later:
+- `jul ws close` — archive a workspace (move refs to `refs/jul/archive/...`)
+- `jul prune` — remove expired keep-refs and clean related suggestion/notes per retention policy
+
+The guiding rule is **no implicit data loss**. Cleanup should be manual and conservative.
 
 ### 5.6 Four Classes of Attestations
 
@@ -1381,7 +1452,7 @@ trace_checks = ["lint", "typecheck"]   # What to run per-trace
 
 **Draft attestations (full CI, ephemeral):**
 
-By default, CI runs in the background every time the workspace ref updates:
+By default, CI runs in the background every time the **local draft SHA changes**:
 
 ```bash
 $ jul sync
@@ -1391,7 +1462,7 @@ Syncing...
 
 # Later, or immediately if fast:
 $ jul status
-Draft Iab4f... (2 files changed)
+Draft abc123 (change Iab4f...) (2 files changed)
   ✓ lint: pass
   ✓ test: pass (48/48)
   ✓ coverage: 84%
@@ -1439,7 +1510,7 @@ sync_draft_attestations = false  # Default: local-only (avoid multi-device confl
 
 ```bash
 $ jul status
-Draft Iab4f... (3 files changed)
+Draft def456 (change Iab4f...) (3 files changed)
   ⚠ CI results for previous draft (abc123)
   ⚡ CI running for current draft (def456)...
 ```
@@ -1457,7 +1528,7 @@ draft sync
     ├── CI runs (background, local) → .jul/ci/results.json
     │
     ▼
-checkpoint Iab4f... (sha: abc123)
+checkpoint abc123 (change Iab4f...)
     │
     ├── CI runs → checkpoint attestation (synced via notes)
     │
@@ -1482,12 +1553,20 @@ main now at xyz789
 // In refs/notes/jul/meta
 {
   "change_id": "Iab4f3c2d...",
+  "anchor_sha": "abc123",
   "checkpoints": [
     {"sha": "abc123", "message": "feat: add auth"},
     {"sha": "def456", "message": "feat: add auth (amended)"}
   ],
-  "published": [
-    {"sha": "xyz789", "target": "main", "strategy": "rebase"}
+  "promote_events": [
+    {
+      "target": "main",
+      "strategy": "rebase",
+      "timestamp": "2026-01-19T15:42:00Z",
+      "published": ["xyz789"],
+      "merge_commit_sha": null,
+      "mainline": null
+    }
   ]
 }
 ```
@@ -1499,10 +1578,11 @@ main now at xyz789
 Jul stores all metadata as git objects (notes, refs). This means it *can* be synced via git push/pull. However:
 
 - Different hosts have different ref policies (some block custom refs)
+- Some hosts reject non‑FF updates for `refs/jul/*`
 - Size limits vary (GitHub has push size limits)
 - Retention varies (some hosts GC aggressively)
 
-**The right expectation:** Jul metadata syncs on hosts that allow it. If a host blocks some refs, Jul degrades gracefully to local-only for those namespaces. Jul config sets up the refspecs; check `jul doctor` to see what's actually syncing.
+**The right expectation:** Jul metadata syncs on hosts that allow custom refs **and** non‑FF updates for `refs/jul/*`. If a host blocks those, Jul degrades gracefully to local-only for those namespaces. Jul config sets up the refspecs; check `jul doctor` to see what's actually syncing.
 
 **Size limits to prevent repo bloat:**
 
@@ -1538,7 +1618,8 @@ Notes refs can have non-fast-forward conflicts. Prefer clear ownership, but **mu
 |-----------|----------------|---------|
 | `refs/notes/jul/meta` | Client | Change-Id mappings |
 | `refs/notes/jul/attestations` | CI runner | Test results (summaries only) |
-| `refs/notes/jul/review` | Review agent | Review comments |
+| `refs/notes/jul/review-comments` | Review agent | Review comments/threads (checkpoint-scoped) |
+| `refs/notes/jul/review-state` | Client | Review state (Change-Id anchor, latest checkpoint) |
 | `refs/notes/jul/suggestions` | Review agent | Suggestion metadata |
 | `refs/notes/jul/traces` | Client | Trace metadata (prompt hash, agent, session) |
 
@@ -1550,6 +1631,8 @@ Even though notes are mergeable, the notes ref itself can reject non‑fast‑fo
 3. Push merged notes ref with lease
 
 This avoids flaky push failures when two devices append notes in parallel.
+
+**Concurrency rule:** When multiple devices might update the same note entry, prefer **append-only events** (e.g., review comment events, suggestion status events) and derive current state from the latest event. This avoids conflicts from “last writer wins” overwrites.
 
 **Suggestions storage:**
 
@@ -1588,7 +1671,7 @@ Local storage for prompts and summaries: `.jul/traces/`
            │               └──── ghi789 (draft, ephemeral)
            │                       │
            │                       └── [draft] WIP
-           │                           Change-Id: Icd5e...
+           │                           Change-Id: Iab4f...
            │
     (parent chain)
            │
@@ -1598,19 +1681,19 @@ Local storage for prompts and summaries: `.jul/traces/`
 
 **Ref purposes:**
 - `refs/heads/*` — Promote targets (main, staging)
-- `refs/jul/workspaces/<user>/<ws>` — Canonical draft (shared across devices)
+- `refs/jul/workspaces/<user>/<ws>` — Canonical **draft** (shared across devices); always points to latest draft commit
 - `refs/jul/sync/<user>/<device>/<ws>` — This device's backup (never clobbered)
 - `refs/jul/keep/*` — Checkpoint retention anchors
 - `refs/jul/suggest/*` — Suggestion patch commits
-- `refs/notes/jul/*` — Metadata (attestations, review, suggestions, traces)
+- `refs/notes/jul/*` — Metadata (attestations, review-state/comments, suggestions, traces)
 
 **Local state (per workspace):**
-- `.jul/workspaces/<ws>/base` — SHA of last workspace state we merged (the semantic lease)
+- `.jul/workspaces/<ws>/lease` — SHA of last workspace state we merged (the semantic lease)
 
 **Invariants:**
-- `workspace_remote == workspace_base` → not diverged, update workspace directly
-- `workspace_remote != workspace_base` → try auto-merge; only defer if actual conflicts
-- `jul ws checkout` establishes baseline (sync ref + workspace_base)
+- `workspace_remote == workspace_lease` → not diverged, update workspace directly
+- `workspace_remote != workspace_lease` → try auto-merge; only defer if actual conflicts
+- `jul ws checkout` establishes baseline (sync ref + workspace_lease)
 - Can't promote until divergence is resolved
 
 ---
@@ -1717,7 +1800,7 @@ Syncing...
   ✓ Fetched workspace ref
   ✓ Pushed to sync ref
   ✓ Workspace ref updated
-  ✓ workspace_base updated
+  ✓ workspace_lease updated
 
 # Without remote (local only)
 $ jul sync
@@ -1810,7 +1893,7 @@ Flags:
 
 #### `jul merge`
 
-Resolve diverged state. Agent handles conflicts automatically. See [6.6 Merge Command](#66-merge-command) for full details.
+Resolve diverged state. Agent handles conflicts automatically. See [6.7 Merge Command](#67-merge-command) for full details.
 
 ```bash
 $ jul merge
@@ -1824,7 +1907,7 @@ Accept? [y/n] y
 
   ✓ Merged
   ✓ Workspace ref updated
-  ✓ workspace_base updated
+  ✓ workspace_lease updated
 ```
 
 #### `jul checkpoint`
@@ -1833,7 +1916,7 @@ Lock current draft, generate message, start new draft.
 
 ```bash
 $ jul checkpoint
-Locking draft Iab4f...
+Locking draft abc123 (change Iab4f...)
 
 Generating message... (opencode)
   "feat: add JWT validation with refresh token support"
@@ -1850,8 +1933,8 @@ Running CI...
 Running review...
   ⚠ 1 suggestion created
 
-Checkpoint Iab4f... locked.
-New draft Icd5e... started.
+Checkpoint def456 locked (change Iab4f...).
+New draft ghi789 started (change Iab4f...).
 ```
 
 Flags:
@@ -1861,6 +1944,8 @@ Flags:
 - `--adopt` — Adopt the current `HEAD` commit as a checkpoint (opt‑in; doesn’t move branches)
 - `--no-review` — Skip review
 - `--json` — JSON output
+
+**Amend semantics:** `jul checkpoint --amend` creates a **new checkpoint commit** (new SHA) with the **same Change‑Id**. The old checkpoint remains reachable via keep‑refs (pinned while review is open, otherwise subject to retention). No in‑place history rewrite.
 
 **Git commit adoption (opt‑in):**
 
@@ -1878,7 +1963,21 @@ When enabled, the post‑commit hook runs `jul checkpoint --adopt`, which:
 
 This preserves continuity without moving `refs/heads/*`.
 
-**Change-Id note for adopted commits:** Adopted commits may not have a `Change-Id:` trailer. In that case, Jul records the Change‑Id mapping only in `refs/notes/jul/meta` and does **not** rewrite the commit. If you want Change‑Id embedded in normal git commits, install a Gerrit‑style `commit-msg` hook (outside Jul) so commits include the trailer from the start.
+**Change boundary (adopt):** An adopted commit becomes the **next checkpoint in the current Change‑Id** (or starts a Change‑Id if none exists yet). Jul does not create a new Change‑Id just because a git commit was adopted.
+
+**Change-Id note for adopted commits:** Adopted commits may not have a `Change-Id:` trailer. In that case, Jul records the Change‑Id mapping only in `refs/notes/jul/meta` and does **not** rewrite the commit. If you want Change‑Id embedded in normal git commits, install a `commit-msg` hook that injects the trailer from the start.
+
+**Adopt + promote behavior (edge case example):**
+```text
+Case A: git commit on target branch (already published)
+  main: A──B  (B is adopted)
+  jul promote → only checkpoints after B are published (B is base)
+
+Case B: git commit off target (not published yet)
+  main: A
+  workspace: A──B  (B is adopted)
+  jul promote → publishes B along with later checkpoints
+```
 
 #### `jul status`
 
@@ -1888,10 +1987,10 @@ Show current workspace status.
 $ jul status
 
 Workspace: @ (default)
-Draft: Icd5e... (2 files changed)
+Draft: def456 (change Iab4f...) (2 files changed)
 
 Checkpoints (not yet promoted):
-  Iab4f... "feat: add JWT validation" ✓ CI passed
+  abc123 (change Iab4f...) "feat: add JWT validation" ✓ CI passed
     └─ 1 suggestion pending
 
 Promote target: main (3 checkpoints behind)
@@ -1902,7 +2001,8 @@ With `--json` for agents:
 {
   "workspace": "@",
   "draft": {
-    "change_id": "Icd5e...",
+    "sha": "def456",
+    "change_id": "Iab4f...",
     "files_changed": 2
   },
   "checkpoints": [...],
@@ -1923,8 +2023,8 @@ Promote checkpoints to a target branch.
 $ jul promote --to main
 
 Promoting 2 checkpoints to main...
-  Iab4f... "feat: add JWT validation"
-  Icd5e... "fix: null check on token"
+  abc123 "feat: add JWT validation" (change Iab4f...)
+  def456 "fix: null check on token" (change Iab4f...)
 
 Policy check (main):
   ✓ compile: pass
@@ -1940,6 +2040,18 @@ Rebased onto main.
 Workspace '@' now tracking main (ghi789)
 New draft started.
 ```
+
+**Note:** Promoted history on `refs/heads/*` is **published commits** (normal Git commits), not checkpoints. A new Change‑Id starts for the next workspace draft after promote.
+
+**Mapping rule:** `jul promote` records a mapping in `refs/notes/jul/meta`:
+- `change_id → anchor_sha` (first checkpoint SHA, pinned while review open)
+- `change_id → [checkpoint_shas...]` (the checkpoints being promoted)
+- `change_id → promote_events[]` with:
+  - `published_shas` (commits created on target branch)
+  - `target`, `strategy`, `timestamp`
+  - For merge: `merge_commit_sha` + `mainline` (for deterministic revert)
+
+This makes `jul revert <change-id>` deterministic (revert the published SHAs from the last promote), and keeps review status tied to the latest checkpoint SHA.
 
 Flags:
 - `--to <branch>` — Target branch (required)
@@ -1959,8 +2071,24 @@ Create a named workspace.
 ```bash
 $ jul ws new feature-auth
 Created workspace 'feature-auth'
-Draft Ief6a... started.
+Draft abc123 started.
 ```
+
+#### `jul ws stack`
+
+Create a new workspace stacked on the current workspace’s **latest checkpoint** (not its draft).
+
+```bash
+$ jul ws stack feature-b
+Created workspace 'feature-b' (stacked on feature-auth)
+Draft def456 started.
+```
+
+Use this when you want dependent work that should review/land after the current workspace.
+
+**V1 rule:** stacking requires a checkpoint. If the current workspace has no checkpoint yet, Jul asks you to checkpoint first.
+
+**Restack (future):** If the parent workspace advances after stacking, you’ll need a manual `jul ws restack` to rebase the child onto the new parent checkpoint.
 
 #### `jul ws switch`
 
@@ -1973,7 +2101,7 @@ Saving current workspace '@'...
   ✓ Staged changes saved
 Restoring 'feature-auth'...
   ✓ Working tree restored
-  ✓ workspace_base updated
+  ✓ workspace_lease updated
 Switched to workspace 'feature-auth'
 ```
 
@@ -1982,7 +2110,7 @@ Switched to workspace 'feature-auth'
 2. Syncs current draft to remote
 3. Fetches target workspace's canonical state
 4. Restores target workspace's saved state (working tree + staging area)
-5. Updates `workspace_base` for target workspace to the fetched canonical SHA
+5. Updates `workspace_lease` for target workspace to the fetched canonical SHA
 
 This makes "no dirty state concerns" actually true — your uncommitted work is preserved per-workspace.
 
@@ -1996,14 +2124,14 @@ Fetching workspace '@'...
   ✓ Workspace ref: abc123
   ✓ Working tree updated
   ✓ Sync ref initialized
-  ✓ workspace_base set
+  ✓ workspace_lease set
 ```
 
 **What happens:**
 1. Fetch workspace ref from remote
 2. Materialize working tree to match
 3. Initialize this device's sync ref to the same commit
-4. Set `workspace_base` to the fetched SHA
+4. Set `workspace_lease` to the fetched SHA
 
 This establishes the baseline: checkout sets up base + sync ref, so future `jul sync` commands know where they started.
 
@@ -2020,9 +2148,9 @@ List all workspaces.
 
 ```bash
 $ jul ws list
-* @ (default)           Icd5e... (2 files changed)
-  feature-auth          Ief6a... (clean)
-  bugfix-123            Igh7b... (5 files changed)
+* @ (default)           abc123 (2 files changed)
+  feature-auth          def456 (clean)
+  bugfix-123            ghi789 (5 files changed)
 ```
 
 #### `jul ws rename`
@@ -2048,7 +2176,7 @@ Can't delete current workspace.
 
 #### `jul transplant` (Future)
 
-Rebase a draft from one checkpoint base to another. Used when checkpoint bases have diverged.
+Rebase a draft from one base commit to another. Used when bases have diverged.
 
 ```bash
 $ jul sync
@@ -2065,7 +2193,29 @@ Run 'jul merge' to resolve.
 
 **V1:** Not implemented. Use `jul ws checkout @` to start fresh, or manually cherry-pick from your sync ref.
 
-### 6.4 Suggestion Commands
+### 6.4 Submit Command
+
+#### `jul submit`
+
+Create or update the **single** review for this workspace.
+
+```bash
+$ jul submit
+Review updated for workspace 'feature-auth'
+  Change-Id: Iab4f...
+  Checkpoint: def456...
+```
+
+**Rules:**
+- One workspace = one review (no review IDs).
+- Uses the **latest checkpoint** for the workspace.
+- Writes review state to `refs/notes/jul/review-state` (keyed by Change-Id anchor; stores latest checkpoint).
+- Subsequent `jul submit` updates the same review.
+- Optional: stacked workspaces include the parent workspace in review metadata.
+
+If you don’t use reviews, skip `jul submit` entirely and go checkpoint → promote.
+
+### 6.5 Suggestion Commands
 
 #### `jul suggestions`
 
@@ -2076,7 +2226,7 @@ Suggestions are created by `jul review` (agent-generated); there is no manual `j
 ```bash
 $ jul suggestions
 
-Pending for Iab4f... (abc123) "feat: add JWT validation":
+Pending for change Iab4f... (checkpoint abc123) "feat: add JWT validation":
 
   [01HX7Y9A] potential_null_check (92%) ✓
              src/auth.py:42 - Missing null check on token
@@ -2090,12 +2240,12 @@ Actions:
   jul reject <id>    Reject
 ```
 
-If checkpoint was amended, stale suggestions are marked:
+If the base commit changed (amend **or** new checkpoint), stale suggestions are marked:
 
 ```bash
 $ jul suggestions
 
-Pending for Iab4f... (def456) "feat: add JWT validation":
+Pending for change Iab4f... (checkpoint def456) "feat: add JWT validation":
 
   [01HX7Y9A] potential_null_check (92%) ⚠ stale
              Created for abc123, current is def456
@@ -2115,7 +2265,8 @@ $ jul show 01HX7Y9A
 
 Suggestion: potential_null_check
 Confidence: 92%
-Checkpoint: Iab4f... "feat: add JWT validation"
+Checkpoint: abc123 "feat: add JWT validation"
+Change-Id:  Iab4f...
 Base SHA:   abc123
 
 src/auth.py:
@@ -2142,7 +2293,7 @@ Applied to draft.
 
 # Or apply and checkpoint immediately
 $ jul apply 01HX7Y9A --checkpoint
-Applied and checkpointed as Icd5e... "fix: add null check for auth token"
+Applied and checkpointed as def456 (change Iab4f...) "fix: add null check for auth token"
 ```
 
 If suggestion is stale:
@@ -2166,7 +2317,7 @@ $ jul reject 01HX7Y9B -m "covered by integration tests"
 Rejected.
 ```
 
-### 6.5 Review Command
+### 6.6 Review Command
 
 #### `jul review`
 
@@ -2174,7 +2325,7 @@ Manually trigger review on current draft.
 
 ```bash
 $ jul review
-Running review on draft Icd5e...
+Running review on draft def456 (change Iab4f...)
   Analyzing 3 changed files...
   
   ⚠ 1 suggestion created
@@ -2184,7 +2335,7 @@ Run 'jul suggestions' to see details.
 
 Useful before checkpoint to catch issues early.
 
-### 6.6 Merge Command
+### 6.7 Merge Command
 
 #### `jul merge`
 
@@ -2225,7 +2376,7 @@ With `--json` for agents:
 }
 ```
 
-### 6.7 CI Command
+### 6.8 CI Command
 
 #### `jul ci run`
 
@@ -2343,7 +2494,7 @@ Use `jul ci run` when you want to explicitly verify before checkpointing:
 $ jul ci run && jul checkpoint   # Only checkpoint if CI passes
 ```
 
-### 6.8 History and Diff Commands
+### 6.9 History and Diff Commands
 
 #### `jul log`
 
@@ -2352,15 +2503,15 @@ Show checkpoint history.
 ```bash
 $ jul log
 
-Icd5e... (2h ago) "fix: null check on token"
+def456 (change Iab4f...) (2h ago) "fix: null check on token"
         Author: george
         ✓ CI passed
 
-Iab4f... (4h ago) "feat: add JWT validation"
+abc123 (change Iab4f...) (4h ago) "feat: add JWT validation"
         Author: george
         ✓ CI passed, 1 suggestion
 
-Ief6a... (1d ago) "initial project structure"
+ghi789 (change Ief6a...) (1d ago) "initial project structure"
         Author: george
         ✓ CI passed
 ```
@@ -2369,14 +2520,14 @@ With trace history (provenance):
 ```bash
 $ jul log --traces
 
-Icd5e... (2h ago) "fix: null check on token"
+def456 (change Iab4f...) (2h ago) "fix: null check on token"
         Author: george
         ✓ CI passed
   └── 1 trace:
       (sha:abc1) claude-code "fix the failing test" (auth.py)
           ✓ lint, ✓ typecheck
 
-Iab4f... (4h ago) "feat: add JWT validation"
+abc123 (change Iab4f...) (4h ago) "feat: add JWT validation"
         Author: george
         ✓ CI passed, 1 suggestion
   └── 3 traces:
@@ -2398,14 +2549,14 @@ Flags:
 Show diff between checkpoints or against draft.
 
 ```bash
-# Diff current draft against last checkpoint
+# Diff current draft against base commit
 $ jul diff
 
 # Diff between two checkpoints
-$ jul diff Iab4f... Icd5e...
+$ jul diff abc123 def456
 
 # Diff specific checkpoint against its parent
-$ jul diff Iab4f...
+$ jul diff abc123
 ```
 
 Flags:
@@ -2418,9 +2569,9 @@ Flags:
 Show details of a checkpoint or suggestion.
 
 ```bash
-$ jul show Iab4f...
+$ jul show abc123
 
-Checkpoint: Iab4f...
+Checkpoint: abc123
 Message: "feat: add JWT validation with refresh tokens"
 Author: george
 Date: Mon Jan 19 15:30:00 2026
@@ -2444,24 +2595,31 @@ Files changed:
 
 Show line-by-line provenance: checkpoint, trace, prompt, agent.
 
+**High-level algorithm:**
+1. Use git blame to find the checkpoint commit that last touched each line.
+2. Read `Trace-Head` / `Trace-Base` trailers from that checkpoint.
+3. Walk the trace DAG between base→head to find the first trace commit whose tree introduces the line.
+4. **Skip `trace_type=merge` nodes** for attribution (they’re connective, not edits).
+5. Determinism: traverse in first‑parent order; if multiple candidates remain, pick the nearest non‑merge ancestor (shortest path).
+
 ```bash
 $ jul blame src/auth.py
 
-42 │ def validate_token(request):     Iab4f... (sha:abc1) george (manual)
-43 │     token = request.headers...   Iab4f... (sha:abc1) george (manual)
-44 │     if not token:                 Iab4f... (sha:def2) claude-code
-45 │         raise AuthError(...)      Iab4f... (sha:def2) claude-code
-46 │     user = validate_jwt(token)    Iab4f... (sha:abc1) george (manual)
+42 │ def validate_token(request):     change Iab4f... (checkpoint abc123) trace:abc1 george (manual)
+43 │     token = request.headers...   change Iab4f... (checkpoint abc123) trace:abc1 george (manual)
+44 │     if not token:                 change Iab4f... (checkpoint abc123) trace:def2 claude-code
+45 │         raise AuthError(...)      change Iab4f... (checkpoint abc123) trace:def2 claude-code
+46 │     user = validate_jwt(token)    change Iab4f... (checkpoint abc123) trace:abc1 george (manual)
 ```
 
 With prompts:
 ```bash
 $ jul blame src/auth.py --prompts
 
-42-43 │ Iab4f... (sha:abc1) george (manual)
+42-43 │ change Iab4f... (checkpoint abc123) trace:abc1 george (manual)
       │ No prompt (manual edit)
 
-44-45 │ Iab4f... (sha:def2) claude-code
+44-45 │ change Iab4f... (checkpoint abc123) trace:def2 claude-code
       │ Prompt: [hash only, summary stored locally]
 ```
 
@@ -2469,7 +2627,7 @@ With full prompt text (if available locally):
 ```bash
 $ jul blame src/auth.py --prompts --local
 
-44-45 │ Iab4f... (sha:def2) claude-code
+44-45 │ change Iab4f... (checkpoint abc123) trace:def2 claude-code
       │ Summary: "Added null check for auth token"
       │ Prompt: "add null check for missing auth token"
 ```
@@ -2478,7 +2636,7 @@ With full context:
 ```bash
 $ jul blame src/auth.py --verbose
 
-44-45 │ Iab4f... (sha:def2) claude-code
+44-45 │ change Iab4f... (checkpoint abc123) trace:def2 claude-code
       │ Checkpoint: "feat: add JWT validation"
       │ Trace: def2... (2026-01-19 15:32:00)
       │ Agent: claude-code
@@ -2529,12 +2687,14 @@ Query checkpoints by criteria.
 ```bash
 $ jul query --test=pass --coverage-min=80 --limit=5
 
-Iab4f... (2h ago) "feat: add JWT validation"
+abc123 (change Iab4f...) (2h ago) "feat: add JWT validation"
         ✓ tests, 84% coverage
         
-Icd5e... (1d ago) "refactor: extract auth utils"
+def456 (change Icd5e...) (1d ago) "refactor: extract auth utils"
         ✓ tests, 82% coverage
 ```
+
+Note: different Change‑Ids in query output represent different logical changes (often after a promote boundary).
 
 #### `jul reflog`
 
@@ -2543,14 +2703,14 @@ Show workspace history (including draft syncs).
 ```bash
 $ jul reflog --limit=10
 
-Icd5e... checkpoint "fix: null check" (2h ago)
-Iab4f... checkpoint "feat: add JWT validation" (4h ago)
+def456 checkpoint "fix: null check" (2h ago)
+abc123 checkpoint "feat: add JWT validation" (4h ago)
         └─ draft sync (4h ago)
         └─ draft sync (5h ago)
-Ief6a... checkpoint "initial structure" (1d ago)
+ghi789 checkpoint "initial structure" (1d ago)
 ```
 
-### 6.9 Local Workspaces (Client-Side)
+### 6.10 Local Workspaces (Client-Side)
 
 Local workspaces enable instant context switching for uncommitted work.
 
@@ -2836,14 +2996,12 @@ while response["ci"]["status"] == "fail":
         for suggestion in response["suggestions"]:
             if suggestion["confidence"] > 0.8:
                 jul(f"apply {suggestion['id']}")
-        jul("checkpoint")
+        response = jul("checkpoint")
     else:
         # No suggestions, agent needs to fix manually
         failures = response["ci"]["signals"]["test"]["failures"]
         fix_failures(failures)
-        jul("checkpoint")
-    
-    response = jul("status")
+        response = jul("checkpoint")
 
 # CI passes, promote
 jul("promote --to main")
@@ -2932,13 +3090,13 @@ When `jul checkpoint` triggers review:
    }
    ```
 
-The `base_sha` tracks which exact checkpoint SHA the suggestion was created against. If the checkpoint is amended (same Change-Id, new SHA), the suggestion becomes stale.
+The `base_sha` tracks which exact checkpoint SHA the suggestion was created against. If the base commit changes (amend or new checkpoint), the suggestion becomes stale.
 
 #### 8.2.3 Applying Suggestions
 
 When user runs `jul apply 01HX7Y9A`:
 
-1. **Check staleness**: Compare suggestion's `base_sha` with current checkpoint SHA
+1. **Check staleness**: Compare suggestion's `base_sha` with `parent(current_draft)` (current base commit)
    - If match: proceed
    - If mismatch: warn "stale", require `--force` or fresh review
 
@@ -3012,7 +3170,8 @@ Communication with internal agent via stdin/stdout JSON.
   "action": "review",
   "workspace_path": "/path/to/.jul/agent-workspace/worktree",
   "context": {
-    "checkpoint": "Iab4f3c2d...",
+    "checkpoint_sha": "abc123...",
+    "change_id": "Iab4f3c2d...",
     "diff": "...",
     "files": [
       {"path": "src/auth.py", "content": "..."}
@@ -3268,7 +3427,7 @@ $ jul promote --to main --json
 
 ## 10. Git Remote Compatibility
 
-Jul works with any git remote. However, some features work better with a Jul-optimized server.
+Jul works with any git remote that accepts **custom refs** and **non‑fast‑forward updates** to `refs/jul/*`. If a host rejects those, Jul degrades to **local‑only** for that namespace.
 
 ### 10.1 Any Git Remote (GitHub, GitLab, etc.)
 
@@ -3286,10 +3445,12 @@ $ jul sync
 
 **Limitations depend on host:**
 - Some hosts may reject custom refs
+- Some hosts may reject non‑FF updates on `refs/jul/*`
 - Some hosts may GC unreachable commits
 - Size limits vary
 
-Use `jul doctor` to check what's syncing.
+Use `jul doctor` to check what's syncing (custom refs + non‑FF support).  
+**Probe strategy:** Jul can push a temporary ref under `refs/jul/doctor/<device>`, attempt a non‑FF update, and then delete it. This makes compatibility checks explicit rather than assumed.
 
 ### 10.2 Jul-Optimized Server (Future)
 
@@ -3311,13 +3472,15 @@ This is future work. For v1, any git remote works.
 | **Agent Workspace** | Isolated git worktree (`.jul/agent-workspace/worktree/`) where internal agent works |
 | **Attestation** | CI/test/coverage results attached to a commit (trace, draft, checkpoint, or published) |
 | **Auto-merge** | 3-way merge producing single-parent draft commit (NOT a 2-parent merge commit) |
-| **Change-Id** | Gerrit-style stable identifier (`Iab4f...`) for a checkpoint |
+| **Change-Id** | Stable identifier (`Iab4f...`) created at the first checkpoint; new Change-Id starts after promote |
+| **Change Anchor SHA** | The first checkpoint SHA of a Change-Id; fixed lookup key for review-state/metadata even if that checkpoint is amended |
+| **Base Commit** | Parent of the current draft (latest checkpoint or latest published commit) |
 | **Checkpoint** | Locked unit of work with message, Change-Id, and trace_base/trace_head refs |
-| **Checkpoint Base Divergence** | When one device checkpointed while another has draft on old base |
+| **Base Divergence** | When one device advanced the base while another has a draft on the old base |
 | **Checkpoint Flush** | Rule that `jul checkpoint` must create final trace so trace_head tree = checkpoint tree |
 | **CI Coalescing** | Only latest draft SHA runs CI; older runs cancelled/ignored |
 | **Device ID** | Random word pair (e.g., "swift-tiger") identifying this machine |
-| **Draft** | Ephemeral commit snapshotting working tree (parent = last checkpoint) |
+| **Draft** | Ephemeral commit snapshotting working tree (parent = base commit) |
 | **Draft Attestation** | Device-local CI results for current draft (ephemeral, not synced) |
 | **External Agent** | Coding agent (Claude Code, Codex) that uses Jul for feedback |
 | **Harness Integration** | Agent harness calls `jul trace --prompt "..."` to attach rich provenance |
@@ -3334,7 +3497,7 @@ This is future work. For v1, any git remote works.
 | **Session Summary** | AI-generated summary of multi-turn conversation that produced a checkpoint |
 | **Shadow Index** | Separate index file so Jul doesn't interfere with git staging |
 | **Side History** | Trace refs stored separately from main commit ancestry (for provenance without pollution) |
-| **Stale Suggestion** | Suggestion created against an old checkpoint SHA (checkpoint was amended) |
+| **Stale Suggestion** | Suggestion created against an old base commit (base changed due to amend or new checkpoint) |
 | **Suggestion** | Agent-proposed fix tied to a Change-Id and base SHA, with apply/reject lifecycle |
 | **Suggestion Base SHA** | The exact checkpoint SHA a suggestion was created against |
 | **Sync** | Fetch, push to sync ref, auto-merge if no conflicts, defer if conflicts |
@@ -3346,9 +3509,9 @@ This is future work. For v1, any git remote works.
 | **trace_base** | Checkpoint metadata: previous checkpoint's trace tip SHA (or null) |
 | **trace_head** | Checkpoint metadata: current trace tip SHA |
 | **Trace Tip** | Canonical trace ref (`refs/jul/traces/<user>/<ws>`), advances with workspace |
-| **Transplant** | (Future) Rebase draft from one checkpoint base to another |
+| **Transplant** | (Future) Rebase draft from one base commit to another |
 | **Workspace** | Named stream of work (replaces branches) |
-| **Workspace Base** | Per-workspace file (`.jul/workspaces/<ws>/base`) tracking last merged SHA |
+| **Workspace Lease** | Per-workspace file (`.jul/workspaces/<ws>/lease`) tracking last merged SHA |
 | **Workspace Ref** | Canonical state (`refs/jul/workspaces/...`) — shared across devices |
 
 **Note:** "Trace ID" (e.g., "t1", "t2") is display-only for human readability. Internally, everything is keyed by trace commit SHA.
@@ -3396,4 +3559,4 @@ Jul = Git + continuous sync + checkpoints + local CI/review + agent-native feedb
 
 - [git-http-backend](https://git-scm.com/docs/git-http-backend) — Smart HTTP server
 - [JJ (Jujutsu)](https://github.com/jj-vcs/jj) — Inspiration for working-copy model
-- [Gerrit Change-Id](https://gerrit-review.googlesource.com/Documentation/user-changeid.html) — Change identity spec
+- [Change-Id trailer format reference](https://gerrit-review.googlesource.com/Documentation/user-changeid.html)

@@ -3,12 +3,23 @@
 ## Current Focus (v0.5 Spec Alignment & UX)
 - [x] Remove server API dependency (`JUL_BASE_URL`/client calls); all commands operate locally + git remote only
 - [x] Implement `jul merge` (conflict resolution flow) per spec
+- [ ] Implement `jul submit` (one workspace = one review) + `review-state`/`review-comments` notes
+- [ ] Implement `jul ws stack` (stacked workspaces, based on latest checkpoint; require checkpoint)
 - [ ] Implement `jul local` save/restore/list/delete (client-side workspace states)
-- [ ] Implement `jul doctor` to verify remote refspecs/notes support
+- [ ] Implement `jul doctor` to verify remote refspecs + non‑FF support for `refs/jul/*`
+- [ ] Sync idempotency: reuse draft commit when tree unchanged (avoid new commit per status)
+- [ ] Base divergence detection: compare draft parents before auto-merge
 - [ ] Add sync modes (`on-command`/`continuous`/`explicit`) and config wiring
 - [ ] Enforce promote policies + strategies (`.jul/policy.toml`, rebase/squash/merge)
+- [ ] Promote writes change-id → checkpoint/published mappings into `refs/notes/jul/meta`
 - [ ] Add retention cleanup for keep-refs + cascading suggestion/notes cleanup
+- [ ] Add explicit cleanup commands (`jul ws close`, `jul prune`) per retention policy
+- [ ] Pin review anchor keep-refs while review is open (retention is last-touched)
 - [ ] Align CLI human output with spec (icons/colors/layout for status/sync/ci/checkpoint/log)
+- [ ] Align Change-Id lifecycle + base-commit terminology in outputs/errors (e.g., `base_diverged`)
+- [ ] Rename workspace lease file (`.jul/workspaces/<ws>/lease`) and update code/config from `workspace_base`
+- [ ] Suggestion staleness uses `suggestion.base_sha == parent(current_draft)`
+- [ ] Add `trace_type` metadata and have `jul blame` skip merge traces
 - [ ] Fix sync draft creation when `.jul` is gitignored (no hard failure)
 - [ ] Expand smoke tests: full local-only flow, remote flow, opencode review, CI config/no-config
 
@@ -23,7 +34,7 @@
 
 ## Current Focus (v0.3 Pivot: Local-First)
 - [x] Local sync engine: shadow-index draft commits + `refs/jul/sync/<user>/<device>/<ws>`
-- [x] Device ID + `workspace_base` tracking per workspace
+- [x] Device ID + `workspace_lease` tracking per workspace
 - [x] Remote selection rules (origin fallback) + `jul remote set/show`
 - [x] Update `jul init` and config to local-first defaults (`[remote]`, `[user]`)
 - [x] Suggestion statuses (`pending/applied/rejected`) + `jul apply`
