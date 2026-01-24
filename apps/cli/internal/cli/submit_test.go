@@ -32,7 +32,7 @@ func TestSubmitRequiresCheckpoint(t *testing.T) {
 	}
 }
 
-func TestSubmitWritesReviewState(t *testing.T) {
+func TestSubmitWritesChangeRequestState(t *testing.T) {
 	repo := t.TempDir()
 	runGitCmd(t, repo, "init")
 	runGitCmd(t, repo, "config", "user.name", "Test User")
@@ -65,12 +65,12 @@ func TestSubmitWritesReviewState(t *testing.T) {
 		t.Fatalf("submit failed with %d", code)
 	}
 
-	state, ok, err := metadata.ReadReviewState(first.CheckpointSHA)
+	state, ok, err := metadata.ReadChangeRequestState(first.CheckpointSHA)
 	if err != nil {
-		t.Fatalf("read review state failed: %v", err)
+		t.Fatalf("read cr state failed: %v", err)
 	}
 	if !ok {
-		t.Fatalf("expected review state note")
+		t.Fatalf("expected cr state note")
 	}
 	if state.ChangeID != first.ChangeID {
 		t.Fatalf("expected Change-Id %s, got %s", first.ChangeID, state.ChangeID)

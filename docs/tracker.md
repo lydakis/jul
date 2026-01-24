@@ -4,7 +4,7 @@
 - [ ] No backward compatibility guarantees; prioritize spec correctness for all new changes
 - [x] Remove server API dependency (`JUL_BASE_URL`/client calls); all commands operate locally + git remote only
 - [x] Implement `jul merge` (conflict resolution flow) per spec
-- [ ] Implement `jul submit` (one workspace = one review) + `review-state`/`review-comments` notes
+- [ ] Implement `jul submit` (one workspace = one CR) + `cr-state`/`cr-comments` notes
 - [x] Implement `jul ws stack` (stacked workspaces, based on latest checkpoint; require checkpoint)
 - [x] Implement `jul local` save/restore/list/delete (client-side workspace states)
 - [x] Implement `jul ws new` to create workspace + start draft (not just set config)
@@ -38,7 +38,7 @@
 - [ ] Server repo management: bare repo create/list + auth/ACLs for refs (future)
 - [ ] Draft smoke-test design doc (happy paths, sad paths, edge cases, complex interactions)
 - [ ] Implement comprehensive smoke/integration tests from the design doc
-- [ ] Replace review notes: move from `refs/notes/jul/review` to `review-state` + `review-comments`
+- [ ] Replace review notes: move from `refs/notes/jul/agent-review` to `cr-state` + `cr-comments`
 - [ ] Remove legacy commands not in spec (e.g., `jul changes`, `jul clone`) or reintroduce in spec
 
 ## Current Focus (v0.4 Trace/Provenance)

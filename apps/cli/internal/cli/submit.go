@@ -15,7 +15,7 @@ import (
 func newSubmitCommand() Command {
 	return Command{
 		Name:    "submit",
-		Summary: "Create or update the review for this workspace",
+		Summary: "Create or update the change request for this workspace",
 		Run: func(args []string) int {
 			return runSubmit(args)
 		},
@@ -48,16 +48,16 @@ func runSubmit(args []string) int {
 	if workspace == "" {
 		workspace = "@"
 	}
-	fmt.Fprintf(os.Stdout, "Review updated for workspace '%s'\n", workspace)
+	fmt.Fprintf(os.Stdout, "CR updated for workspace '%s'\n", workspace)
 	fmt.Fprintf(os.Stdout, "  Change-Id: %s\n", state.ChangeID)
 	fmt.Fprintf(os.Stdout, "  Checkpoint: %s\n", state.LatestCheckpoint)
 	return 0
 }
 
-func submitReview() (metadata.ReviewState, error) {
+func submitReview() (metadata.ChangeRequestState, error) {
 	draftSHA, err := currentDraftSHA()
 	if err != nil {
-		return metadata.ReviewState{}, err
+		return metadata.ChangeRequestState{}, err
 	}
 	draftMsg, _ := gitutil.CommitMessage(draftSHA)
 	changeID := gitutil.ExtractChangeID(draftMsg)
@@ -67,14 +67,14 @@ func submitReview() (metadata.ReviewState, error) {
 
 	checkpoint, err := latestCheckpointForChange(changeID)
 	if err != nil {
-		return metadata.ReviewState{}, err
+		return metadata.ChangeRequestState{}, err
 	}
 	if checkpoint == nil {
-		return metadata.ReviewState{}, fmt.Errorf("checkpoint required before submit")
+		return metadata.ChangeRequestState{}, fmt.Errorf("checkpoint required before submit")
 	}
 	anchorSHA, checkpoints, err := changeMetaFromCheckpoints(changeID)
 	if err != nil {
-		return metadata.ReviewState{}, err
+		return metadata.ChangeRequestState{}, err
 	}
 	if strings.TrimSpace(anchorSHA) == "" {
 		anchorSHA = checkpoint.SHA
@@ -82,7 +82,7 @@ func submitReview() (metadata.ReviewState, error) {
 
 	meta, ok, err := metadata.ReadChangeMeta(anchorSHA)
 	if err != nil {
-		return metadata.ReviewState{}, err
+		return metadata.ChangeRequestState{}, err
 	}
 	if !ok {
 		meta = metadata.ChangeMeta{}
@@ -97,7 +97,7 @@ func submitReview() (metadata.ReviewState, error) {
 		meta.Checkpoints = checkpoints
 	}
 	if err := metadata.WriteChangeMeta(meta); err != nil {
-		return metadata.ReviewState{}, err
+		return metadata.ChangeRequestState{}, err
 	}
 
 	user, workspace := workspaceParts()
@@ -108,16 +108,16 @@ func submitReview() (metadata.ReviewState, error) {
 		}
 		workspaceID += workspace
 	}
-	state := metadata.ReviewState{
-		ChangeID:        changeID,
-		AnchorSHA:       anchorSHA,
+	state := metadata.ChangeRequestState{
+		ChangeID:         changeID,
+		AnchorSHA:        anchorSHA,
 		LatestCheckpoint: checkpoint.SHA,
-		Status:          "open",
-		WorkspaceID:     workspaceID,
-		UpdatedAt:       time.Now().UTC(),
+		Status:           "open",
+		WorkspaceID:      workspaceID,
+		UpdatedAt:        time.Now().UTC(),
 	}
-	if err := metadata.WriteReviewState(state); err != nil {
-		return metadata.ReviewState{}, err
+	if err := metadata.WriteChangeRequestState(state); err != nil {
+		return metadata.ChangeRequestState{}, err
 	}
 	return state, nil
 }

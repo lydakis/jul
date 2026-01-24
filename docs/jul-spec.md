@@ -298,38 +298,38 @@ main:
   ghi789 "feat: add refresh tokens"    ← your work (change Iab4f...)
 ```
 
-#### 2.5.1 Review Lifecycle (One Workspace = One Review)
+#### 2.5.1 Change Request (CR) Lifecycle (One Workspace = One CR)
 
-Jul keeps reviews simple: **one workspace equals one review**.
+Jul keeps change requests simple: **one workspace equals one CR**.
 
-- `jul submit` **creates or updates** the review for the current Change-Id.
-- There are **no review IDs** and no `submit --new`.
-- Each submit points the review at the **latest checkpoint** (a new revision).
-- If you created multiple checkpoints before the first submit, the review simply reflects the latest one (cumulative diff from the base commit).
-- After `jul promote`, the next draft starts a **new Change-Id**, and the next submit opens a **new review**.
+- `jul submit` **creates or updates** the CR for the current Change-Id.
+- There are **no CR IDs** and no `submit --new`.
+- Each submit points the CR at the **latest checkpoint** (a new revision).
+- If you created multiple checkpoints before the first submit, the CR reflects the latest one (cumulative diff from the base commit).
+- After `jul promote`, the next draft starts a **new Change-Id**, and the next submit opens a **new CR**.
 - Submit is **optional** — solo workflows can go straight from checkpoint → promote.
 
-Review state lives in Git notes so it works offline and syncs with the repo:
-- `refs/notes/jul/review-state` — keyed by the **Change-Id anchor SHA** (the first checkpoint SHA for the change); stores Change-Id, status, and latest checkpoint
-- `refs/notes/jul/review-comments` — keyed by checkpoint SHA; stores review comments/threads with `change_id` and optional file/line
+CR state lives in Git notes so it works offline and syncs with the repo:
+- `refs/notes/jul/cr-state` — keyed by the **Change-Id anchor SHA** (the first checkpoint SHA for the change); stores Change-Id, status, and latest checkpoint
+- `refs/notes/jul/cr-comments` — keyed by checkpoint SHA; stores CR comments/threads with `change_id` and optional file/line
   - The anchor SHA is also recorded in `refs/notes/jul/meta` for lookup by Change-Id
 
-Comments can be **review-level** (no file/line, applies to the whole Change-Id) or **checkpoint-level** (anchored to a specific checkpoint/file/line). Threads can span multiple checkpoints by reusing the same `thread_id`.
+Comments can be **CR-level** (no file/line, applies to the whole Change-Id) or **checkpoint-level** (anchored to a specific checkpoint/file/line). Threads can span multiple checkpoints by reusing the same `thread_id`.
 
-**Review anchor retention:** The Change‑Id anchor SHA never changes (even if the first checkpoint is amended). While a review is open, that anchor commit is pinned (its keep‑ref does not expire). Retention is based on **last‑touched** for open reviews.
+**CR anchor retention:** The Change‑Id anchor SHA never changes (even if the first checkpoint is amended). While a CR is open, that anchor commit is pinned (its keep‑ref does not expire). Retention is based on **last‑touched** for open CRs.
 
 Example:
 ```bash
 $ jul ws new feature-auth
 $ jul checkpoint
 $ jul checkpoint
-$ jul submit            # opens review for feature-auth
+$ jul submit            # opens CR for feature-auth
 $ jul checkpoint
-$ jul submit            # updates the same review
+$ jul submit            # updates the same CR
 
 $ jul ws stack feature-b  # create dependent workspace
 $ jul checkpoint
-$ jul submit            # opens review for feature-b (stacked)
+$ jul submit            # opens CR for feature-b (stacked)
 ```
 
 ### 2.6 Traces (Provenance Side History)
@@ -352,7 +352,7 @@ Side history (for blame/provenance):
 ```
 
 **Naming clarity:**
-- **Change-Id** (`Iab4f...`): Stable identifier for a review/change (workspace)
+- **Change-Id** (`Iab4f...`): Stable identifier for a change request/change (workspace)
 - **Trace ID** (`t1`, `t2`): Identifier for a provenance unit within the trace chain
 
 **Trace creation:**
@@ -728,8 +728,9 @@ refs/notes/jul/attestations/checkpoint   # Checkpoint CI results (keyed by SHA)
 refs/notes/jul/attestations/published    # Published CI results (keyed by SHA)
 refs/notes/jul/attestations/trace        # Trace CI results (keyed by trace SHA)
 refs/notes/jul/traces                    # Trace metadata (prompt hash, summary, agent)
-refs/notes/jul/review-comments           # Review comments/threads (keyed by checkpoint SHA)
-refs/notes/jul/review-state              # Review state (keyed by Change-Id anchor)
+refs/notes/jul/agent-review              # Agent review summaries/results
+refs/notes/jul/cr-comments           # CR comments/threads (keyed by checkpoint SHA)
+refs/notes/jul/cr-state              # CR state (keyed by Change-Id anchor)
 refs/notes/jul/meta                      # Change-Id mappings
 refs/notes/jul/suggestions               # Suggestion metadata
 ```
@@ -785,8 +786,9 @@ refs/
     │   ├── published
     │   └── trace
     ├── traces                       # Trace metadata (prompt hash, agent, session)
-    ├── review-comments              # Review comments/threads (keyed by checkpoint SHA)
-    ├── review-state                 # Review state (keyed by Change-Id anchor)
+    ├── agent-review                 # Agent review summaries/results
+    ├── cr-comments              # CR comments/threads (keyed by checkpoint SHA)
+    ├── cr-state                 # CR state (keyed by Change-Id anchor)
     ├── meta
     └── suggestions
 ```
@@ -1375,11 +1377,11 @@ refs/jul/keep/george/feature/Icd5e6f7a/ghi789
 **Lifecycle:**
 - Created when checkpoint is locked
 - TTL-based expiration (configurable, default 90 days) based on **last-touched**
-- **Pinned while review open:** keep‑refs for review anchors do not expire until review is closed/promoted
+- **Pinned while CR open:** keep‑refs for CR anchors do not expire until the CR is closed/promoted
 - Expired keep-refs deleted by Jul maintenance job
 - **Cascade cleanup:** When keep-ref expires, also delete:
   - Associated suggestion refs (`refs/jul/suggest/<change-id>/*`)
-  - Associated notes (attestations, review comments)
+  - Associated notes (attestations, CR comments)
 - Objects become unreachable after ref deletion, eventually GC'd
 
 ```toml
@@ -1618,9 +1620,10 @@ Notes refs can have non-fast-forward conflicts. Prefer clear ownership, but **mu
 |-----------|----------------|---------|
 | `refs/notes/jul/meta` | Client | Change-Id mappings |
 | `refs/notes/jul/attestations` | CI runner | Test results (summaries only) |
-| `refs/notes/jul/review-comments` | Review agent | Review comments/threads (checkpoint-scoped) |
-| `refs/notes/jul/review-state` | Client | Review state (Change-Id anchor, latest checkpoint) |
+| `refs/notes/jul/cr-comments` | Client | CR comments/threads (checkpoint-scoped) |
+| `refs/notes/jul/cr-state` | Client | CR state (Change-Id anchor, latest checkpoint) |
 | `refs/notes/jul/suggestions` | Review agent | Suggestion metadata |
+| `refs/notes/jul/agent-review` | Review agent | Agent review summaries/results |
 | `refs/notes/jul/traces` | Client | Trace metadata (prompt hash, agent, session) |
 
 **Notes sync algorithm (multi-device):**
@@ -1632,7 +1635,7 @@ Even though notes are mergeable, the notes ref itself can reject non‑fast‑fo
 
 This avoids flaky push failures when two devices append notes in parallel.
 
-**Concurrency rule:** When multiple devices might update the same note entry, prefer **append-only events** (e.g., review comment events, suggestion status events) and derive current state from the latest event. This avoids conflicts from “last writer wins” overwrites.
+**Concurrency rule:** When multiple devices might update the same note entry, prefer **append-only events** (e.g., CR comment events, suggestion status events) and derive current state from the latest event. This avoids conflicts from “last writer wins” overwrites.
 
 **Suggestions storage:**
 
@@ -1685,7 +1688,7 @@ Local storage for prompts and summaries: `.jul/traces/`
 - `refs/jul/sync/<user>/<device>/<ws>` — This device's backup (never clobbered)
 - `refs/jul/keep/*` — Checkpoint retention anchors
 - `refs/jul/suggest/*` — Suggestion patch commits
-- `refs/notes/jul/*` — Metadata (attestations, review-state/comments, suggestions, traces)
+- `refs/notes/jul/*` — Metadata (attestations, cr-state/comments, suggestions, traces)
 
 **Local state (per workspace):**
 - `.jul/workspaces/<ws>/lease` — SHA of last workspace state we merged (the semantic lease)
@@ -1945,7 +1948,7 @@ Flags:
 - `--no-review` — Skip review
 - `--json` — JSON output
 
-**Amend semantics:** `jul checkpoint --amend` creates a **new checkpoint commit** (new SHA) with the **same Change‑Id**. The old checkpoint remains reachable via keep‑refs (pinned while review is open, otherwise subject to retention). No in‑place history rewrite.
+**Amend semantics:** `jul checkpoint --amend` creates a **new checkpoint commit** (new SHA) with the **same Change‑Id**. The old checkpoint remains reachable via keep‑refs (pinned while the CR is open, otherwise subject to retention). No in‑place history rewrite.
 
 **Git commit adoption (opt‑in):**
 
@@ -2044,14 +2047,14 @@ New draft started.
 **Note:** Promoted history on `refs/heads/*` is **published commits** (normal Git commits), not checkpoints. A new Change‑Id starts for the next workspace draft after promote.
 
 **Mapping rule:** `jul promote` records a mapping in `refs/notes/jul/meta`:
-- `change_id → anchor_sha` (first checkpoint SHA, pinned while review open)
+- `change_id → anchor_sha` (first checkpoint SHA, pinned while CR open)
 - `change_id → [checkpoint_shas...]` (the checkpoints being promoted)
 - `change_id → promote_events[]` with:
   - `published_shas` (commits created on target branch)
   - `target`, `strategy`, `timestamp`
   - For merge: `merge_commit_sha` + `mainline` (for deterministic revert)
 
-This makes `jul revert <change-id>` deterministic (revert the published SHAs from the last promote), and keeps review status tied to the latest checkpoint SHA.
+This makes `jul revert <change-id>` deterministic (revert the published SHAs from the last promote), and keeps CR status tied to the latest checkpoint SHA.
 
 Flags:
 - `--to <branch>` — Target branch (required)
@@ -2197,23 +2200,23 @@ Run 'jul merge' to resolve.
 
 #### `jul submit`
 
-Create or update the **single** review for this workspace.
+Create or update the **single** change request (CR) for this workspace.
 
 ```bash
 $ jul submit
-Review updated for workspace 'feature-auth'
+CR updated for workspace 'feature-auth'
   Change-Id: Iab4f...
   Checkpoint: def456...
 ```
 
 **Rules:**
-- One workspace = one review (no review IDs).
+- One workspace = one CR (no CR IDs).
 - Uses the **latest checkpoint** for the workspace.
-- Writes review state to `refs/notes/jul/review-state` (keyed by Change-Id anchor; stores latest checkpoint).
-- Subsequent `jul submit` updates the same review.
-- Optional: stacked workspaces include the parent workspace in review metadata.
+- Writes CR state to `refs/notes/jul/cr-state` (keyed by Change-Id anchor; stores latest checkpoint).
+- Subsequent `jul submit` updates the same CR.
+- Optional: stacked workspaces include the parent workspace in CR metadata.
 
-If you don’t use reviews, skip `jul submit` entirely and go checkpoint → promote.
+If you don’t use CRs, skip `jul submit` entirely and go checkpoint → promote.
 
 ### 6.5 Suggestion Commands
 
@@ -3474,7 +3477,7 @@ This is future work. For v1, any git remote works.
 | **Attestation** | CI/test/coverage results attached to a commit (trace, draft, checkpoint, or published) |
 | **Auto-merge** | 3-way merge producing single-parent draft commit (NOT a 2-parent merge commit) |
 | **Change-Id** | Stable identifier (`Iab4f...`) created at the first draft; new Change-Id starts after promote |
-| **Change Anchor SHA** | The first checkpoint SHA of a Change-Id; fixed lookup key for review-state/metadata even if that checkpoint is amended |
+| **Change Anchor SHA** | The first checkpoint SHA of a Change-Id; fixed lookup key for cr-state/metadata even if that checkpoint is amended |
 | **Base Commit** | Parent of the current draft (latest checkpoint or latest published commit) |
 | **Checkpoint** | Locked unit of work with message, Change-Id, and trace_base/trace_head refs |
 | **Base Divergence** | When one device advanced the base while another has a draft on the old base |
