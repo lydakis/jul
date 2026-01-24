@@ -294,6 +294,64 @@ func TestCheckpointKeepsChangeIDAcrossDrafts(t *testing.T) {
 	}
 }
 
+func TestSyncAssignsChangeIDToDraft(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	repoDir := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	res, err := Sync()
+	if err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	if res.DraftSHA == "" {
+		t.Fatalf("expected draft sha in sync result")
+	}
+	draftMsg, err := gitOut(repoDir, "git", "log", "-1", "--format=%B", res.DraftSHA)
+	if err != nil {
+		t.Fatalf("failed to read draft message: %v", err)
+	}
+	if changeID := gitutil.ExtractChangeID(draftMsg); changeID == "" {
+		t.Fatalf("expected Change-Id in draft message, got %q", draftMsg)
+	}
+}
+
 func TestSyncDetectsBaseDivergence(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

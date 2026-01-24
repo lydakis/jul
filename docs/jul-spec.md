@@ -91,7 +91,7 @@ Agent (Codex / Claude Code / OpenCode)
 | **Draft** | Ephemeral commit snapshotting working tree (parent = base commit) |
 | **Trace** | Fine-grained provenance unit (prompt, agent, session) — side history, keyed by SHA |
 | **Checkpoint** | A locked unit of work with message, Change-Id, and trace_base/trace_head refs |
-| **Change-Id** | Stable identifier for a logical change (`Iab4f3c2d...`), created at first checkpoint and renewed after promote |
+| **Change-Id** | Stable identifier for a logical change (`Iab4f3c2d...`), created at the first draft commit and renewed after promote |
 | **Attestation** | CI/test/coverage results attached to a trace, draft, checkpoint, or published commit |
 | **Suggestion** | Agent-proposed fix targeting a checkpoint |
 | **Local Workspace** | Client-side saved state for fast context switching |
@@ -121,7 +121,7 @@ Jul uses a four-stage model:
 │    • Shadow snapshot of your working tree                               │
 │    • Continuously updated (every save)                                  │
 │    • Synced to remote automatically                                     │
-│    • Change-Id assigned at first checkpoint (carried forward)           │
+│    • Change-Id assigned at first draft commit (carried forward)         │
 │    • No commit message yet                                              │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                           jul checkpoint                                │
@@ -306,11 +306,11 @@ Jul keeps reviews simple: **one workspace equals one review**.
 - There are **no review IDs** and no `submit --new`.
 - Each submit points the review at the **latest checkpoint** (a new revision).
 - If you created multiple checkpoints before the first submit, the review simply reflects the latest one (cumulative diff from the base commit).
-- After `jul promote`, the next checkpoint starts a **new Change-Id**, and the next submit opens a **new review**.
+- After `jul promote`, the next draft starts a **new Change-Id**, and the next submit opens a **new review**.
 - Submit is **optional** — solo workflows can go straight from checkpoint → promote.
 
 Review state lives in Git notes so it works offline and syncs with the repo:
-- `refs/notes/jul/review-state` — keyed by the **Change-Id anchor SHA** (the first checkpoint SHA at change creation); stores Change-Id, status, and latest checkpoint
+- `refs/notes/jul/review-state` — keyed by the **Change-Id anchor SHA** (the first checkpoint SHA for the change); stores Change-Id, status, and latest checkpoint
 - `refs/notes/jul/review-comments` — keyed by checkpoint SHA; stores review comments/threads with `change_id` and optional file/line
   - The anchor SHA is also recorded in `refs/notes/jul/meta` for lookup by Change-Id
 
@@ -830,8 +830,8 @@ This section addresses how Jul concepts map to Git.
 **Drafts are real git commits.**
 
 A draft is a commit with:
-- A placeholder message (e.g., `[draft] WIP`, or `[draft] Iab4f3c2d` after first checkpoint)
-- A Change-Id trailer **only after** the first checkpoint
+- A placeholder message (`[draft] WIP`)
+- A Change-Id trailer starting with the first draft commit
 - Parent = base commit (latest checkpoint or latest published commit)
 - Always pointed to by this device's sync ref
 - Pointed to by workspace ref only when canonical (not diverged)
@@ -843,7 +843,7 @@ Date:   Mon Jan 19 15:30:00 2026
 
     [draft] Work in progress
     
-    Change-Id: Iab4f3c2d1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b   (after first checkpoint)
+    Change-Id: Iab4f3c2d1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b   (from first draft)
 ```
 
 **Each sync creates a NEW draft commit only if the tree changed:**
@@ -3473,7 +3473,7 @@ This is future work. For v1, any git remote works.
 | **Agent Workspace** | Isolated git worktree (`.jul/agent-workspace/worktree/`) where internal agent works |
 | **Attestation** | CI/test/coverage results attached to a commit (trace, draft, checkpoint, or published) |
 | **Auto-merge** | 3-way merge producing single-parent draft commit (NOT a 2-parent merge commit) |
-| **Change-Id** | Stable identifier (`Iab4f...`) created at the first checkpoint; new Change-Id starts after promote |
+| **Change-Id** | Stable identifier (`Iab4f...`) created at the first draft; new Change-Id starts after promote |
 | **Change Anchor SHA** | The first checkpoint SHA of a Change-Id; fixed lookup key for review-state/metadata even if that checkpoint is amended |
 | **Base Commit** | Parent of the current draft (latest checkpoint or latest published commit) |
 | **Checkpoint** | Locked unit of work with message, Change-Id, and trace_base/trace_head refs |
