@@ -27,7 +27,7 @@ archives:
     name_template: "jul_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format: tar.gz
     files:
-      - src: dist/opencode/{{ .Os }}_{{ .Arch }}/opencode
+      - src: build/opencode/{{ .Os }}_{{ .Arch }}/opencode
         dst: libexec/jul/opencode
 
 checksum:

@@ -11,7 +11,7 @@ The bundled agent binary is expected at `libexec/jul/opencode` relative to `jul`
 ## GoReleaser (snapshot)
 
 ```bash
-# Fetch the pinned OpenCode assets into dist/opencode/*
+# Fetch the pinned OpenCode assets into build/opencode/*
 ./scripts/fetch-opencode.sh
 
 # Build archives without publishing

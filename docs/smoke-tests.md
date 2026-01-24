@@ -40,4 +40,4 @@ go test ./integration -run Smoke
 - Real agent smoke test is opt-in:
   - Set `JUL_REAL_AGENT=1`
   - Ensure OpenCode is configured (e.g., `~/.config/opencode` or env vars) so it can run headless.
-  - If the bundled binary is missing, the test downloads it into `dist/opencode/` before running.
+  - If the bundled binary is missing, the test downloads it into `build/opencode/` before running.
