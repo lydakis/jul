@@ -8,7 +8,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
@@ -44,11 +47,12 @@ func newTraceCommand() Command {
 			}
 
 			res, err := syncer.Trace(syncer.TraceOptions{
-				Prompt:    promptText,
-				Agent:     strings.TrimSpace(*agent),
-				SessionID: strings.TrimSpace(*sessionID),
-				Turn:      *turn,
-				Force:     true,
+				Prompt:          promptText,
+				Agent:           strings.TrimSpace(*agent),
+				SessionID:       strings.TrimSpace(*sessionID),
+				Turn:            *turn,
+				Force:           true,
+				UpdateCanonical: true,
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "trace failed: %v\n", err)
@@ -99,6 +103,14 @@ func newTraceCommand() Command {
 			}
 			if res.Merged && res.CanonicalSHA != "" && res.CanonicalSHA != res.TraceSHA {
 				fmt.Fprintf(os.Stdout, "  Trace tip merged: %s\n", shortSHA(res.CanonicalSHA))
+			}
+			if config.TraceRunOnTrace() && !res.Skipped {
+				if att, err := metadata.GetTraceAttestation(res.TraceSHA); err == nil && att != nil && att.SignalsJSON != "" {
+					var result ci.Result
+					if err := json.Unmarshal([]byte(att.SignalsJSON), &result); err == nil {
+						output.RenderCIResult(os.Stdout, result, output.DefaultOptions())
+					}
+				}
 			}
 			return 0
 		},

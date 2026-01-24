@@ -90,22 +90,43 @@ func bundledOpenCodePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Dir(exe)
+	return bundledOpenCodePathFor(exe)
+}
+
+func bundledOpenCodePathFor(exe string) (string, error) {
 	name := "opencode"
 	if runtime.GOOS == "windows" {
 		name = "opencode.exe"
 	}
-	candidates := []string{
-		filepath.Join(dir, "..", "libexec", "jul", name),
-		filepath.Join(dir, "libexec", "jul", name),
-		filepath.Join(dir, name),
-		filepath.Join(dir, "..", name),
+
+	dirs := []string{filepath.Dir(exe)}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil && resolved != exe {
+		dirs = append(dirs, filepath.Dir(resolved))
 	}
-	for _, candidate := range candidates {
-		path := filepath.Clean(candidate)
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
+
+	candidates := make([]string, 0, len(dirs)*4)
+	seen := make(map[string]struct{}, len(dirs)*4)
+	for _, dir := range dirs {
+		paths := []string{
+			filepath.Join(dir, "..", "libexec", "jul", name),
+			filepath.Join(dir, "libexec", "jul", name),
+			filepath.Join(dir, name),
+			filepath.Join(dir, "..", name),
+		}
+		for _, path := range paths {
+			path = filepath.Clean(path)
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			candidates = append(candidates, path)
 		}
 	}
-	return "", fmt.Errorf("bundled opencode not found near %s", dir)
+
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("bundled opencode not found near %s", filepath.Dir(exe))
 }

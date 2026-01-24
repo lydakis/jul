@@ -122,14 +122,14 @@ func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewReques
 	}
 	defer os.Remove(tempFile)
 
-	prompt := buildReviewPrompt(tempFile)
+	prompt := buildReviewPrompt(req.Action, tempFile)
 	cmdPath := provider.Command
 	args := []string{"run", "--format", "json", "--file", tempFile, "--", prompt}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	cmd.Dir = req.WorkspacePath
 	cmd.Env = append(os.Environ(),
 		"JUL_AGENT_MODE=prompt",
-		"JUL_AGENT_ACTION=review",
+		"JUL_AGENT_ACTION="+req.Action,
 		"JUL_AGENT_WORKSPACE="+req.WorkspacePath,
 	)
 	output, err := cmd.CombinedOutput()
@@ -147,7 +147,7 @@ func runPromptAgent(ctx context.Context, provider Provider, req ReviewRequest, h
 	}
 	defer os.Remove(tempFile)
 
-	prompt := buildReviewPrompt(tempFile)
+	prompt := buildReviewPrompt(req.Action, tempFile)
 	command := strings.TrimSpace(headless)
 	if command == "" {
 		command = provider.Command
@@ -164,7 +164,7 @@ func runPromptAgent(ctx context.Context, provider Provider, req ReviewRequest, h
 	cmd.Dir = req.WorkspacePath
 	cmd.Env = append(os.Environ(),
 		"JUL_AGENT_MODE=prompt",
-		"JUL_AGENT_ACTION=review",
+		"JUL_AGENT_ACTION="+req.Action,
 		"JUL_AGENT_WORKSPACE="+req.WorkspacePath,
 		"JUL_AGENT_INPUT="+tempFile,
 		"JUL_AGENT_PROMPT="+prompt,
@@ -305,15 +305,36 @@ func extractJSON(data []byte) []byte {
 	return trimmed[start:]
 }
 
-func buildReviewPrompt(attachmentPath string) string {
+func buildReviewPrompt(action, attachmentPath string) string {
 	var buf strings.Builder
-	buf.WriteString("You are the Jul internal review agent.\n")
+	action = strings.TrimSpace(action)
+	if action == "" {
+		action = "review"
+	}
+	switch action {
+	case "resolve_conflict":
+		buf.WriteString("You are the Jul internal merge agent.\n")
+	default:
+		buf.WriteString("You are the Jul internal review agent.\n")
+	}
 	if strings.TrimSpace(attachmentPath) != "" {
-		buf.WriteString("Review the context file at ")
-		buf.WriteString(attachmentPath)
-		buf.WriteString(", make fixes in the workspace, commit them, and respond with JSON ONLY.\n")
+		switch action {
+		case "resolve_conflict":
+			buf.WriteString("Resolve merge conflicts using the context file at ")
+			buf.WriteString(attachmentPath)
+			buf.WriteString(". Fix conflicts in the workspace, ensure it builds, commit the resolution, and respond with JSON ONLY.\n")
+		default:
+			buf.WriteString("Review the context file at ")
+			buf.WriteString(attachmentPath)
+			buf.WriteString(", make fixes in the workspace, commit them, and respond with JSON ONLY.\n")
+		}
 	} else {
-		buf.WriteString("Review the attached context file, make fixes in the workspace, commit them, and respond with JSON ONLY.\n")
+		switch action {
+		case "resolve_conflict":
+			buf.WriteString("Resolve merge conflicts using the attached context file. Fix conflicts in the workspace, ensure it builds, commit the resolution, and respond with JSON ONLY.\n")
+		default:
+			buf.WriteString("Review the attached context file, make fixes in the workspace, commit them, and respond with JSON ONLY.\n")
+		}
 	}
 	buf.WriteString("Response schema:\n")
 	buf.WriteString("{\"version\":1,\"status\":\"completed\",\"suggestions\":[{\"commit\":\"<sha>\",\"reason\":\"...\",\"description\":\"...\",\"confidence\":0.0}]}\n")
@@ -327,6 +348,15 @@ func buildReviewAttachment(req ReviewRequest) string {
 	}
 	if req.Context.ChangeID != "" {
 		attachment.WriteString("Change-Id: " + req.Context.ChangeID + "\n")
+	}
+	if len(req.Context.Conflicts) > 0 {
+		attachment.WriteString("\nConflicts:\n")
+		for _, conflict := range req.Context.Conflicts {
+			if strings.TrimSpace(conflict) == "" {
+				continue
+			}
+			attachment.WriteString("- " + strings.TrimSpace(conflict) + "\n")
+		}
 	}
 	if req.Context.Diff != "" {
 		attachment.WriteString("\nDiff:\n")

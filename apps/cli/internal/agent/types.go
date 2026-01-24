@@ -14,6 +14,7 @@ type ReviewContext struct {
 	ChangeID   string          `json:"change_id,omitempty"`
 	Diff       string          `json:"diff,omitempty"`
 	Files      []ReviewFile    `json:"files,omitempty"`
+	Conflicts  []string        `json:"conflicts,omitempty"`
 	CIResults  json.RawMessage `json:"ci_results,omitempty"`
 }
 

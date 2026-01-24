@@ -42,6 +42,32 @@ func CommitMessage(ref string) (string, error) {
 	return git("log", "-1", "--format=%B", ref)
 }
 
+func ExtractTraceHead(message string) string {
+	return extractTrailer("Trace-Head", message)
+}
+
+func ExtractTraceBase(message string) string {
+	return extractTrailer("Trace-Base", message)
+}
+
+func extractTrailer(key, message string) string {
+	if strings.TrimSpace(message) == "" || strings.TrimSpace(key) == "" {
+		return ""
+	}
+	lines := strings.Split(message, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		prefix := key + ":"
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
 func TreeOf(ref string) (string, error) {
 	if strings.TrimSpace(ref) == "" {
 		return "", fmt.Errorf("ref required")

@@ -31,11 +31,7 @@ func newCloneCommand() Command {
 			}
 			targetDir := strings.TrimSpace(fs.Arg(1))
 
-			baseURL := strings.TrimSpace(*server)
-			if baseURL == "" {
-				baseURL = config.BaseURL()
-			}
-			baseURL = strings.TrimRight(baseURL, "/")
+			baseURL := strings.TrimRight(strings.TrimSpace(*server), "/")
 
 			repoURL := repoArg
 			if !looksLikeURL(repoArg) {
@@ -67,12 +63,6 @@ func newCloneCommand() Command {
 				return 1
 			}
 
-			if baseURL != "" {
-				if err := runGit(repoRoot, "config", "jul.baseurl", baseURL); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to set jul.baseurl: %v\n", err)
-					return 1
-				}
-			}
 			wsID := strings.TrimSpace(*workspace)
 			if wsID == "" {
 				wsID = config.WorkspaceID()

@@ -3,24 +3,31 @@ package syncer
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/lydakis/jul/cli/internal/ci"
+	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/notes"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 )
 
 type TraceOptions struct {
-	Prompt    string
-	Agent     string
-	SessionID string
-	Turn      int
-	Force     bool
-	Implicit  bool
+	Prompt          string
+	Agent           string
+	SessionID       string
+	Turn            int
+	Force           bool
+	Implicit        bool
+	UpdateCanonical bool
 }
 
 type TraceResult struct {
@@ -28,6 +35,7 @@ type TraceResult struct {
 	TraceRef     string
 	TraceSyncRef string
 	CanonicalSHA string
+	TraceBase    string
 	PromptHash   string
 	RemoteName   string
 	RemotePushed bool
@@ -36,7 +44,7 @@ type TraceResult struct {
 }
 
 func Trace(opts TraceOptions) (TraceResult, error) {
-	_, err := gitutil.RepoTopLevel()
+	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return TraceResult{}, err
 	}
@@ -56,17 +64,25 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		TraceRef:     traceRef,
 		TraceSyncRef: traceSyncRef,
 	}
+	allowCanonical := opts.UpdateCanonical
 
 	remote, rerr := remotesel.Resolve()
 	remoteTip := ""
-	if rerr == nil {
+	remoteMissing := false
+	if rerr == nil && allowCanonical {
 		res.RemoteName = remote.Name
 		if err := fetchRef(remote.Name, traceRef); err != nil {
-			if !isMissingRemoteRef(err) {
+			if isMissingRemoteRef(err) {
+				remoteMissing = true
+			} else {
 				return res, err
 			}
 		}
-		if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+		if !remoteMissing {
+			if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+				remoteTip = strings.TrimSpace(sha)
+			}
+		} else if sha, err := gitutil.ResolveRef(traceRef); err == nil {
 			remoteTip = strings.TrimSpace(sha)
 		}
 	}
@@ -77,6 +93,7 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 	}
 
 	parent := resolveTraceParent(traceSyncRef, traceRef)
+	res.TraceBase = parent
 	if !opts.Force {
 		if parent != "" {
 			if parentTree, err := gitutil.TreeOf(parent); err == nil && parentTree == treeSHA {
@@ -141,34 +158,47 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		return res, err
 	}
 
-	canonical := traceSHA
-	existingTip := remoteTip
-	if existingTip == "" {
-		if sha, err := gitutil.ResolveRef(traceRef); err == nil {
-			existingTip = strings.TrimSpace(sha)
+	traceAttested := false
+	if config.TraceRunOnTrace() {
+		if err := runTraceCI(traceSHA, repoRoot); err == nil {
+			traceAttested = true
 		}
 	}
-	if existingTip != "" && existingTip != traceSHA {
-		switch {
-		case gitutil.IsAncestor(existingTip, traceSHA):
-			canonical = traceSHA
-		case gitutil.IsAncestor(traceSHA, existingTip):
-			canonical = existingTip
-		default:
-			mergeMessage := "[trace] merge"
-			mergeSHA, err := gitutil.CommitTreeWithParents(treeSHA, []string{existingTip, traceSHA}, mergeMessage)
-			if err != nil {
+
+	canonical := ""
+	existingTip := ""
+	if allowCanonical {
+		canonical = traceSHA
+		existingTip = remoteTip
+		if existingTip == "" {
+			if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+				existingTip = strings.TrimSpace(sha)
+			}
+		}
+		if existingTip != "" && existingTip != traceSHA {
+			switch {
+			case gitutil.IsAncestor(existingTip, traceSHA):
+				canonical = traceSHA
+			case gitutil.IsAncestor(traceSHA, existingTip):
+				canonical = existingTip
+			default:
+				mergeMessage := "[trace] merge"
+				mergeSHA, err := gitutil.CommitTreeWithParents(treeSHA, []string{existingTip, traceSHA}, mergeMessage)
+				if err != nil {
+					return res, err
+				}
+				canonical = mergeSHA
+				res.Merged = true
+			}
+		}
+		res.CanonicalSHA = canonical
+		if canonical != "" {
+			if err := gitutil.UpdateRef(traceRef, canonical); err != nil {
 				return res, err
 			}
-			canonical = mergeSHA
-			res.Merged = true
 		}
-	}
-	res.CanonicalSHA = canonical
-	if canonical != "" {
-		if err := gitutil.UpdateRef(traceRef, canonical); err != nil {
-			return res, err
-		}
+	} else if sha, err := gitutil.ResolveRef(traceRef); err == nil {
+		res.CanonicalSHA = strings.TrimSpace(sha)
 	}
 
 	if rerr == nil {
@@ -176,7 +206,8 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 			return res, err
 		}
 		res.RemotePushed = true
-		if canonical != "" {
+		_ = pushTraceNotes(remote.Name, traceAttested)
+		if allowCanonical && canonical != "" {
 			if err := pushWorkspace(remote.Name, canonical, traceRef, remoteTip); err != nil {
 				return res, err
 			}
@@ -239,11 +270,133 @@ func isMissingRemoteRef(err error) bool {
 	return strings.Contains(msg, "couldn't find remote ref") || strings.Contains(msg, "remote ref does not exist")
 }
 
+func pushTraceNotes(remoteName string, pushAttestations bool) error {
+	if strings.TrimSpace(remoteName) == "" {
+		return nil
+	}
+	traceRef := notes.RefTraces
+	if gitutil.RefExists(traceRef) {
+		if err := syncNotesRef(remoteName, traceRef); err != nil {
+			return err
+		}
+		if _, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", traceRef, traceRef)); err != nil {
+			return err
+		}
+	}
+	if !pushAttestations {
+		return nil
+	}
+	attRef := notes.RefAttestationsTrace
+	if !gitutil.RefExists(attRef) {
+		return nil
+	}
+	if err := syncNotesRef(remoteName, attRef); err != nil {
+		return err
+	}
+	_, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", attRef, attRef))
+	return err
+}
+
+func syncNotesRef(remoteName, ref string) error {
+	if strings.TrimSpace(remoteName) == "" || strings.TrimSpace(ref) == "" {
+		return nil
+	}
+	tmpRef := fmt.Sprintf("refs/jul/tmp/notes/%d", time.Now().UnixNano())
+	if _, err := gitutil.Git("fetch", remoteName, "+"+ref+":"+tmpRef); err != nil {
+		if isMissingRemoteRef(err) {
+			return nil
+		}
+		return err
+	}
+	if _, err := gitutil.Git("notes", "--ref", ref, "merge", tmpRef); err != nil {
+		_, _ = gitutil.Git("notes", "--ref", ref, "merge", "--abort")
+		_, _ = gitutil.Git("update-ref", "-d", tmpRef)
+		return err
+	}
+	_, _ = gitutil.Git("update-ref", "-d", tmpRef)
+	return nil
+}
+
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	regexp.MustCompile(`ghp_[A-Za-z0-9]{30,}`),
 	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`),
 	regexp.MustCompile(`sk-[A-Za-z0-9]{16,}`),
-	regexp.MustCompile(`(?i)bearer\\s+[A-Za-z0-9._-]+`),
-	regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|pwd)\\s*[:=]\\s*\\S+`),
+	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._-]+`),
+	regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|pwd)\s*[:=]\s*\S+`),
+}
+
+func runTraceCI(traceSHA, repoRoot string) error {
+	cmds := resolveTraceCommands(repoRoot)
+	if len(cmds) == 0 {
+		return nil
+	}
+	result, err := ci.RunCommands(cmds, repoRoot)
+	if err != nil {
+		return err
+	}
+	signals, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	att := client.Attestation{
+		CommitSHA:   traceSHA,
+		Type:        "trace",
+		Status:      result.Status,
+		StartedAt:   result.StartedAt,
+		FinishedAt:  result.FinishedAt,
+		SignalsJSON: string(signals),
+	}
+	_, err = metadata.WriteTraceAttestation(att)
+	return err
+}
+
+func resolveTraceCommands(repoRoot string) []string {
+	checks := config.TraceChecks()
+	if len(checks) == 0 {
+		return nil
+	}
+	hasGoMod := fileExists(filepath.Join(repoRoot, "go.mod"))
+	hasGoWork := fileExists(filepath.Join(repoRoot, "go.work"))
+	cmds := make([]string, 0, len(checks))
+	for _, check := range checks {
+		check = strings.TrimSpace(check)
+		if check == "" {
+			continue
+		}
+		cmd := traceCheckCommand(check, hasGoMod || hasGoWork)
+		if cmd == "" {
+			continue
+		}
+		cmds = append(cmds, cmd)
+	}
+	return cmds
+}
+
+func traceCheckCommand(check string, hasGo bool) string {
+	lower := strings.ToLower(strings.TrimSpace(check))
+	if strings.Contains(check, " ") || strings.Contains(check, "/") {
+		return check
+	}
+	switch lower {
+	case "lint":
+		if hasGo {
+			return "go vet ./..."
+		}
+	case "typecheck":
+		if hasGo {
+			return "go test ./... -run TestDoesNotExist"
+		}
+	default:
+		return check
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
+	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
@@ -24,14 +25,18 @@ func Commands(version string) []Command {
 		newRemoteCommand(),
 		newConfigureCommand(),
 		newWorkspaceCommand(),
+		newLocalCommand(),
 		newCheckpointCommand(),
 		newReviewCommand(),
+		newSubmitCommand(),
 		newTraceCommand(),
+		newMergeCommand(),
 		newSyncCommand(),
 		newStatusCommand(),
 		newLogCommand(),
 		newDiffCommand(),
 		newShowCommand(),
+		newBlameCommand(),
 		newApplyCommand(),
 		newReflogCommand(),
 		newPromoteCommand(),
@@ -204,32 +209,16 @@ func newPromoteCommand() Command {
 				fmt.Fprintln(os.Stderr, "failed to resolve commit to promote")
 				return 1
 			}
-			if !config.BaseURLConfigured() {
-				if err := promoteLocal(*toBranch, targetSHA, *force); err != nil {
-					fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
-					return 1
-				}
-			} else {
-				cli := client.New(config.BaseURL())
-				if err := cli.Promote(config.WorkspaceID(), *toBranch, targetSHA, *force); err != nil {
-					fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
-					return 1
-				}
+			if err := promoteLocal(*toBranch, targetSHA, *force); err != nil {
+				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
+				return 1
 			}
 
 			if *force {
-				if config.BaseURLConfigured() {
-					fmt.Fprintln(os.Stdout, "promote requested (force)")
-					return 0
-				}
 				fmt.Fprintln(os.Stdout, "promote completed (force)")
 				return 0
 			}
 
-			if config.BaseURLConfigured() {
-				fmt.Fprintln(os.Stdout, "promote requested")
-				return 0
-			}
 			fmt.Fprintln(os.Stdout, "promote completed")
 			return 0
 		},
@@ -256,7 +245,162 @@ func promoteLocal(branch, sha string, force bool) error {
 			}
 		}
 	}
-	return gitutil.UpdateRef(ref, sha)
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return err
+	}
+	if err := gitutil.UpdateRef(ref, sha); err != nil {
+		return err
+	}
+	if err := recordPromoteMeta(branch, sha); err != nil {
+		return err
+	}
+	return startNewDraftAfterPromote(repoRoot, sha)
+}
+
+func recordPromoteMeta(branch, sha string) error {
+	if strings.TrimSpace(sha) == "" {
+		return nil
+	}
+	changeID := changeIDForCommit(sha)
+	anchorSHA, checkpoints, err := changeMetaFromCheckpoints(changeID)
+	if err != nil {
+		return err
+	}
+	if anchorSHA == "" {
+		anchorSHA = sha
+	}
+
+	meta, ok, err := metadata.ReadChangeMeta(anchorSHA)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		meta = metadata.ChangeMeta{}
+	}
+	if meta.ChangeID == "" {
+		meta.ChangeID = changeID
+	}
+	if meta.AnchorSHA == "" {
+		meta.AnchorSHA = anchorSHA
+	}
+	if len(checkpoints) > 0 {
+		meta.Checkpoints = checkpoints
+	}
+	meta.PromoteEvents = append(meta.PromoteEvents, metadata.PromoteEvent{
+		Target:    strings.TrimSpace(branch),
+		Strategy:  "fast-forward",
+		Timestamp: time.Now().UTC(),
+		Published: []string{sha},
+	})
+	return metadata.WriteChangeMeta(meta)
+}
+
+func startNewDraftAfterPromote(repoRoot, publishedSHA string) error {
+	if strings.TrimSpace(publishedSHA) == "" {
+		return nil
+	}
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return err
+	}
+	newChangeID, err := gitutil.NewChangeID()
+	if err != nil {
+		return err
+	}
+	treeSHA, err := gitutil.TreeOf(publishedSHA)
+	if err != nil {
+		return err
+	}
+	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, publishedSHA, newChangeID)
+	if err != nil {
+		return err
+	}
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
+	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
+		return err
+	}
+	if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+		return err
+	}
+	if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+		return err
+	}
+	if _, err := gitutil.Git("reset", "--hard", newDraftSHA); err != nil {
+		return err
+	}
+	if _, err := gitutil.Git("clean", "-fd"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func changeIDForCommit(sha string) string {
+	message, _ := gitutil.CommitMessage(sha)
+	changeID := gitutil.ExtractChangeID(message)
+	if changeID != "" {
+		return changeID
+	}
+	if checkpoint, _ := checkpointForSHA(sha); checkpoint != nil && checkpoint.ChangeID != "" {
+		return checkpoint.ChangeID
+	}
+	return gitutil.FallbackChangeID(sha)
+}
+
+func checkpointForSHA(sha string) (*checkpointInfo, error) {
+	entries, err := listCheckpoints()
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.SHA == sha {
+			return &entry, nil
+		}
+	}
+	return nil, nil
+}
+
+func changeMetaFromCheckpoints(changeID string) (string, []metadata.ChangeCheckpoint, error) {
+	if strings.TrimSpace(changeID) == "" {
+		return "", nil, nil
+	}
+	entries, err := listCheckpoints()
+	if err != nil {
+		return "", nil, err
+	}
+	type entry struct {
+		metadata.ChangeCheckpoint
+		when time.Time
+	}
+	matched := make([]entry, 0)
+	for _, cp := range entries {
+		if cp.ChangeID != changeID {
+			continue
+		}
+		matched = append(matched, entry{
+			ChangeCheckpoint: metadata.ChangeCheckpoint{
+				SHA:     cp.SHA,
+				Message: firstLine(cp.Message),
+			},
+			when: cp.When,
+		})
+	}
+	if len(matched) == 0 {
+		return "", nil, nil
+	}
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].when.Before(matched[j].when)
+	})
+	checkpoints := make([]metadata.ChangeCheckpoint, 0, len(matched))
+	for _, cp := range matched {
+		checkpoints = append(checkpoints, cp.ChangeCheckpoint)
+	}
+	return matched[0].SHA, checkpoints, nil
 }
 
 func newChangesCommand() Command {
@@ -269,14 +413,7 @@ func newChangesCommand() Command {
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
-			var changes []client.Change
-			var err error
-			if !config.BaseURLConfigured() {
-				changes, err = localChanges()
-			} else {
-				cli := client.New(config.BaseURL())
-				changes, err = cli.ListChanges()
-			}
+			changes, err := localChanges()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to fetch changes: %v\n", err)
 				return 1

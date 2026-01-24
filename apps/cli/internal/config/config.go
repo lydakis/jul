@@ -10,54 +10,8 @@ import (
 )
 
 const (
-	EnvBaseURL   = "JUL_BASE_URL"
 	EnvWorkspace = "JUL_WORKSPACE"
 )
-
-func BaseURL() string {
-	value := strings.TrimSpace(os.Getenv(EnvBaseURL))
-	if value == "" {
-		if cfg := userConfigValue("server.url"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		if cfg := userConfigValue("client.base_url"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		if cfg := userConfigValue("base_url"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		if cfg := gitConfigValue("jul.baseurl"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		if cfg := gitConfigValue("jul.base_url"); cfg != "" {
-			return strings.TrimRight(cfg, "/")
-		}
-		return "http://localhost:8000"
-	}
-	return strings.TrimRight(value, "/")
-}
-
-func BaseURLConfigured() bool {
-	if strings.TrimSpace(os.Getenv(EnvBaseURL)) != "" {
-		return true
-	}
-	if cfg := userConfigValue("server.url"); cfg != "" {
-		return true
-	}
-	if cfg := userConfigValue("client.base_url"); cfg != "" {
-		return true
-	}
-	if cfg := userConfigValue("base_url"); cfg != "" {
-		return true
-	}
-	if cfg := gitConfigValue("jul.baseurl"); cfg != "" {
-		return true
-	}
-	if cfg := gitConfigValue("jul.base_url"); cfg != "" {
-		return true
-	}
-	return false
-}
 
 func WorkspaceID() string {
 	if value := strings.TrimSpace(os.Getenv(EnvWorkspace)); value != "" {
@@ -212,8 +166,46 @@ func TraceSyncPromptFull() bool {
 	return configBool("traces.sync_prompt_full", false)
 }
 
+func TraceRunOnTrace() bool {
+	return configBool("ci.run_on_trace", true)
+}
+
+func TraceChecks() []string {
+	return configList("ci.trace_checks", []string{"lint", "typecheck"})
+}
+
 func CheckpointAdoptOnCommit() bool {
 	return configBool("checkpoint.adopt_on_commit", false)
+}
+
+func configList(key string, def []string) []string {
+	raw := strings.TrimSpace(configValue(key))
+	if raw == "" {
+		return def
+	}
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
+	}
+	var parts []string
+	if strings.Contains(trimmed, ",") {
+		parts = strings.Split(trimmed, ",")
+	} else {
+		parts = []string{trimmed}
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		value = strings.Trim(value, "\"")
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
 }
 
 func CheckpointAdoptRunCI() bool {

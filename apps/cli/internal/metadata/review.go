@@ -8,7 +8,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/notes"
 )
 
-type ReviewNote struct {
+type AgentReviewNote struct {
 	ReviewID      string          `json:"review_id"`
 	BaseCommitSHA string          `json:"base_commit_sha"`
 	ChangeID      string          `json:"change_id"`
@@ -18,7 +18,7 @@ type ReviewNote struct {
 	Response      json.RawMessage `json:"response,omitempty"`
 }
 
-func WriteReview(note ReviewNote) (ReviewNote, error) {
+func WriteAgentReview(note AgentReviewNote) (AgentReviewNote, error) {
 	if note.ReviewID == "" {
 		note.ReviewID = newID()
 	}
@@ -30,14 +30,14 @@ func WriteReview(note ReviewNote) (ReviewNote, error) {
 	}
 	stored := note
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := notes.AddJSON(notes.RefReview, stored.BaseCommitSHA, stored); err != nil {
+		if err := notes.AddJSON(notes.RefAgentReview, stored.BaseCommitSHA, stored); err != nil {
 			if errors.Is(err, notes.ErrNoteTooLarge) {
 				stored.Response = nil
 				continue
 			}
-			return ReviewNote{}, err
+			return AgentReviewNote{}, err
 		}
 		return stored, nil
 	}
-	return ReviewNote{}, errors.New("review note exceeds size limit")
+	return AgentReviewNote{}, errors.New("agent review note exceeds size limit")
 }

@@ -99,5 +99,5 @@ func bundledOpenCodePath(root string) string {
 	if runtime.GOOS == "windows" {
 		bin = "opencode.exe"
 	}
-	return filepath.Join(root, "dist", "opencode", runtime.GOOS+"_"+runtime.GOARCH, bin)
+	return filepath.Join(root, "build", "opencode", runtime.GOOS+"_"+runtime.GOARCH, bin)
 }
