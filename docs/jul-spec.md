@@ -3090,7 +3090,7 @@ When `jul checkpoint` triggers review:
    }
    ```
 
-The `base_sha` tracks which exact checkpoint SHA the suggestion was created against. If the base commit changes (amend or new checkpoint), the suggestion becomes stale.
+The `base_sha` tracks which exact checkpoint SHA the suggestion was created against. If the base commit changes (amend or new checkpoint), the suggestion becomes stale. If no checkpoint exists yet and review was run on a draft, `base_sha` may equal the **current draft SHA**.
 
 #### 8.2.3 Applying Suggestions
 
@@ -3098,6 +3098,7 @@ When user runs `jul apply 01HX7Y9A`:
 
 1. **Check staleness**: Compare suggestion's `base_sha` with `parent(current_draft)` (current base commit)
    - If match: proceed
+   - If no checkpoint exists yet and `base_sha == current_draft`, treat as fresh
    - If mismatch: warn "stale", require `--force` or fresh review
 
 2. **Get the suggestion's commit SHA**

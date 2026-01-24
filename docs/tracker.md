@@ -1,6 +1,7 @@
 # Jul Build Tracker
 
 ## Current Focus (v0.5 Spec Alignment & UX)
+- [ ] No backward compatibility guarantees; prioritize spec correctness for all new changes
 - [x] Remove server API dependency (`JUL_BASE_URL`/client calls); all commands operate locally + git remote only
 - [x] Implement `jul merge` (conflict resolution flow) per spec
 - [ ] Implement `jul submit` (one workspace = one review) + `review-state`/`review-comments` notes
