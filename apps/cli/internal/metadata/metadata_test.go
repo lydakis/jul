@@ -101,29 +101,51 @@ func TestSuggestionLifecycle(t *testing.T) {
 	})
 }
 
-func TestPromptNoteRoundTrip(t *testing.T) {
+func TestTraceNoteRoundTrip(t *testing.T) {
 	repo := initRepo(t)
-	commit := commitFile(t, repo, "README.md", "hello\n", "prompt commit")
+	traceSHA := commitFile(t, repo, "README.md", "hello\n", "trace commit")
 
 	withRepo(t, repo, func() {
-		note := PromptNote{
-			CommitSHA: commit,
-			ChangeID:  gitutil.FallbackChangeID(commit),
-			Source:    "checkpoint",
-			Prompt:    "write a test prompt",
+		note := TraceNote{
+			TraceSHA:   traceSHA,
+			PromptHash: "sha256:deadbeef",
+			Agent:      "test-agent",
+			SessionID:  "session-1",
+			Turn:       2,
+			Device:     "device-1",
 		}
-		if err := WritePrompt(note); err != nil {
-			t.Fatalf("WritePrompt failed: %v", err)
+		if err := WriteTrace(note); err != nil {
+			t.Fatalf("WriteTrace failed: %v", err)
 		}
-		got, err := GetPrompt(commit)
+		got, err := GetTrace(traceSHA)
 		if err != nil {
-			t.Fatalf("GetPrompt failed: %v", err)
+			t.Fatalf("GetTrace failed: %v", err)
 		}
 		if got == nil {
-			t.Fatalf("expected prompt note")
+			t.Fatalf("expected trace note")
 		}
-		if got.Prompt != note.Prompt {
-			t.Fatalf("expected prompt %q, got %q", note.Prompt, got.Prompt)
+		if got.PromptHash != note.PromptHash {
+			t.Fatalf("expected prompt hash %q, got %q", note.PromptHash, got.PromptHash)
+		}
+		if err := WriteTracePrompt(traceSHA, "add auth"); err != nil {
+			t.Fatalf("WriteTracePrompt failed: %v", err)
+		}
+		if err := WriteTraceSummary(traceSHA, "Added auth"); err != nil {
+			t.Fatalf("WriteTraceSummary failed: %v", err)
+		}
+		prompt, err := ReadTracePrompt(traceSHA)
+		if err != nil {
+			t.Fatalf("ReadTracePrompt failed: %v", err)
+		}
+		if prompt != "add auth" {
+			t.Fatalf("expected prompt %q, got %q", "add auth", prompt)
+		}
+		summary, err := ReadTraceSummary(traceSHA)
+		if err != nil {
+			t.Fatalf("ReadTraceSummary failed: %v", err)
+		}
+		if summary != "Added auth" {
+			t.Fatalf("expected summary %q, got %q", "Added auth", summary)
 		}
 	})
 }

@@ -217,7 +217,7 @@ func writeReviewNote(baseSHA, changeID string, resp agent.ReviewResponse) error 
 	if status == "" {
 		status = "completed"
 	}
-	_, err = metadata.WriteReview(metadata.ReviewNote{
+	_, err = metadata.WriteAgentReview(metadata.AgentReviewNote{
 		BaseCommitSHA: baseSHA,
 		ChangeID:      changeID,
 		Status:        status,

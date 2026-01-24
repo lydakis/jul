@@ -9,10 +9,10 @@
 ```bash
 # Run locally
 cd apps/cli
-JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul sync
+go run ./cmd/jul sync
 
-# Initialize a repo and configure Jul remote
-go run ./cmd/jul init --server http://localhost:8000
+# Initialize a repo and configure a git remote (optional)
+go run ./cmd/jul init --server https://git.example.com --create-remote
 
 # Run interactive configuration wizard
 go run ./cmd/jul configure
@@ -27,10 +27,10 @@ go run ./cmd/jul ws rename auth-feature
 go run ./cmd/jul ws delete bugfix-123
 
 # Status
-JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul status
+go run ./cmd/jul status
 
 # Promote
-JUL_BASE_URL=http://localhost:8000 go run ./cmd/jul promote --to main
+go run ./cmd/jul promote --to main
 
 # Install auto-sync hook
 go run ./cmd/jul hooks install
@@ -59,14 +59,10 @@ go run ./cmd/jul review
 
 # List suggestions
 go run ./cmd/jul suggestions --status pending
-
-# Create a suggestion
-go run ./cmd/jul suggest --base HEAD --suggested <sha> --reason fix_tests
 ```
 
 ## Environment
 
-- `JUL_BASE_URL`: Sidecar API base URL (default: `http://localhost:8000`)
 - `JUL_WORKSPACE`: Override workspace id (default: `<user>/<hostname>`)
 - `JUL_HOOK_CMD`: Command used by git hook (default: `jul`)
 - `JUL_NO_SYNC`: Set to disable auto-sync in the hook
