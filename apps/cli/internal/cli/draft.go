@@ -60,12 +60,12 @@ func currentDraftAndBase() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	baseSHA, err := currentBaseSHA()
-	if err != nil {
-		parentSHA, _ := gitutil.ParentOf(draftSHA)
-		baseSHA = strings.TrimSpace(parentSHA)
+	parentSHA, _ := gitutil.ParentOf(draftSHA)
+	parentSHA = strings.TrimSpace(parentSHA)
+	if parentSHA == "" {
+		parentSHA = strings.TrimSpace(draftSHA)
 	}
-	return strings.TrimSpace(draftSHA), strings.TrimSpace(baseSHA), nil
+	return strings.TrimSpace(draftSHA), parentSHA, nil
 }
 
 func suggestionIsStale(baseSHA, draftSHA, parentSHA string) bool {
