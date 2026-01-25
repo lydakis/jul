@@ -92,7 +92,9 @@ func newBlameCommand() Command {
 				if traceTip != "" {
 					trace, err := blameFile(repoRoot, traceTip, path, start, end)
 					if err == nil {
+						traceCache := map[string]string{}
 						for _, line := range trace {
+							line.CommitSHA = resolveTraceAttribution(repoRoot, line.CommitSHA, traceCache)
 							traceLines[line.Line] = line
 						}
 					}
@@ -301,6 +303,45 @@ func parseBlamePorcelain(output string) []blameLine {
 		}
 	}
 	return results
+}
+
+func resolveTraceAttribution(repoRoot, traceSHA string, cache map[string]string) string {
+	sha := strings.TrimSpace(traceSHA)
+	if sha == "" {
+		return ""
+	}
+	if cached, ok := cache[sha]; ok {
+		return cached
+	}
+	note, err := metadata.GetTrace(sha)
+	if err == nil && note != nil {
+		switch strings.TrimSpace(note.TraceType) {
+		case "merge", "restack":
+			for _, parent := range traceParents(repoRoot, sha) {
+				attrib := resolveTraceAttribution(repoRoot, parent, cache)
+				if strings.TrimSpace(attrib) != "" {
+					cache[sha] = attrib
+					return attrib
+				}
+			}
+			cache[sha] = ""
+			return ""
+		}
+	}
+	cache[sha] = sha
+	return sha
+}
+
+func traceParents(repoRoot, sha string) []string {
+	out, err := gitutil.Git("-C", repoRoot, "rev-list", "--parents", "-n", "1", sha)
+	if err != nil {
+		return nil
+	}
+	fields := strings.Fields(out)
+	if len(fields) <= 1 {
+		return nil
+	}
+	return fields[1:]
 }
 
 func parseFileRange(arg string) (string, int, int, error) {
