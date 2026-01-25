@@ -66,13 +66,28 @@ func buildLocalStatus() (output.Status, error) {
 		}
 		att, _ = metadata.GetAttestation(last.SHA)
 	}
+	if att == nil && draftSHA != "" {
+		att, _ = metadata.GetAttestation(draftSHA)
+	}
 	if att == nil {
 		att, _ = metadata.GetAttestation(info.SHA)
+	}
+
+	draftChangeID := ""
+	if draftSHA != "" {
+		if msg, err := gitutil.CommitMessage(draftSHA); err == nil {
+			draftChangeID = gitutil.ExtractChangeID(msg)
+		}
+		if draftChangeID == "" {
+			draftChangeID = gitutil.FallbackChangeID(draftSHA)
+		}
 	}
 
 	changeID := info.ChangeID
 	if checkpoint != nil && checkpoint.ChangeID != "" {
 		changeID = checkpoint.ChangeID
+	} else if draftChangeID != "" {
+		changeID = draftChangeID
 	}
 	if changeID == "" {
 		changeID = gitutil.FallbackChangeID(info.SHA)
