@@ -160,6 +160,10 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 	if checkpointRes.CheckpointSHA == "" {
 		t.Fatalf("expected checkpoint sha")
 	}
+	writeFilePath(t, repo, "feat.txt", "one\nmore\n")
+	if _, err := syncer.Checkpoint("feat: two"); err != nil {
+		t.Fatalf("second checkpoint failed: %v", err)
+	}
 
 	baseTip := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
 
@@ -198,6 +202,42 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 	}
 	if strings.TrimSpace(parent) != newBase {
 		t.Fatalf("expected checkpoint parent %s, got %s", newBase, strings.TrimSpace(parent))
+	}
+
+	// Trace-Base should remain in Trace-Head ancestry after restack.
+	checkpoints, err := listCheckpoints()
+	if err != nil {
+		t.Fatalf("list checkpoints failed: %v", err)
+	}
+	var restacked *checkpointInfo
+	for _, entry := range checkpoints {
+		if entry.ChangeID != checkpointRes.ChangeID {
+			continue
+		}
+		msg, err := gitutil.CommitMessage(entry.SHA)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(gitutil.ExtractTraceBase(msg)) == "" {
+			continue
+		}
+		restacked = &entry
+		break
+	}
+	if restacked == nil {
+		t.Fatalf("expected checkpoint with trace base after restack")
+	}
+	msg, err := gitutil.CommitMessage(restacked.SHA)
+	if err != nil {
+		t.Fatalf("failed to read checkpoint message: %v", err)
+	}
+	traceBase := strings.TrimSpace(gitutil.ExtractTraceBase(msg))
+	traceHead := strings.TrimSpace(gitutil.ExtractTraceHead(msg))
+	if traceBase == "" || traceHead == "" {
+		t.Fatalf("expected trace base/head on restacked checkpoint")
+	}
+	if !gitutil.IsAncestor(traceBase, traceHead) {
+		t.Fatalf("expected trace base %s to be ancestor of trace head %s", traceBase, traceHead)
 	}
 }
 

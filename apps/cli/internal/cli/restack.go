@@ -123,11 +123,14 @@ func runWorkspaceRestack(args []string) int {
 			prevTrace = oldTraceBase
 		}
 
-		traceParent := oldTraceHead
-		if traceParent == "" {
-			traceParent = prevTrace
+		traceParents := []string{}
+		if strings.TrimSpace(prevTrace) != "" {
+			traceParents = append(traceParents, strings.TrimSpace(prevTrace))
 		}
-		traceSHA, err := createRestackTrace(treeSHA, traceParent, deviceID)
+		if strings.TrimSpace(oldTraceHead) != "" && strings.TrimSpace(oldTraceHead) != strings.TrimSpace(prevTrace) {
+			traceParents = append(traceParents, strings.TrimSpace(oldTraceHead))
+		}
+		traceSHA, err := createRestackTrace(treeSHA, traceParents, deviceID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to create restack trace: %v\n", err)
 			return 1
@@ -257,11 +260,7 @@ func resolveBaseTip(repoRoot, baseRef string) (string, error) {
 	return sha, nil
 }
 
-func createRestackTrace(treeSHA, parentTrace, deviceID string) (string, error) {
-	parents := []string{}
-	if strings.TrimSpace(parentTrace) != "" {
-		parents = append(parents, strings.TrimSpace(parentTrace))
-	}
+func createRestackTrace(treeSHA string, parents []string, deviceID string) (string, error) {
 	traceSHA, err := gitutil.CommitTreeWithParents(treeSHA, parents, "[trace] restack")
 	if err != nil {
 		return "", err
