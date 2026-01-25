@@ -621,10 +621,10 @@ func updateWorktree(repoRoot, ref string) error {
 	if strings.TrimSpace(ref) == "" {
 		return fmt.Errorf("ref required for worktree update")
 	}
-	if _, err := gitWithEnv(repoRoot, nil, "checkout", "--force", ref, "--"); err != nil {
+	if _, err := gitWithEnv(repoRoot, nil, "read-tree", "--reset", "-u", ref); err != nil {
 		return err
 	}
-	_, err := gitWithEnv(repoRoot, nil, "clean", "-fd")
+	_, err := gitWithEnv(repoRoot, nil, "clean", "-fd", "--exclude=.jul")
 	return err
 }
 
