@@ -194,6 +194,11 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(cwd) }()
 
+	headBefore, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	res, err := Sync()
 	if err != nil {
 		t.Fatalf("sync failed: %v", err)
@@ -224,6 +229,14 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 	}
 	if strings.TrimSpace(string(localContent)) != "local" {
 		t.Fatalf("expected local change in working tree, got %q", string(localContent))
+	}
+
+	headAfter, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(headAfter) != strings.TrimSpace(headBefore) {
+		t.Fatalf("expected HEAD to remain at %s, got %s", strings.TrimSpace(headBefore), strings.TrimSpace(headAfter))
 	}
 }
 
