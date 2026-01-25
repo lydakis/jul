@@ -189,7 +189,14 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 				canonical = existingTip
 			default:
 				mergeMessage := "[trace] merge"
-				mergeSHA, err = gitutil.CommitTreeWithParents(treeSHA, []string{existingTip, traceSHA}, mergeMessage)
+				mergeTree := treeSHA
+				workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+				if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
+					if tree, err := gitutil.TreeOf(strings.TrimSpace(sha)); err == nil && strings.TrimSpace(tree) != "" {
+						mergeTree = strings.TrimSpace(tree)
+					}
+				}
+				mergeSHA, err = gitutil.CommitTreeWithParents(mergeTree, []string{existingTip, traceSHA}, mergeMessage)
 				if err != nil {
 					return res, err
 				}
