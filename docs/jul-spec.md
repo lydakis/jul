@@ -51,6 +51,18 @@ Agent (Codex / Claude Code / OpenCode)
 
 ---
 
+## Quick Start (Happy Path)
+
+```bash
+$ jul init                    # one time
+# ... write code ...
+$ jul checkpoint              # save + run CI + suggestions
+# ... iterate ...
+$ jul promote --to main       # publish
+```
+
+That’s it. Sync, traces, and suggestions run automatically in the background.
+
 ## 1. Goals and Non-Goals
 
 ### 1.1 Goals
@@ -85,6 +97,8 @@ Agent (Codex / Claude Code / OpenCode)
 | **Workspace** | A named stream of work. Replaces branches. Default: `@` |
 | **Workspace Ref** | Canonical state (`refs/jul/workspaces/...`) — shared across devices |
 | **Workspace Lease** | Per-workspace file (`.jul/workspaces/<ws>/lease`) — the semantic lease |
+| **Workspace Base Ref** | The branch or parent workspace this workspace is stacked on |
+| **Workspace Base SHA** | Pinned commit SHA of the base ref (diffs/reviews compute against this) |
 | **Base Commit** | The parent for the current draft (latest checkpoint or latest published commit after promote) |
 | **Sync Ref** | Device backup (`refs/jul/sync/<user>/<device>/...`) — always pushes |
 | **Trace Sync Ref** | Device trace backup (`refs/jul/trace-sync/...`) — always pushes |
@@ -97,6 +111,11 @@ Agent (Codex / Claude Code / OpenCode)
 | **Local Workspace** | Client-side saved state for fast context switching |
 
 **Change-Id scope:** A Change‑Id groups multiple checkpoints (and later published commits) until `jul promote` closes it.
+
+**Checkpoint immutability (precise):**
+- A checkpoint git object is never rewritten in place.
+- `--amend` and `jul ws restack` create **new checkpoint commits** (new SHAs) that supersede old ones.
+- Old checkpoint SHAs remain reachable via keep‑refs (historical), and their artifacts remain attached to those SHAs.
 
 **Identifier formats (examples):**
 - **Change‑Id**: `Iab4f3c2d...` (logical change group)
@@ -146,6 +165,25 @@ Jul uses a four-stage model:
 
 **Key insight**: Your working tree can still be "dirty" relative to HEAD (normal git). But Jul continuously snapshots your dirty state as a draft commit and syncs it. You can always recover. The draft is your safety net, not your workspace. `jul checkpoint` is when you say "this is a logical unit." Traces track *how* you got there.
 
+**Agent loop (default happy path):**
+```
+edit → (agent hook/manual) trace → trace → checkpoint → promote
+```
+For humans, the only commands you should usually run are `jul checkpoint` and `jul promote`.
+
+### 2.2.1 HEAD Model (Git Compatibility)
+
+**Rule:** `HEAD` always points at the **current base commit** (latest checkpoint, or latest
+published commit after promote). Commands that change the base commit update `HEAD`.
+
+Your working tree is dirty relative to that base; drafts are stored in side refs.
+
+Why this matters:
+- `git status`, `git diff`, and `git add -p` remain predictable.
+- Drafts stay ephemeral and do not pollute `git log`.
+- `jul sync`, `jul trace`, `jul review`, `jul status`, and `jul suggestions` **do not** move `HEAD`.
+- `jul checkpoint`, `jul ws restack`, `jul ws checkout`, `jul ws switch`, and `jul promote` **do** move `HEAD`.
+
 ### 2.3 Workspaces Replace Branches
 
 Traditional Git:
@@ -168,7 +206,18 @@ jul promote --to main           # Publish
 - `refs/heads/*` exist only as **promote targets** (main, staging, etc.)
 - You never work directly on `refs/heads/main`
 - Workspaces are where work happens: `refs/jul/workspaces/<user>/<name>`
+- Each workspace has a **base ref**:
+  - `jul ws new feature` → base is a branch (usually `main`)
+  - `jul ws stack child` → base is another workspace
+- **Sync does not pull base refs**. Base updates are handled explicitly via `jul ws restack` or implicitly during `jul promote`.
 - Default workspace `@` means you don't need to name anything upfront
+
+**Pinned bases (critical):**
+- Each workspace stores:
+  - `base_ref` — branch or parent workspace ref
+  - `base_sha` — the exact commit it is currently pinned to
+- Diffs/reviews/suggestions are computed against **`base_sha`**, not whatever `base_ref` points to right now.
+- If `base_ref` advances, Jul should surface “base advanced, restack when ready” but **must not** silently change the diff.
 
 ### 2.4 Integration Modes
 
@@ -190,6 +239,8 @@ $ jul promote --to main                 # Publish
 #### 2.4.2 Git + Jul (Invisible Infrastructure)
 
 Git is your porcelain. Jul can sync in background via hooks when a remote is configured.
+**Note:** Without `jul hooks install`, raw `git commit` creates commits Jul doesn't track.
+Use hooks or `jul checkpoint --adopt` to incorporate Git commits.
 
 ```bash
 $ git init && jul init --server https://jul.example.com
@@ -462,7 +513,8 @@ Trace-Base: <sha>
 Trace-Head: <sha>
 ```
 
-Blame walks from head(s) to base. Tiny metadata, same power. Avoids blowing Jul’s 16KB per-note cap.
+Blame walks from head(s) to base. Tiny metadata, same power. Avoids blowing Jul’s **self‑imposed**
+16KB per‑note cap.
 
 **Privacy defaults (secrets can leak in summaries too!):**
 
@@ -480,6 +532,10 @@ sync_prompt_full = false      # Opt-in — definitely can leak
 | `sync_prompt_full` | false | Full text | High |
 
 If `sync_prompt_summary = true`, Jul runs a secret scrubber before syncing (detects API keys, passwords, tokens). But scrubbing isn't perfect — if you're paranoid, keep summaries local.
+
+**Also covered by these privacy rules:** `session_summary`, agent review summaries, and CI output excerpts
+are **local‑only by default** and must opt in to sync (with the same scrubber). Treat all AI‑generated
+summaries and test output as potentially sensitive.
 
 ```bash
 $ jul blame src/auth.py --prompts
@@ -645,7 +701,7 @@ This lets `jul blame` traverse the DAG to find the real origin trace.
 {
   "prompt_hash": "sha256:abc123...",
   "agent": "claude-code",
-  "trace_type": "prompt",       // prompt | sync | merge
+  "trace_type": "prompt",       // prompt | sync | merge | restack
   "session_id": "abc123",
   "turn": 5,
   "device": "swift-tiger",
@@ -655,7 +711,8 @@ This lets `jul blame` traverse the DAG to find the real origin trace.
 
 `prompt_summary` and `prompt_full` are **only present in synced notes** when `traces.sync_prompt_summary` / `traces.sync_prompt_full` are enabled. With defaults, only the hash is synced.
 
-Note: No "trace_id" field — use short SHA for display. `trace_type=merge` marks connective merge traces; `jul blame` skips attribution to merge traces.
+Note: No "trace_id" field — use short SHA for display. `trace_type=merge` and `trace_type=restack`
+mark connective traces; `jul blame` skips attribution to those traces.
 
 **Privacy defaults (secrets can leak in summaries too):**
 
@@ -676,12 +733,14 @@ By default, only the prompt hash syncs. Summaries are generated locally and stay
 ```
 
 **Lifecycle:**
-- Created by `jul trace` (explicit) or `jul sync` (implicit, if tree changed)
+- Created by `jul trace` (explicit) or **implicitly** on `jul sync` / `jul checkpoint` when
+  implicit tracing is enabled (and throttles allow)
 - Device trace-sync ref always pushes
 - **Canonical trace tip advances only when canonical workspace advances**  
   If workspace is diverged (conflicts pending), **do not update `refs/jul/traces/...`** (only update `trace-sync/...`)
 - Referenced by checkpoint metadata: `{trace_base, trace_head}`
-- Cleaned up when associated checkpoint expires
+- **Retention:** trace commits form a chain, so they are effectively retained while the trace tip is reachable.
+  (Future: segment traces per checkpoint for bounded retention.)
 
 **Idempotency:** `jul sync` does NOT create a new trace if working tree equals current trace tip tree. This prevents trace spam from repeated syncs with no actual changes.
 
@@ -722,13 +781,13 @@ Anchors checkpoints for retention/fetchability. Without a ref, git may GC unreac
 
 ### 3.7 Notes Namespaces
 
-**Synced notes (pushed to remote):**
+**Synced notes (pushed to remote, with privacy rules):**
 ```
 refs/notes/jul/attestations/checkpoint   # Checkpoint CI results (keyed by SHA)
 refs/notes/jul/attestations/published    # Published CI results (keyed by SHA)
 refs/notes/jul/attestations/trace        # Trace CI results (keyed by trace SHA)
 refs/notes/jul/traces                    # Trace metadata (prompt hash, summary, agent)
-refs/notes/jul/agent-review              # Agent review summaries/results
+refs/notes/jul/agent-review              # Agent review summaries/results (synced only when enabled)
 refs/notes/jul/cr-comments           # CR comments/threads (keyed by checkpoint SHA)
 refs/notes/jul/cr-state              # CR state (keyed by Change-Id anchor)
 refs/notes/jul/meta                      # Change-Id mappings
@@ -744,6 +803,8 @@ refs/notes/jul/suggestions               # Suggestion metadata
 ```
 
 Notes are pushed with explicit refspecs. Draft attestations are local-only by default to avoid multi-device write contention.
+Checkpoint attestation sync is **structured only** by default (no raw stdout/stderr; failure snippets
+are opt‑in and scrubbed).
 
 ### 3.8 Complete Ref Layout
 
@@ -962,6 +1023,12 @@ Syncing...
 **Why lease against workspace_remote:** When updating workspace ref after auto-merge, we guard against "someone else pushed while we were merging." If the lease fails, we re-fetch and try again.
 
 **Why merge-base of drafts:** Since drafts have parent = base commit, the merge-base is the shared base commit (checkpoint or published commit). This avoids relying on old ephemeral draft commits.
+
+**Target drift is handled elsewhere:** Sync only coordinates devices and the workspace ref. If the target branch advances, use `jul ws restack` (explicit) or let `jul promote` rebase onto the target at publish time.
+
+**Lease drift repair rule:** If `.jul/workspaces/<ws>/lease` does not match a reachable SHA in
+`workspace_ref` or this device’s `sync_ref`, treat it as corrupted and require `jul ws checkout`
+or a repair flow. Do not proceed with sync on a corrupt lease.
 
 #### Sync with auto-merge (no conflicts)
 
@@ -1882,7 +1949,7 @@ $ echo "$PROMPT" | jul trace --prompt-stdin --agent claude-code
 |----------|---------|
 | Harness integration | Harness calls `jul trace --prompt "..." --agent ...` after each turn |
 | Manual trace boundary | User calls `jul trace` |
-| No explicit traces | `jul sync` creates trace implicitly (no prompt attached) |
+| No explicit traces (implicit enabled) | `jul sync` / `jul checkpoint` create traces implicitly (no prompt attached), subject to throttles |
 
 Traces are stored as side history (not in checkpoint ancestry). Use `jul blame` to query.
 
@@ -2040,11 +2107,26 @@ Strategy: rebase
 Promote? [y/n] y
 
 Rebased onto main.
-Workspace '@' now tracking main (ghi789)
+Workspace '@' now based on main (ghi789)
 New draft started.
 ```
 
 **Note:** Promoted history on `refs/heads/*` is **published commits** (normal Git commits), not checkpoints. A new Change‑Id starts for the next workspace draft after promote.
+
+**Safety invariant:** `jul promote` always fetches the current target tip and only updates the
+target branch via **fast‑forward** push. If the target has advanced, promote rebases your
+checkpoint chain onto the new tip (surfacing conflicts if needed). The target branch is never
+force‑updated unless `--force-target` is explicitly passed.
+
+**Stacked promote (auto‑land stack):** If this workspace is stacked on another workspace, `jul promote`
+automatically lands the **entire stack** bottom‑up onto the target branch:
+1. Identify the stack chain up to the first branch base.
+2. Promote the parent workspace(s) in order, rebasing each onto the current target tip.
+3. Rebase the child workspace onto the newly published parent tip and promote it.
+4. Start new drafts for each workspace in the stack (each gets a new Change‑Id).
+
+If any layer hits a conflict, the stack promotion stops at that layer and requires `jul merge`
+resolution in that workspace before continuing.
 
 **Mapping rule:** `jul promote` records a mapping in `refs/notes/jul/meta`:
 - `change_id → anchor_sha` (first checkpoint SHA, pinned while CR open)
@@ -2061,7 +2143,8 @@ Flags:
 - `--squash` — Override strategy to squash
 - `--rebase` — Override strategy to rebase
 - `--merge` — Override strategy to merge
-- `--force` — Skip policy checks
+- `--no-policy` — Skip policy checks (CI/coverage/etc.)
+- `--force-target` — **Dangerous**: allow non-fast-forward update of target branch (should be rare)
 - `--auto` — Auto-checkpoint draft first if needed
 - `--json` — JSON output
 
@@ -2077,9 +2160,13 @@ Created workspace 'feature-auth'
 Draft abc123 started.
 ```
 
+**Base ref:** `refs/heads/main` by default (or the current branch).
+
 #### `jul ws stack`
 
 Create a new workspace stacked on the current workspace’s **latest checkpoint** (not its draft).
+When a workspace is used as a base, its **base tip** resolves to the parent’s latest checkpoint
+(`parent(resolve(base_ref))`), not the parent’s current draft.
 
 ```bash
 $ jul ws stack feature-b
@@ -2091,7 +2178,64 @@ Use this when you want dependent work that should review/land after the current 
 
 **V1 rule:** stacking requires a checkpoint. If the current workspace has no checkpoint yet, Jul asks you to checkpoint first.
 
-**Restack (future):** If the parent workspace advances after stacking, you’ll need a manual `jul ws restack` to rebase the child onto the new parent checkpoint.
+#### `jul ws restack`
+
+Rebase the workspace onto the latest tip of its base ref (branch or parent workspace).
+Optionally, **retarget** the base ref.
+
+```bash
+$ jul ws restack
+Fetching base...
+Rebasing workspace onto base@def456...
+  ✓ Checkpoint abc123 → xyz789
+Workspace rebased. New base: def456
+```
+
+Retarget base (change the base ref):
+
+```bash
+$ jul ws restack --onto main
+Rebasing workspace onto main@def456...
+  ✓ Checkpoint abc123 → xyz789
+Workspace rebased. New base_ref: refs/heads/main
+```
+
+**Retarget semantics:** `base_ref` is set to the new ref, and `base_sha` is set to that ref’s
+current tip at the time of restack.
+
+If conflicts:
+
+```bash
+$ jul ws restack
+Rebasing workspace onto base@def456...
+  ⚠ Conflict in src/auth.py
+Run 'jul merge' to resolve.
+```
+
+**Restack semantics:**
+- Creates new checkpoint commits with new SHAs.
+- **Preserves Change‑Id** (same logical change).
+- Old checkpoint SHAs remain reachable via keep‑refs (for attestations/provenance).
+- For each rewritten checkpoint, restack emits a **synthetic trace** with `trace_type=restack`
+  so `trace_head` matches that checkpoint’s tree.
+  - `jul blame` ignores `trace_type=restack` for attribution (same as merge traces).
+- **Suggestions become stale:** restack changes checkpoint SHAs; run `jul review` again for fresh suggestions.
+- **CI on restack:** rebased checkpoint SHAs have no attestations; Jul should run CI (or prompt to run `jul ci run`).
+
+**Restack vs Promote (difference in intent):**
+
+| Command | What it does | When to use |
+|---------|--------------|-------------|
+| `jul ws restack` | Rebase workspace onto latest base ref tip, update `base_sha` | “I want upstream changes now, before I’m done.” |
+| `jul promote` | Rebase onto target tip at publish time, then publish | “I’m done, land this.” |
+
+**Stacked workspace drift:** If a parent workspace restacks, child workspaces keep their old base.
+`jul status` should warn “parent advanced; run `jul ws restack`”. Children can keep working until they restack.
+
+**Stacked promote rule (Graphite‑style):**
+- If the workspace `base_ref` is another workspace, **`jul promote` auto‑lands the stack** bottom‑up.
+- Jul promotes parents first, rebasing children as needed, and lands each layer onto the target branch.
+- The result is the same as “land stack” in Graphite, but with a single command.
 
 #### `jul ws switch`
 
@@ -2602,7 +2746,7 @@ Show line-by-line provenance: checkpoint, trace, prompt, agent.
 1. Use git blame to find the checkpoint commit that last touched each line.
 2. Read `Trace-Head` / `Trace-Base` trailers from that checkpoint.
 3. Walk the trace DAG between base→head to find the first trace commit whose tree introduces the line.
-4. **Skip `trace_type=merge` nodes** for attribution (they’re connective, not edits).
+4. **Skip `trace_type=merge` and `trace_type=restack` nodes** for attribution (they’re connective, not edits).
 5. Determinism: traverse in first‑parent order; if multiple candidates remain, pick the nearest non‑merge ancestor (shortest path).
 
 ```bash
@@ -2799,6 +2943,9 @@ min_confidence = 70
 sync_prompt_hash = true          # Always sync (cannot leak)
 sync_prompt_summary = false      # Summaries stay local by default
 sync_prompt_full = false         # Full text stays local by default
+implicit_mode = "checkpoint"     # off | checkpoint | sync (implicit traces)
+min_seconds_between = 2          # throttle implicit traces
+min_diff_bytes = 2048            # throttle implicit traces
 ```
 
 ### 7.2 Device Config
@@ -2842,6 +2989,8 @@ name = "origin"                  # Git remote to use for sync
 
 [workspace]
 name = "feature-auth"            # Override default workspace name
+base_ref = "refs/heads/main"     # Branch or workspace this workspace is stacked on
+base_sha = "abc123"              # Pinned base commit (updated on restack/promote)
 
 [ci]
 # Agent-assisted CI setup (future)
@@ -3533,6 +3682,23 @@ This is future work. For v1, any git remote works.
 
 Jul = Git + continuous sync + checkpoints + local CI/review + agent-native feedback loop.
 
+### Mental Load Comparison (Git vs JJ vs Jul)
+
+Jul intentionally shifts mental load from manual coordination to automation.  
+This is the trade‑off: fewer “decisions per command,” but more underlying machinery.
+
+| Aspect | Git | JJ | Jul |
+|--------|-----|----|-----|
+| **Daily commands** | Medium (commit/push/pull) | Low | **Low** (checkpoint/promote) |
+| **Concept count** | Low | Medium | **High** (workspaces, drafts, traces, suggestions) |
+| **Sync coordination** | Manual | Manual | **Automatic** |
+| **Conflict handling** | Manual merges | Manual merges | **Agent‑assisted** (suggestions) |
+| **Provenance** | Commit history only | Commit history | **Prompt/trace‑aware** |
+| **Operational risk** | Low (explicit ops) | Low | Medium (automation must be correct) |
+
+**Summary:** Jul reduces *day‑to‑day* mental load for humans at the cost of a more complex
+implementation model. Git/JJ are simpler systems; Jul is optimized for agent‑assisted workflows.
+
 ---
 
 ## Appendix B: Migration from Git Workflow
@@ -3542,8 +3708,8 @@ Jul = Git + continuous sync + checkpoints + local CI/review + agent-native feedb
 | `git checkout -b feature` | `jul ws new feature` |
 | `git add . && git commit` | `jul checkpoint` |
 | `git commit --amend` | `jul checkpoint --amend` |
-| `git push` | `jul sync` (automatic in on-command mode) |
-| `git pull` | `jul sync` (includes fetch) |
+| `git push` | `jul sync` (workspace/sync refs; automatic in on-command mode) |
+| `git pull` | `jul ws restack` (update workspace base to latest target) |
 | `git fetch` | Included in `jul sync` |
 | Merge conflicts | `jul merge` (agent resolves) |
 | `git merge main` | `jul promote --to main` |
