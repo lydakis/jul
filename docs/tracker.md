@@ -9,6 +9,7 @@
 - [ ] **Promote safety invariant**: fetch target tip; only fast‑forward update target by default; rename flags to `--no-policy` and `--force-target`; record per‑layer `promote_events` mapping.
 - [ ] **Stack base resolution**: when `base_ref` is a workspace, resolve base tip to **parent’s latest checkpoint** (not its draft).
 - [ ] **Trace correctness**: add `trace_type` metadata; update `jul blame` to skip merge+restack traces; ensure trace merge tree uses canonical workspace tip after sync.
+- [ ] **Incident 2026‑01‑24 regression**: add safeguards + tests to prevent target overwrite (see `docs/incidents/2026-01-24-main-overwrite.md`).
 
 ### P1 — Core Workflow Completeness
 - [ ] **`jul doctor`**: verify remote supports custom refs + non‑FF updates under `refs/jul/*` (and report fallbacks).
