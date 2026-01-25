@@ -8,6 +8,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func TestInitStartsDraftAndLease(t *testing.T) {
@@ -61,6 +62,22 @@ func TestInitStartsDraftAndLease(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != strings.TrimSpace(sha) {
 		t.Fatalf("expected lease %s, got %s", sha, strings.TrimSpace(string(data)))
+	}
+
+	cfg, ok, err := wsconfig.ReadConfig(repo, workspace)
+	if err != nil {
+		t.Fatalf("read workspace config failed: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected workspace config to exist")
+	}
+	if strings.TrimSpace(cfg.BaseRef) == "" {
+		t.Fatalf("expected base_ref to be set")
+	}
+	if parent, err := gitutil.ParentOf(sha); err == nil && strings.TrimSpace(parent) != "" {
+		if strings.TrimSpace(cfg.BaseSHA) != strings.TrimSpace(parent) {
+			t.Fatalf("expected base_sha %s, got %s", strings.TrimSpace(parent), strings.TrimSpace(cfg.BaseSHA))
+		}
 	}
 }
 

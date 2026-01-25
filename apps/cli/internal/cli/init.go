@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 )
 
@@ -240,6 +241,23 @@ func ensureWorkspaceReady(repoRoot string) (string, error) {
 	}
 	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
 		return "", err
+	}
+	if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err != nil {
+		return "", err
+	} else if !ok || strings.TrimSpace(cfg.BaseRef) == "" || strings.TrimSpace(cfg.BaseSHA) == "" {
+		baseRef := detectBaseRef(repoRoot)
+		baseSHA := ""
+		if parent, err := gitutil.ParentOf(draftSHA); err == nil {
+			baseSHA = strings.TrimSpace(parent)
+		}
+		if baseSHA == "" {
+			if head, err := gitutil.Git("-C", repoRoot, "rev-parse", "HEAD"); err == nil {
+				baseSHA = strings.TrimSpace(head)
+			}
+		}
+		if err := ensureWorkspaceConfig(repoRoot, workspace, baseRef, baseSHA); err != nil {
+			return "", err
+		}
 	}
 	return draftSHA, nil
 }

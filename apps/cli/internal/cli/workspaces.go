@@ -136,7 +136,13 @@ func runWorkspaceNew(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to snapshot working tree: %v\n", err)
 		return 1
 	}
-	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, baseSHA, treeSHA)
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to locate repo root: %v\n", err)
+		return 1
+	}
+	baseRef := detectBaseRef(repoRoot)
+	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, baseRef, baseSHA, treeSHA)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create workspace: %v\n", err)
 		return 1
@@ -235,7 +241,8 @@ func runWorkspaceStack(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to read checkpoint tree: %v\n", err)
 		return 1
 	}
-	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, checkpoint.SHA, treeSHA)
+	parentRef := workspaceRef(currentUser, currentName)
+	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, parentRef, checkpoint.SHA, treeSHA)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create stacked workspace: %v\n", err)
 		return 1
@@ -511,8 +518,8 @@ func switchToWorkspaceLocal(user, workspace string) error {
 	return nil
 }
 
-func createWorkspaceDraft(user, workspace, parentSHA, treeSHA string) (string, error) {
-	if strings.TrimSpace(parentSHA) == "" {
+func createWorkspaceDraft(user, workspace, baseRef, baseSHA, treeSHA string) (string, error) {
+	if strings.TrimSpace(baseSHA) == "" {
 		return "", fmt.Errorf("base commit required")
 	}
 	if strings.TrimSpace(treeSHA) == "" {
@@ -538,7 +545,7 @@ func createWorkspaceDraft(user, workspace, parentSHA, treeSHA string) (string, e
 	if err != nil {
 		return "", err
 	}
-	draftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, parentSHA, changeID)
+	draftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, baseSHA, changeID)
 	if err != nil {
 		return "", err
 	}
@@ -549,6 +556,9 @@ func createWorkspaceDraft(user, workspace, parentSHA, treeSHA string) (string, e
 		return "", err
 	}
 	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
+		return "", err
+	}
+	if err := ensureWorkspaceConfig(repoRoot, workspace, baseRef, baseSHA); err != nil {
 		return "", err
 	}
 	return draftSHA, nil
