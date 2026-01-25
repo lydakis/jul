@@ -39,6 +39,8 @@ func newWorkspaceCommand() Command {
 				return runWorkspaceSwitch(args[1:])
 			case "stack":
 				return runWorkspaceStack(args[1:])
+			case "restack":
+				return runWorkspaceRestack(args[1:])
 			case "rename":
 				return runWorkspaceRename(args[1:])
 			case "delete":
@@ -667,5 +669,5 @@ func runGitConfig(key, value string) error {
 }
 
 func printWorkspaceUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|checkout|set|new|stack|switch|rename|delete|current]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|checkout|set|new|stack|restack|switch|rename|delete|current]")
 }

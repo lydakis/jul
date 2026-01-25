@@ -13,6 +13,7 @@ import (
 
 type TraceNote struct {
 	TraceSHA      string    `json:"trace_sha"`
+	TraceType     string    `json:"trace_type,omitempty"`
 	PromptHash    string    `json:"prompt_hash,omitempty"`
 	PromptSummary string    `json:"prompt_summary,omitempty"`
 	PromptFull    string    `json:"prompt_full,omitempty"`

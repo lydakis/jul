@@ -9,6 +9,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/syncer"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
@@ -127,6 +128,76 @@ func TestWorkspaceNewFailsWhenWorkspaceExists(t *testing.T) {
 	}
 	if strings.TrimSpace(sha1) != strings.TrimSpace(sha2) {
 		t.Fatalf("expected workspace ref to remain unchanged")
+	}
+}
+
+func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	writeFilePath(t, repo, "base.txt", "base\n")
+	runGitCmd(t, repo, "add", "base.txt")
+	runGitCmd(t, repo, "commit", "-m", "base")
+
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	runGitCmd(t, repo, "config", "jul.workspace", "tester/@")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
+
+	writeFilePath(t, repo, "feat.txt", "one\n")
+	checkpointRes, err := syncer.Checkpoint("feat: one")
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if checkpointRes.CheckpointSHA == "" {
+		t.Fatalf("expected checkpoint sha")
+	}
+
+	baseTip := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	// Advance main with a new commit.
+	writeFilePath(t, repo, "upstream.txt", "upstream\n")
+	runGitCmd(t, repo, "add", "upstream.txt")
+	runGitCmd(t, repo, "commit", "-m", "upstream")
+	newBase := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+	if newBase == baseTip {
+		t.Fatalf("expected base to advance")
+	}
+
+	if code := runWorkspaceRestack([]string{}); code != 0 {
+		t.Fatalf("ws restack failed with %d", code)
+	}
+
+	// Base config should now point at the new base tip.
+	cfg, ok, err := wsconfig.ReadConfig(repo, "@")
+	if err != nil {
+		t.Fatalf("read workspace config failed: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected workspace config to exist")
+	}
+	if strings.TrimSpace(cfg.BaseSHA) != newBase {
+		t.Fatalf("expected base_sha %s, got %s", newBase, strings.TrimSpace(cfg.BaseSHA))
+	}
+
+	latest, err := latestCheckpointForChange(checkpointRes.ChangeID)
+	if err != nil || latest == nil {
+		t.Fatalf("expected latest checkpoint after restack, got %v", err)
+	}
+	parent, err := gitutil.ParentOf(latest.SHA)
+	if err != nil {
+		t.Fatalf("failed to read checkpoint parent: %v", err)
+	}
+	if strings.TrimSpace(parent) != newBase {
+		t.Fatalf("expected checkpoint parent %s, got %s", newBase, strings.TrimSpace(parent))
 	}
 }
 
