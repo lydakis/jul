@@ -1572,6 +1572,10 @@ mode = "on-command"
 **Pros:** No daemon, predictable, sync happens when you're "at the keyboard"
 **Cons:** Stale if you don't run jul commands for a while
 
+**Note on checkpoints:** Checkpoints are internal progress markers, not published history. Sync
+is allowed to restack them (when `sync.autorestack = true`) because Change‑Id continuity and
+attestation integrity matter more than preserving any particular checkpoint SHA.
+
 #### Mode 2: `continuous`
 
 Dropbox-style. Daemon watches filesystem, syncs automatically.
