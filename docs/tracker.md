@@ -6,6 +6,7 @@
 - [x] **Workspace base tracking**: persist `base_ref` + pinned `base_sha` per workspace (e.g., `.jul/workspaces/<ws>/config`) and use it for diffs, suggestions, CRs, status, and divergence checks.
 - [x] **`jul ws restack`**: rebase checkpoint chain onto `base_ref` tip; support `--onto`; update `base_sha`, move `HEAD`, emit **restack trace per rewritten checkpoint**, mark suggestions stale, trigger CI for new SHAs.
 - [ ] **Sync algorithm alignment**: `jul sync` must **not** rewrite workspace refs; only checkpoint/restack/checkout update base. Detect base advancement via draft parent vs workspace tip; update `workspace_lease` only when incorporated; allow safe clean FF of worktree only when draft tree == base tree; honor lease corruption rule.
+- [ ] **HEAD model**: keep `HEAD` on `refs/heads/jul/<workspace>` (base commit); update this ref on checkpoint/restack/checkout/switch/promote.
 - [ ] **Stacked promote (auto‑land stack)**: `jul promote` should land full stack bottom‑up, rebasing each layer onto the target branch; stop on conflict and require `jul merge`.
 - [ ] **Promote safety invariant**: fetch target tip; only fast‑forward update target by default; rename flags to `--no-policy` and `--force-target`; record per‑layer `promote_events` mapping.
 - [x] **Stack base resolution**: when `base_ref` is a workspace, resolve base tip to **parent’s latest checkpoint** (not its draft).
@@ -13,6 +14,8 @@
 - [ ] **Incident 2026‑01‑24 regression**: add safeguards + tests to prevent target overwrite (see `docs/incidents/2026-01-24-main-overwrite.md`).
 
 ### P1 — Core Workflow Completeness
+- [ ] **Repo meta + user namespace**: implement `refs/notes/jul/repo-meta` + stable `user_namespace` resolution for ref paths.
+- [ ] **Change refs**: stable per‑change tips (`refs/jul/change/<change-id>`) + anchor refs.
 - [ ] **Draft handoff**: `jul draft list/show/adopt` (per‑device drafts) + explicit adopt merge flow.
 - [ ] **Sync safety features**: draft secret scan before push (`--allow-secrets` override), `.jul/syncignore` support.
 - [ ] **Tracked base drift**: persist `track-tip` for publish branch; surface base‑advanced in status; update only on restack/checkout/promote.
