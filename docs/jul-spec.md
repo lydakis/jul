@@ -240,6 +240,8 @@ Change-Ids give a logical change a stable identity across history rewrites and p
 - A checkpoint git object is never rewritten in place.
 - There is no checkpoint amend in v1; new work always creates a **new checkpoint**.
 - Restack produces new checkpoint commits (new SHAs) while keeping earlier checkpoints reachable via keep‑refs.
+- Checkpoint SHAs are stable for integrity (attestations, traces, blame), but users shouldn’t treat
+  them as published history; the default promote strategy is squash.
 
 **Identifier formats (examples):**
 - **Change‑Id**: `Iab4f3c2d...` (logical change group)
@@ -352,8 +354,8 @@ jul promote --to main           # Publish
 - Each workspace has a **base ref**:
   - `jul ws new feature` → base is a branch (usually `main`)
   - `jul ws stack child` → base is the parent change ref (`refs/jul/changes/<change-id>`)
-- **Sync does not restack base refs.** Upstream integration is explicit (`jul ws restack`) or happens
-  at publish time (`jul promote`).
+- **Sync does not restack base refs** unless `sync.autorestack = true`. Even then, sync never
+  auto‑merges; conflicts require an explicit `jul merge`.
 - Default workspace `@` means you don't need to name anything upfront
 
 **Pinned bases (critical):**
@@ -1387,10 +1389,12 @@ Syncing...
    - `local_base = parent(local_draft)`
    - If `workspace_tip` exists and `local_base != workspace_tip`, mark **base_advanced**.
    - Do **not** rewrite the draft base automatically.
-5.5. **Auto‑FF when clean (safe only):**
-   - If the draft is clean (no local changes; draft tree == base tree) and `workspace_tip` is ahead,
-     Jul may fast‑forward the local workspace head/working tree to `workspace_tip`.
-   - Otherwise, leave the base pinned and require explicit `jul ws restack` or `jul ws checkout`.
+5.5. **Auto‑restack (optional):**
+   - If `base_advanced` and `sync.autorestack = true`, attempt a **restack onto `workspace_tip`**.
+   - If the restack is clean, create a restack checkpoint and advance `workspace_head`/`workspace_tip`.
+   - If conflicts arise, **do not** run `jul merge` automatically; surface “needs merge” and stop.
+   - If `sync.autorestack = false`, leave the base pinned and require explicit `jul ws restack`
+     or `jul ws checkout`.
 6. **Advance `workspace_lease` only when incorporated**:
    - Update `workspace_lease` only after the working tree is based on `workspace_tip`
      (e.g., after `jul ws checkout`, `jul ws restack`, or a new `jul checkpoint` on top of it).
@@ -1399,8 +1403,10 @@ Syncing...
    - Use the last known `track_tip` (updated by `jul ws checkout`, `jul ws restack`, or `jul promote`).
    - Record drift if a newer tip is known; do not rewrite the draft base during sync.
 
-**Note:** `jul sync` never rewrites the workspace ref. It may fast‑forward the local workspace
-head when the draft is clean; otherwise only checkpoints/restacks/checkout change the base.
+**Note:** `jul sync` never rewrites the workspace ref. It may restack when `sync.autorestack`
+is enabled; conflicts always require an explicit `jul merge`.
+
+**Default:** `sync.autorestack = true` (attempt restack when the base advances, but never auto‑merge).
 
 **Why the lease matters:** It tracks the last workspace checkpoint you have incorporated locally.
 Advancing it without updating the working tree risks clobbering remote changes later.
@@ -3701,6 +3707,7 @@ run_doctor_on_init = true        # Probe sync compatibility automatically
 [sync]
 mode = "on-command"              # on-command | continuous | explicit
 allow_secrets = false            # Block draft push when secrets are detected
+autorestack = true               # Attempt restack when base advances; never auto-merge
 
 [checkpoint]
 auto_message = true              # Agent generates message
