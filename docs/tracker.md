@@ -5,7 +5,7 @@
 ### P0 — Repo Safety & Core Invariants (must‑fix before daily use)
 - [x] **Workspace base tracking**: persist `base_ref` + pinned `base_sha` per workspace (e.g., `.jul/workspaces/<ws>/config`) and use it for diffs, suggestions, CRs, status, and divergence checks.
 - [x] **`jul ws restack`**: rebase checkpoint chain onto `base_ref` tip; support `--onto`; update `base_sha`, move `HEAD`, emit **restack trace per rewritten checkpoint**, mark suggestions stale, trigger CI for new SHAs.
-- [ ] **Sync algorithm alignment**: `jul sync` must **not** rewrite workspace refs; only checkpoint/restack/checkout update base. Detect base advancement via draft parent vs workspace tip; update `workspace_lease` only when incorporated; allow safe clean FF of worktree only when draft tree == base tree; honor lease corruption rule.
+- [ ] **Sync algorithm alignment**: `jul sync` must **not** rewrite workspace refs by default; only checkpoint/restack/checkout update base. Detect base advancement via draft parent vs workspace tip; update `workspace_lease` only when incorporated; allow safe clean FF of worktree only when draft tree == base tree; honor lease corruption rule.
 - [ ] **HEAD model**: keep `HEAD` on `refs/heads/jul/<workspace>` (base commit); update this ref on checkpoint/restack/checkout/switch/promote.
 - [ ] **Stacked promote (auto‑land stack)**: `jul promote` should land full stack bottom‑up, rebasing each layer onto the target branch; stop on conflict and require `jul merge`.
 - [ ] **Promote safety invariant**: fetch target tip; only fast‑forward update target by default; rename flags to `--no-policy` and `--force-target`; record per‑layer `promote_events` mapping.
@@ -23,7 +23,9 @@
 - [ ] **`jul log --traces`**: show trace history in log output.
 - [ ] **Suggestions default filter**: exclude stale suggestions unless explicitly requested.
 - [ ] **CI + privacy alignment**: sync only structured attestation fields by default; gate agent‑review summaries and CI output snippets behind opt‑in + scrubber.
+- [ ] **Restack attestation inheritance**: store `attestation_inherit_from` on rebased checkpoints and display prior results as **stale** (display‑only, never gating).
 - [ ] **Sync modes**: implement `on-command|continuous|explicit` with config wiring.
+- [ ] **Sync auto‑restack (opt‑in)**: implement `sync.autorestack=true` to allow sync to restack checkpoints when safe (per spec note).
 - [ ] **Retention cleanup**: `jul prune`, keep‑ref cascading cleanup (suggestions/notes) + CR anchor pinning.
 
 ### P2 — UX + Tooling
