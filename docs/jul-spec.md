@@ -1785,7 +1785,7 @@ The guiding rule is **no implicit data loss**. Cleanup should be manual and cons
 
 ### 5.6 Four Classes of Attestations
 
-**Problem:** Rebase/squash changes SHAs. An attestation for checkpoint `abc123` doesn't apply to the rebased commit `xyz789` on main.
+**Problem:** Rebase/squash/restack change SHAs. An attestation for checkpoint `abc123` doesn't apply to the rebased commit `xyz789` on main.
 
 **Solution: Separate attestations by lifecycle.**
 
@@ -1793,6 +1793,15 @@ The guiding rule is **no implicit data loss**. Cleanup should be manual and cons
 exact SHA being evaluated. Synced attestations in notes are **informational caches** only. Jul
 must not trust remote‑synced attestations for gating unless they were computed locally on the same
 machine for the same SHA.
+
+**Attestation inheritance on restack (display‑only):**
+- A restack creates a **new checkpoint SHA**; it has no fresh attestations yet.
+- To preserve history, the new checkpoint may **inherit** attestations from the most recent
+  checkpoint that has them (usually the pre‑restack checkpoint). These inherited results are
+  displayed as **stale** and never used for gating.
+- Implementation: store `attestation_inherit_from = <checkpoint_sha>` in the new checkpoint’s note.
+  `jul show`/`jul log` can follow that pointer **one hop** to display prior results without deep
+  lineage traversal.
 
 | Attestation Type | Attached To | Scope | Checks Level | Purpose |
 |------------------|-------------|-------|----------|---------|
@@ -2921,7 +2930,8 @@ Run 'jul merge' to resolve.
 - Restack emits a **synthetic trace** with `trace_type=restack` so `trace_head` matches the new tree.
   - `jul blame` ignores `trace_type=restack` for attribution (same as merge traces).
 - **Suggestions become stale:** restack changes the base; run `jul review` again for fresh suggestions.
-- **Checks on restack:** restack checkpoints have no attestations; Jul should run checks (or prompt to run `jul ci run`).
+- **Checks on restack:** restack checkpoints have no **fresh** attestations; Jul should run checks
+  (or prompt to run `jul ci run`). Prior attestations may be inherited and shown as **stale**.
 
 **Restack vs Promote (difference in intent):**
 
