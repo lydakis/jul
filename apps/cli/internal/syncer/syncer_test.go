@@ -96,7 +96,7 @@ func TestCheckpointErrorsOnKeepRefPushFailure(t *testing.T) {
 	}
 }
 
-func TestSyncAutoMergeNoConflicts(t *testing.T) {
+func TestSyncMarksBaseAdvancedWhenDirty(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -135,7 +135,6 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	remoteDir := filepath.Join(tmp, "remote.git")
 	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
 		t.Fatal(err)
@@ -150,14 +149,14 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create "theirs" draft commit from base.
+	// Advance remote workspace tip.
 	if err := os.WriteFile(filepath.Join(repoDir, "remote.txt"), []byte("remote\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := run(repoDir, "git", "add", "remote.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(repoDir, "git", "commit", "-m", "[draft] WIP\n\nChange-Id: Iremote"); err != nil {
+	if err := run(repoDir, "git", "commit", "-m", "checkpoint2"); err != nil {
 		t.Fatal(err)
 	}
 	theirsSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
@@ -203,25 +202,11 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	if !res.AutoMerged {
-		t.Fatalf("expected auto-merge, got %+v", res)
-	}
 	if res.Diverged {
-		t.Fatalf("expected no divergence after auto-merge")
+		t.Fatalf("expected no divergence on base advance")
 	}
-	mergedContent, err := gitOut(repoDir, "git", "show", res.WorkspaceRef+":remote.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(mergedContent) != "remote" {
-		t.Fatalf("expected remote change in merge, got %q", mergedContent)
-	}
-	localMerged, err := gitOut(repoDir, "git", "show", res.WorkspaceRef+":local.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(localMerged) != "local" {
-		t.Fatalf("expected local change in merge, got %q", localMerged)
+	if !res.BaseAdvanced {
+		t.Fatalf("expected base advanced, got %+v", res)
 	}
 	localContent, err := os.ReadFile(filepath.Join(repoDir, "local.txt"))
 	if err != nil {
@@ -229,6 +214,13 @@ func TestSyncAutoMergeNoConflicts(t *testing.T) {
 	}
 	if strings.TrimSpace(string(localContent)) != "local" {
 		t.Fatalf("expected local change in working tree, got %q", string(localContent))
+	}
+	lease, err := os.ReadFile(leasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(lease)) != strings.TrimSpace(baseSHA) {
+		t.Fatalf("expected lease to remain %s, got %s", strings.TrimSpace(baseSHA), strings.TrimSpace(string(lease)))
 	}
 
 	headAfter, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
@@ -365,7 +357,7 @@ func TestSyncAssignsChangeIDToDraft(t *testing.T) {
 	}
 }
 
-func TestCheckpointAndAdoptErrorOnBaseDivergence(t *testing.T) {
+func TestCheckpointAndAdoptErrorOnLeaseCorruption(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -400,11 +392,6 @@ func TestCheckpointAndAdoptErrorOnBaseDivergence(t *testing.T) {
 	if err := run(repoDir, "git", "commit", "-m", "base"); err != nil {
 		t.Fatal(err)
 	}
-	baseSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	remoteDir := filepath.Join(tmp, "remote.git")
 	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
 		t.Fatal(err)
@@ -428,32 +415,33 @@ func TestCheckpointAndAdoptErrorOnBaseDivergence(t *testing.T) {
 	if err := run(repoDir, "git", "commit", "-m", "checkpoint2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repoDir, "remote.txt"), []byte("remote\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "add", "remote.txt"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "commit", "-m", "[draft] WIP\n\nChange-Id: Iremote"); err != nil {
-		t.Fatal(err)
-	}
-	remoteDraftSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	base2SHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
 	workspaceRef := "refs/jul/workspaces/tester/@"
-	if err := run(repoDir, "git", "push", "origin", remoteDraftSHA+":"+workspaceRef); err != nil {
+	if err := run(repoDir, "git", "push", "origin", base2SHA+":"+workspaceRef); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := run(repoDir, "git", "reset", "--hard", strings.TrimSpace(baseSHA)); err != nil {
+	if err := os.WriteFile(filepath.Join(repoDir, "local.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "local.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "local"); err != nil {
+		t.Fatal(err)
+	}
+	localSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
 		t.Fatal(err)
 	}
 	leasePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "lease")
 	if err := os.MkdirAll(filepath.Dir(leasePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(leasePath, []byte(strings.TrimSpace(baseSHA)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(leasePath, []byte(strings.TrimSpace(localSHA)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -464,14 +452,14 @@ func TestCheckpointAndAdoptErrorOnBaseDivergence(t *testing.T) {
 	defer func() { _ = os.Chdir(cwd) }()
 
 	if _, err := Checkpoint("feat: test"); err == nil {
-		t.Fatalf("expected divergence error on checkpoint")
-	} else if !strings.Contains(err.Error(), "diverg") {
-		t.Fatalf("expected divergence error, got %v", err)
+		t.Fatalf("expected lease error on checkpoint")
+	} else if !strings.Contains(err.Error(), "lease") {
+		t.Fatalf("expected lease error, got %v", err)
 	}
 	if _, err := AdoptCheckpoint(); err == nil {
-		t.Fatalf("expected divergence error on adopt")
-	} else if !strings.Contains(err.Error(), "diverg") {
-		t.Fatalf("expected divergence error, got %v", err)
+		t.Fatalf("expected lease error on adopt")
+	} else if !strings.Contains(err.Error(), "lease") {
+		t.Fatalf("expected lease error, got %v", err)
 	}
 
 	refs, err := gitOut(repoDir, "git", "show-ref")
@@ -556,7 +544,188 @@ func TestAdoptCheckpointErrorsOnMissingLease(t *testing.T) {
 	}
 }
 
-func TestSyncDetectsBaseDivergence(t *testing.T) {
+func TestSyncDetectsLeaseCorruption(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	repoDir := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "base.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	remoteDir := filepath.Join(tmp, "remote.git")
+	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "remote", "add", "origin", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a newer checkpoint base (base2) and publish it as workspace tip.
+	if err := os.WriteFile(filepath.Join(repoDir, "base2.txt"), []byte("base2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "base2.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "checkpoint2"); err != nil {
+		t.Fatal(err)
+	}
+	base2SHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceRef := "refs/jul/workspaces/tester/@"
+	if err := run(repoDir, "git", "push", "origin", base2SHA+":"+workspaceRef); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a divergent local commit and set lease to that (corrupted).
+	if err := os.WriteFile(filepath.Join(repoDir, "local.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "local.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "local"); err != nil {
+		t.Fatal(err)
+	}
+	localSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leasePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "lease")
+	if err := os.MkdirAll(filepath.Dir(leasePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leasePath, []byte(strings.TrimSpace(localSHA)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	res, err := Sync()
+	if err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	if !res.Diverged {
+		t.Fatalf("expected divergence when lease is not ancestor of workspace tip")
+	}
+}
+
+func TestSyncDoesNotTreatSiblingDraftsAsCorruption(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	repoDir := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "base.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	baseSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	draft1, err := gitutil.CreateDraftCommit(strings.TrimSpace(baseSHA), "Itest")
+	if err != nil {
+		t.Fatalf("create draft1 failed: %v", err)
+	}
+	draft2, err := gitutil.CreateDraftCommit(strings.TrimSpace(baseSHA), "Itest")
+	if err != nil {
+		t.Fatalf("create draft2 failed: %v", err)
+	}
+	workspaceRef := "refs/jul/workspaces/tester/@"
+	if err := gitutil.UpdateRef(workspaceRef, draft2); err != nil {
+		t.Fatalf("update workspace ref failed: %v", err)
+	}
+
+	leasePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "lease")
+	if err := os.MkdirAll(filepath.Dir(leasePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leasePath, []byte(strings.TrimSpace(draft1)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Sync()
+	if err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	if res.Diverged {
+		t.Fatalf("expected no divergence for sibling drafts, got %+v", res)
+	}
+	if res.BaseAdvanced {
+		t.Fatalf("expected base not advanced for sibling drafts, got %+v", res)
+	}
+}
+
+func TestSyncFastForwardsWhenClean(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -600,122 +769,6 @@ func TestSyncDetectsBaseDivergence(t *testing.T) {
 	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(repoDir, "git", "remote", "add", "origin", remoteDir); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "push", "origin", "HEAD:refs/heads/main"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a newer checkpoint base (base2) and a remote draft on top of it.
-	if err := os.WriteFile(filepath.Join(repoDir, "base2.txt"), []byte("base2\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "add", "base2.txt"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "commit", "-m", "checkpoint2"); err != nil {
-		t.Fatal(err)
-	}
-	base2SHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repoDir, "remote.txt"), []byte("remote\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "add", "remote.txt"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "commit", "-m", "[draft] WIP\n\nChange-Id: Iremote"); err != nil {
-		t.Fatal(err)
-	}
-	remoteDraftSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceRef := "refs/jul/workspaces/tester/@"
-	if err := run(repoDir, "git", "push", "origin", remoteDraftSHA+":"+workspaceRef); err != nil {
-		t.Fatal(err)
-	}
-
-	// Reset local repo back to the older base and set the workspace lease.
-	if err := run(repoDir, "git", "reset", "--hard", strings.TrimSpace(baseSHA)); err != nil {
-		t.Fatal(err)
-	}
-	leasePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "lease")
-	if err := os.MkdirAll(filepath.Dir(leasePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(leasePath, []byte(strings.TrimSpace(baseSHA)+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cwd, _ := os.Getwd()
-	if err := os.Chdir(repoDir); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(cwd) }()
-
-	res, err := Sync()
-	if err != nil {
-		t.Fatalf("sync failed: %v", err)
-	}
-	if !res.Diverged {
-		t.Fatalf("expected divergence when bases differ (base %s vs %s)", strings.TrimSpace(baseSHA), strings.TrimSpace(base2SHA))
-	}
-	if res.AutoMerged {
-		t.Fatalf("expected no auto-merge on base divergence")
-	}
-}
-
-func TestSyncAutoMergeDeletesFiles(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-
-	tmp := t.TempDir()
-	home := filepath.Join(tmp, "home")
-	if err := os.MkdirAll(home, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	t.Setenv("JUL_WORKSPACE", "tester/@")
-
-	repoDir := filepath.Join(tmp, "repo")
-	if err := os.MkdirAll(repoDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "init"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repoDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repoDir, "gone.txt"), []byte("gone\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "add", "base.txt", "gone.txt"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "commit", "-m", "base"); err != nil {
-		t.Fatal(err)
-	}
-	baseSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	remoteDir := filepath.Join(tmp, "remote.git")
-	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
-		t.Fatal(err)
-	}
 	if err := run(remoteDir, "git", "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
@@ -726,38 +779,22 @@ func TestSyncAutoMergeDeletesFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create "theirs" draft commit that deletes gone.txt in a separate clone.
-	cloneDir := filepath.Join(tmp, "clone")
-	if err := run(tmp, "git", "clone", remoteDir, cloneDir); err != nil {
+	// Create a remote checkpoint that adds a file.
+	if err := os.WriteFile(filepath.Join(repoDir, "remote.txt"), []byte("remote\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(cloneDir, "git", "config", "user.name", "Remote User"); err != nil {
+	if err := run(repoDir, "git", "add", "remote.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(cloneDir, "git", "config", "user.email", "remote@example.com"); err != nil {
+	if err := run(repoDir, "git", "commit", "-m", "checkpoint2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(cloneDir, "git", "fetch", "origin", "refs/heads/main:refs/remotes/origin/main"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(cloneDir, "git", "checkout", "main"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(cloneDir, "git", "rm", "gone.txt"); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(cloneDir, "git", "commit", "-m", "[draft] WIP\n\nChange-Id: Iremote"); err != nil {
-		t.Fatal(err)
-	}
-	theirsSHA, err := gitOut(cloneDir, "git", "rev-parse", "HEAD")
+	theirsSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
 	workspaceRef := "refs/jul/workspaces/tester/@"
-	if err := run(cloneDir, "git", "push", "origin", theirsSHA+":"+workspaceRef); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(repoDir, "git", "fetch", "origin", "+"+workspaceRef+":"+workspaceRef); err != nil {
+	if err := run(repoDir, "git", "push", "origin", theirsSHA+":"+workspaceRef); err != nil {
 		t.Fatal(err)
 	}
 	if err := run(repoDir, "git", "reset", "--hard", baseSHA); err != nil {
@@ -782,14 +819,21 @@ func TestSyncAutoMergeDeletesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	if !res.AutoMerged {
-		t.Fatalf("expected auto-merge, got %+v", res)
-	}
 	if res.Diverged {
-		t.Fatalf("expected no divergence after auto-merge")
+		t.Fatalf("expected no divergence on clean fast-forward")
 	}
-	if _, err := os.Stat(filepath.Join(repoDir, "gone.txt")); err == nil {
-		t.Fatalf("expected gone.txt to be removed after auto-merge")
+	if !res.FastForwarded {
+		t.Fatalf("expected fast-forward when clean, got %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "remote.txt")); err != nil {
+		t.Fatalf("expected remote.txt to be present after fast-forward")
+	}
+	lease, err := os.ReadFile(leasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(lease)) != strings.TrimSpace(theirsSHA) {
+		t.Fatalf("expected lease to advance to %s, got %s", strings.TrimSpace(theirsSHA), strings.TrimSpace(string(lease)))
 	}
 }
 
