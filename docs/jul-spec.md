@@ -77,6 +77,15 @@ Jul has a small **core** and an optional **review layer**:
 
 This spec describes both, but the core invariants are the load-bearing part.
 
+### 0.2.1 Public Model (5×5)
+
+If you want the shortest mental model, it’s this:
+
+**5 nouns:** Workspace, Change‑Id, Checkpoint, Sync, Promote  
+**5 verbs:** `jul ws`, `jul checkpoint`, `jul sync`, `jul promote`, `jul log`/`jul diff` (change‑aware reads)
+
+Everything else in this spec exists to make those five things safe and reliable across devices.
+
 ### 0.3 Remote Compatibility and Sync Remotes (Read This First)
 
 Jul's headline feature (continuous sync) depends on what your git remote allows. The safest
@@ -1369,7 +1378,7 @@ Syncing...
    - If detected: **block draft push** by default, keep the draft local, and surface a warning.
    - Allow explicit override (`jul sync --allow-secrets` or config).
 3. **Draft sync (if available)**:
-   - Push this device's draft ref with `--force`
+   - Push this device's draft ref with `--force-with-lease`
    - If draft sync is unavailable, keep the draft ref local
 4. **Validate the lease**:
    - If `workspace_lease` is set but is not an ancestor of (or equal to) `workspace_tip`, treat it
@@ -1378,6 +1387,10 @@ Syncing...
    - `local_base = parent(local_draft)`
    - If `workspace_tip` exists and `local_base != workspace_tip`, mark **base_advanced**.
    - Do **not** rewrite the draft base automatically.
+5.5. **Auto‑FF when clean (safe only):**
+   - If the draft is clean (no local changes; draft tree == base tree) and `workspace_tip` is ahead,
+     Jul may fast‑forward the local workspace head/working tree to `workspace_tip`.
+   - Otherwise, leave the base pinned and require explicit `jul ws restack` or `jul ws checkout`.
 6. **Advance `workspace_lease` only when incorporated**:
    - Update `workspace_lease` only after the working tree is based on `workspace_tip`
      (e.g., after `jul ws checkout`, `jul ws restack`, or a new `jul checkpoint` on top of it).
@@ -1386,8 +1399,8 @@ Syncing...
    - Use the last known `track_tip` (updated by `jul ws checkout`, `jul ws restack`, or `jul promote`).
    - Record drift if a newer tip is known; do not rewrite the draft base during sync.
 
-**Note:** `jul sync` never moves the workspace ref. Only checkpoints/restacks/checkout change the
-workspace base tip.
+**Note:** `jul sync` never rewrites the workspace ref. It may fast‑forward the local workspace
+head when the draft is clean; otherwise only checkpoints/restacks/checkout change the base.
 
 **Why the lease matters:** It tracks the last workspace checkpoint you have incorporated locally.
 Advancing it without updating the working tree risks clobbering remote changes later.
