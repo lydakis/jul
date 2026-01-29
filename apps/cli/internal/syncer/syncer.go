@@ -119,13 +119,30 @@ func Sync() (Result, error) {
 		if !gitutil.IsAncestor(leaseBase, workspaceBase) {
 			res.Diverged = true
 			res.RemoteProblem = "workspace lease corrupted; run 'jul ws checkout' to realign"
-		} else {
-			res.BaseAdvanced = true
 		}
 	}
 
+	existingDraft := resolveExistingDraft(syncRef, workspaceRef)
+	localBase := ""
+	if existingDraft != "" {
+		if msg, err := gitutil.CommitMessage(existingDraft); err == nil && isDraftMessage(msg) {
+			if parent, err := gitutil.ParentOf(existingDraft); err == nil && strings.TrimSpace(parent) != "" {
+				localBase = strings.TrimSpace(parent)
+			}
+		}
+	}
+	if localBase == "" {
+		localBase = leaseBase
+	}
+
+	if !res.Diverged && workspaceTip != "" && localBase != "" && strings.TrimSpace(localBase) != strings.TrimSpace(workspaceTip) {
+		res.BaseAdvanced = true
+	}
+
 	parentSHA, changeID := resolveDraftBase(workspaceRef, syncRef)
-	if leaseBase != "" {
+	if localBase != "" {
+		parentSHA = localBase
+	} else if leaseBase != "" {
 		parentSHA = leaseBase
 	}
 	if strings.TrimSpace(parentSHA) == "" {
@@ -166,7 +183,6 @@ func Sync() (Result, error) {
 		}
 	}
 
-	existingDraft := resolveExistingDraft(syncRef, workspaceRef)
 	draftSHA, err := reuseOrCreateDraft(treeSHA, parentSHA, changeID, existingDraft)
 	if err != nil {
 		return Result{}, err
