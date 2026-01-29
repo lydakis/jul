@@ -325,10 +325,10 @@ func startNewDraftAfterPromote(repoRoot, publishedSHA string) error {
 	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
 		return err
 	}
-	if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+	if err := gitutil.UpdateRef(workspaceRef, publishedSHA); err != nil {
 		return err
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+	if err := writeWorkspaceLease(repoRoot, workspace, publishedSHA); err != nil {
 		return err
 	}
 	if _, err := gitutil.Git("read-tree", "--reset", "-u", newDraftSHA); err != nil {

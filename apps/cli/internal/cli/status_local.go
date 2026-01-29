@@ -39,14 +39,6 @@ func buildLocalStatus() (output.Status, error) {
 		}
 	}
 	if draftSHA == "" {
-		ref := workspaceRef(user, workspace)
-		if gitutil.RefExists(ref) {
-			if sha, err := gitutil.ResolveRef(ref); err == nil {
-				draftSHA = sha
-			}
-		}
-	}
-	if draftSHA == "" {
 		draftSHA = info.SHA
 	}
 

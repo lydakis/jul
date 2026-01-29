@@ -94,15 +94,21 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 
 	user, workspace := workspaceParts()
 	workspaceRef := workspaceRef(user, workspace)
-	draftSHA, err := gitutil.ResolveRef(workspaceRef)
+	baseSHA, err := gitutil.ResolveRef(workspaceRef)
 	if err != nil {
 		t.Fatalf("failed to resolve workspace ref: %v", err)
 	}
+	if strings.TrimSpace(baseSHA) != sha {
+		t.Fatalf("expected workspace ref to remain on promoted sha %s, got %s", sha, baseSHA)
+	}
+
+	syncRef := "refs/jul/sync/" + user + "/" + deviceID + "/" + workspace
+	draftSHA, err := gitutil.ResolveRef(syncRef)
+	if err != nil {
+		t.Fatalf("failed to resolve sync ref: %v", err)
+	}
 	if strings.TrimSpace(draftSHA) == "" {
 		t.Fatalf("expected new draft sha")
-	}
-	if strings.TrimSpace(draftSHA) == sha {
-		t.Fatalf("expected new draft sha to differ from promoted sha")
 	}
 
 	draftMsg, err := gitutil.CommitMessage(draftSHA)
@@ -117,12 +123,7 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 		t.Fatalf("expected new Change-Id after promote, got %s", draftChangeID)
 	}
 
-	syncRef := "refs/jul/sync/" + user + "/" + deviceID + "/" + workspace
-	syncSHA, err := gitutil.ResolveRef(syncRef)
-	if err != nil {
-		t.Fatalf("failed to resolve sync ref: %v", err)
-	}
-	if strings.TrimSpace(syncSHA) != strings.TrimSpace(draftSHA) {
-		t.Fatalf("expected sync ref to match draft %s, got %s", draftSHA, syncSHA)
+	if strings.TrimSpace(draftSHA) == sha {
+		t.Fatalf("expected new draft sha to differ from promoted sha")
 	}
 }

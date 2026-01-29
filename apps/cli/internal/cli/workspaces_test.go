@@ -41,6 +41,10 @@ func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
 	_ = os.Chdir(repo)
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
+
 	if code := runWorkspaceNew([]string{"feature"}); code != 0 {
 		t.Fatalf("ws new failed with %d", code)
 	}
@@ -65,16 +69,12 @@ func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
 
 	baseSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
 	workspaceRef := "refs/jul/workspaces/tester/feature"
-	draftSHA, err := gitutil.ResolveRef(workspaceRef)
+	baseRefSHA, err := gitutil.ResolveRef(workspaceRef)
 	if err != nil {
 		t.Fatalf("failed to resolve workspace ref: %v", err)
 	}
-	parent, err := gitutil.ParentOf(draftSHA)
-	if err != nil {
-		t.Fatalf("failed to read draft parent: %v", err)
-	}
-	if strings.TrimSpace(parent) != baseSHA {
-		t.Fatalf("expected draft parent %s, got %s", baseSHA, parent)
+	if strings.TrimSpace(baseRefSHA) != baseSHA {
+		t.Fatalf("expected workspace ref %s, got %s", baseSHA, baseRefSHA)
 	}
 	if got := strings.TrimSpace(readFileContents(t, repo, "a.txt")); got != "from @" {
 		t.Fatalf("expected working tree to remain, got %q", got)
@@ -196,12 +196,17 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 	if err != nil || latest == nil {
 		t.Fatalf("expected latest checkpoint after restack, got %v", err)
 	}
-	parent, err := gitutil.ParentOf(latest.SHA)
+	chain, err := checkpointChain(latest.SHA, checkpointRes.ChangeID)
+	if err != nil || len(chain) == 0 {
+		t.Fatalf("expected checkpoint chain after restack, got %v", err)
+	}
+	oldest := chain[len(chain)-1]
+	parent, err := gitutil.ParentOf(oldest)
 	if err != nil {
 		t.Fatalf("failed to read checkpoint parent: %v", err)
 	}
 	if strings.TrimSpace(parent) != newBase {
-		t.Fatalf("expected checkpoint parent %s, got %s", newBase, strings.TrimSpace(parent))
+		t.Fatalf("expected checkpoint base parent %s, got %s", newBase, strings.TrimSpace(parent))
 	}
 
 	// Trace-Base should remain in Trace-Head ancestry after restack.
@@ -298,6 +303,10 @@ func TestWorkspaceSwitchKeepsConfigOnFailure(t *testing.T) {
 	_ = os.Chdir(repo)
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
+
 	if code := runWorkspaceSwitch([]string{"missing"}); code == 0 {
 		t.Fatalf("expected ws switch to fail for missing workspace")
 	}
@@ -363,6 +372,10 @@ func TestWorkspaceStackUsesCheckpointBase(t *testing.T) {
 	_ = os.Chdir(repo)
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
+
 	writeFilePath(t, repo, "feature.txt", "feature\n")
 	if _, err := syncer.Checkpoint("feat: base"); err != nil {
 		t.Fatalf("checkpoint failed: %v", err)
@@ -377,16 +390,12 @@ func TestWorkspaceStackUsesCheckpointBase(t *testing.T) {
 	}
 
 	workspaceRef := "refs/jul/workspaces/tester/stacked"
-	draftSHA, err := gitutil.ResolveRef(workspaceRef)
+	baseRefSHA, err := gitutil.ResolveRef(workspaceRef)
 	if err != nil {
 		t.Fatalf("failed to resolve workspace ref: %v", err)
 	}
-	parent, err := gitutil.ParentOf(draftSHA)
-	if err != nil {
-		t.Fatalf("failed to read draft parent: %v", err)
-	}
-	if strings.TrimSpace(parent) != strings.TrimSpace(checkpoint.SHA) {
-		t.Fatalf("expected stacked draft parent %s, got %s", checkpoint.SHA, parent)
+	if strings.TrimSpace(baseRefSHA) != strings.TrimSpace(checkpoint.SHA) {
+		t.Fatalf("expected workspace ref %s, got %s", checkpoint.SHA, baseRefSHA)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/syncer"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func newWorkspaceCommand() Command {
@@ -493,7 +494,41 @@ func switchToWorkspaceLocal(user, workspace string) error {
 	}
 	ref := workspaceRef(user, workspace)
 	if !gitutil.RefExists(ref) {
-		return fmt.Errorf("workspace ref not found: %s", ref)
+		if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err == nil && ok {
+			baseSHA := strings.TrimSpace(cfg.BaseSHA)
+			if baseSHA == "" {
+				if head, err := gitutil.Git("-C", repoRoot, "rev-parse", "HEAD"); err == nil {
+					baseSHA = strings.TrimSpace(head)
+				}
+			}
+			if baseSHA == "" {
+				if workspace == "@" {
+					if head, err := gitutil.Git("-C", repoRoot, "rev-parse", "HEAD"); err == nil && strings.TrimSpace(head) != "" {
+						baseSHA = strings.TrimSpace(head)
+					}
+				}
+				if baseSHA == "" {
+					return fmt.Errorf("workspace ref not found: %s", ref)
+				}
+			}
+			if err := gitutil.UpdateRef(ref, baseSHA); err != nil {
+				return fmt.Errorf("workspace ref not found: %s", ref)
+			}
+		} else {
+			if workspace == "@" {
+				if head, err := gitutil.Git("-C", repoRoot, "rev-parse", "HEAD"); err == nil && strings.TrimSpace(head) != "" {
+					if err := gitutil.UpdateRef(ref, strings.TrimSpace(head)); err == nil {
+						// ref restored from HEAD
+					} else {
+						return fmt.Errorf("workspace ref not found: %s", ref)
+					}
+				} else {
+					return fmt.Errorf("workspace ref not found: %s", ref)
+				}
+			} else {
+				return fmt.Errorf("workspace ref not found: %s", ref)
+			}
+		}
 	}
 	sha, err := gitutil.ResolveRef(ref)
 	if err != nil {
@@ -502,20 +537,37 @@ func switchToWorkspaceLocal(user, workspace string) error {
 	if err := resetToDraft(sha); err != nil {
 		return err
 	}
-	syncRef, err := syncRef(user, workspace)
-	if err != nil {
-		return err
-	}
-	if err := gitutil.UpdateRef(syncRef, sha); err != nil {
-		return err
-	}
-	if err := writeWorkspaceLease(repoRoot, workspace, sha); err != nil {
-		return err
-	}
 	if err := localRestore(workspace); err != nil {
 		if !strings.Contains(err.Error(), "local state not found") {
 			return err
 		}
+	}
+	syncRef, err := syncRef(user, workspace)
+	if err != nil {
+		return err
+	}
+	changeID := ""
+	if msg, err := gitutil.CommitMessage(sha); err == nil {
+		changeID = gitutil.ExtractChangeID(msg)
+	}
+	if changeID == "" {
+		if generated, err := gitutil.NewChangeID(); err == nil {
+			changeID = generated
+		}
+	}
+	treeSHA, err := gitutil.DraftTree()
+	if err != nil {
+		return err
+	}
+	draftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, sha, changeID)
+	if err != nil {
+		return err
+	}
+	if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
+		return err
+	}
+	if err := writeWorkspaceLease(repoRoot, workspace, sha); err != nil {
+		return err
 	}
 	return nil
 }
@@ -554,10 +606,10 @@ func createWorkspaceDraft(user, workspace, baseRef, baseSHA, treeSHA string) (st
 	if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
 		return "", err
 	}
-	if err := gitutil.UpdateRef(workspaceRef, draftSHA); err != nil {
+	if err := gitutil.UpdateRef(workspaceRef, baseSHA); err != nil {
 		return "", err
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
+	if err := writeWorkspaceLease(repoRoot, workspace, baseSHA); err != nil {
 		return "", err
 	}
 	if err := ensureWorkspaceConfig(repoRoot, workspace, baseRef, baseSHA); err != nil {

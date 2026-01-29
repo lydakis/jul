@@ -296,11 +296,11 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	}
 
 	if !syncRes.Diverged {
-		if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+		if err := gitutil.UpdateRef(workspaceRef, checkpointSHA); err != nil {
 			return res, err
 		}
 		res.WorkspaceUpdated = true
-		if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+		if err := writeWorkspaceLease(repoRoot, workspace, checkpointSHA); err != nil {
 			return res, err
 		}
 	}
@@ -316,7 +316,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		}
 		res.RemotePushed = true
 		if res.WorkspaceUpdated {
-			if err := pushWorkspace(syncRes.RemoteName, newDraftSHA, workspaceRef, workspaceRemote); err != nil {
+			if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err
 			}
 		}
@@ -408,11 +408,11 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 	}
 
 	if !syncRes.Diverged {
-		if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+		if err := gitutil.UpdateRef(workspaceRef, headSHA); err != nil {
 			return res, err
 		}
 		res.WorkspaceUpdated = true
-		if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+		if err := writeWorkspaceLease(repoRoot, workspace, headSHA); err != nil {
 			return res, err
 		}
 	}
@@ -428,7 +428,7 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		}
 		res.RemotePushed = true
 		if res.WorkspaceUpdated {
-			if err := pushWorkspace(syncRes.RemoteName, newDraftSHA, workspaceRef, workspaceRemote); err != nil {
+			if err := pushWorkspace(syncRes.RemoteName, headSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err
 			}
 		}

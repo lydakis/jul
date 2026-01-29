@@ -20,12 +20,6 @@ func currentDraftSHA() (string, error) {
 			}
 		}
 	}
-	ref := workspaceRef(user, workspace)
-	if gitutil.RefExists(ref) {
-		if sha, err := gitutil.ResolveRef(ref); err == nil {
-			return sha, nil
-		}
-	}
 	return gitutil.Git("rev-parse", "HEAD")
 }
 

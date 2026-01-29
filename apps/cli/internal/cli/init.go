@@ -200,56 +200,65 @@ func ensureWorkspaceReady(repoRoot string) (string, error) {
 		return "", err
 	}
 
-	draftSHA := ""
-	if gitutil.RefExists(syncRef) {
-		if sha, err := gitutil.ResolveRef(syncRef); err == nil {
-			draftSHA = sha
+	baseSHA := ""
+	if gitutil.RefExists(workspaceRef) {
+		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
+			baseSHA = strings.TrimSpace(sha)
 		}
 	}
-	if draftSHA == "" && gitutil.RefExists(workspaceRef) {
-		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
-			draftSHA = sha
+	if baseSHA == "" {
+		if head, err := gitutil.Git("rev-parse", "HEAD"); err == nil {
+			baseSHA = strings.TrimSpace(head)
 		}
 	}
 
-	if draftSHA == "" {
+	draftSHA := ""
+	if gitutil.RefExists(syncRef) {
+		if sha, err := gitutil.ResolveRef(syncRef); err == nil {
+			draftSHA = strings.TrimSpace(sha)
+		}
+	}
+
+	if draftSHA == "" && baseSHA != "" {
 		treeSHA, err := gitutil.DraftTree()
 		if err != nil {
 			return "", err
-		}
-		parentSHA := ""
-		if head, err := gitutil.Git("rev-parse", "HEAD"); err == nil {
-			parentSHA = strings.TrimSpace(head)
 		}
 		changeID, err := gitutil.NewChangeID()
 		if err != nil {
 			return "", err
 		}
-		draftSHA, err = gitutil.CreateDraftCommitFromTree(treeSHA, parentSHA, changeID)
+		draftSHA, err = gitutil.CreateDraftCommitFromTree(treeSHA, baseSHA, changeID)
 		if err != nil {
-			return "", err
-		}
-		if err := gitutil.UpdateRef(workspaceRef, draftSHA); err != nil {
 			return "", err
 		}
 	}
 
-	if !gitutil.RefExists(syncRef) {
+	if baseSHA != "" && !gitutil.RefExists(workspaceRef) {
+		if err := gitutil.UpdateRef(workspaceRef, baseSHA); err != nil {
+			return "", err
+		}
+	}
+
+	if draftSHA != "" && !gitutil.RefExists(syncRef) {
 		if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
 			return "", err
 		}
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
-		return "", err
+	if baseSHA == "" && draftSHA != "" {
+		if parent, err := gitutil.ParentOf(draftSHA); err == nil {
+			baseSHA = strings.TrimSpace(parent)
+		}
+	}
+	if baseSHA != "" {
+		if err := writeWorkspaceLease(repoRoot, workspace, baseSHA); err != nil {
+			return "", err
+		}
 	}
 	if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err != nil {
 		return "", err
 	} else if !ok || strings.TrimSpace(cfg.BaseRef) == "" || strings.TrimSpace(cfg.BaseSHA) == "" {
 		baseRef := detectBaseRef(repoRoot)
-		baseSHA := ""
-		if parent, err := gitutil.ParentOf(draftSHA); err == nil {
-			baseSHA = strings.TrimSpace(parent)
-		}
 		if baseSHA == "" {
 			if head, err := gitutil.Git("-C", repoRoot, "rev-parse", "HEAD"); err == nil {
 				baseSHA = strings.TrimSpace(head)

@@ -696,12 +696,8 @@ func TestSyncDoesNotTreatSiblingDraftsAsCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create draft1 failed: %v", err)
 	}
-	draft2, err := gitutil.CreateDraftCommit(strings.TrimSpace(baseSHA), "Itest")
-	if err != nil {
-		t.Fatalf("create draft2 failed: %v", err)
-	}
 	workspaceRef := "refs/jul/workspaces/tester/@"
-	if err := gitutil.UpdateRef(workspaceRef, draft2); err != nil {
+	if err := gitutil.UpdateRef(workspaceRef, strings.TrimSpace(baseSHA)); err != nil {
 		t.Fatalf("update workspace ref failed: %v", err)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lydakis/jul/cli/internal/agent"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
@@ -97,22 +98,24 @@ func runWorkspaceRestack(args []string) int {
 		return 1
 	}
 
+	worktree, err := agent.EnsureWorktree(repoRoot, baseTip)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to prepare restack worktree: %v\n", err)
+		return 1
+	}
+
 	newParent := baseTip
 	prevTrace := ""
 	newCheckpoints := make([]string, 0, len(chain))
 	for idx, oldSHA := range chain {
-		oldParent, _ := gitutil.ParentOf(oldSHA)
-		oldParent = strings.TrimSpace(oldParent)
-		if oldParent == "" {
-			oldParent = newParent
-		}
-		treeSHA, conflicts, err := mergeTree(repoRoot, oldParent, newParent, oldSHA)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "restack failed: %v\n", err)
+		if err := gitDir(worktree, nil, "cherry-pick", "--no-commit", oldSHA); err != nil {
+			_ = gitDir(worktree, nil, "cherry-pick", "--abort")
+			fmt.Fprintf(os.Stderr, "restack conflict; run 'jul merge' to resolve (%v)\n", err)
 			return 1
 		}
-		if conflicts {
-			fmt.Fprintln(os.Stderr, "restack conflict; run 'jul merge' to resolve")
+		treeSHA, err := gitOutputDir(worktree, "write-tree")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to snapshot restack tree: %v\n", err)
 			return 1
 		}
 
@@ -144,11 +147,31 @@ func runWorkspaceRestack(args []string) int {
 			newMsg = addTrailer(newMsg, "Trace-Head", traceSHA)
 		}
 
-		newSHA, err := gitutil.CommitTree(treeSHA, newParent, newMsg)
+		msgFile, err := os.CreateTemp("", "jul-restack-msg-")
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create message file: %v\n", err)
+			return 1
+		}
+		if _, err := msgFile.WriteString(newMsg); err != nil {
+			_ = msgFile.Close()
+			_ = os.Remove(msgFile.Name())
+			fmt.Fprintf(os.Stderr, "failed to write message file: %v\n", err)
+			return 1
+		}
+		_ = msgFile.Close()
+		if err := gitDir(worktree, nil, "commit", "--no-verify", "--allow-empty", "-F", msgFile.Name()); err != nil {
+			_ = os.Remove(msgFile.Name())
 			fmt.Fprintf(os.Stderr, "failed to create checkpoint: %v\n", err)
 			return 1
 		}
+		_ = os.Remove(msgFile.Name())
+
+		newSHA, err := gitOutputDir(worktree, "rev-parse", "HEAD")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to resolve checkpoint: %v\n", err)
+			return 1
+		}
+		newSHA = strings.TrimSpace(newSHA)
 		newParent = newSHA
 		newCheckpoints = append(newCheckpoints, newSHA)
 		prevTrace = traceSHA
@@ -176,11 +199,11 @@ func runWorkspaceRestack(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to update sync ref: %v\n", err)
 		return 1
 	}
-	if err := gitutil.UpdateRef(workspaceRef, newDraft); err != nil {
+	if err := gitutil.UpdateRef(workspaceRef, newParent); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to update workspace ref: %v\n", err)
 		return 1
 	}
-	if err := writeWorkspaceLease(repoRoot, ws, newDraft); err != nil {
+	if err := writeWorkspaceLease(repoRoot, ws, newParent); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to update workspace lease: %v\n", err)
 		return 1
 	}
@@ -309,20 +332,4 @@ func updateWorktreeLocal(repoRoot, ref string) error {
 	}
 	_, err := gitutil.Git("-C", repoRoot, "clean", "-fd", "--exclude=.jul")
 	return err
-}
-
-func mergeTree(repoRoot, baseSHA, oursSHA, theirsSHA string) (string, bool, error) {
-	args := []string{"-C", repoRoot, "merge-tree", "--write-tree", "--merge-base", baseSHA, oursSHA, theirsSHA}
-	out, err := gitutil.Git(args...)
-	out = strings.TrimSpace(out)
-	if err != nil {
-		if strings.Contains(out, "CONFLICT") {
-			return "", true, nil
-		}
-		return "", false, fmt.Errorf("git merge-tree failed: %v", err)
-	}
-	if out == "" {
-		return "", false, fmt.Errorf("merge-tree returned empty tree")
-	}
-	return out, false, nil
 }
