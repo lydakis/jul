@@ -109,9 +109,13 @@ func runWorkspaceRestack(args []string) int {
 	newCheckpoints := make([]string, 0, len(chain))
 	for idx, oldSHA := range chain {
 		if err := gitDir(worktree, nil, "cherry-pick", "--no-commit", oldSHA); err != nil {
-			_ = gitDir(worktree, nil, "cherry-pick", "--abort")
-			fmt.Fprintf(os.Stderr, "restack conflict; run 'jul merge' to resolve (%v)\n", err)
-			return 1
+			if isEmptyCherryPick(err) {
+				_ = gitDir(worktree, nil, "cherry-pick", "--skip")
+			} else {
+				_ = gitDir(worktree, nil, "cherry-pick", "--abort")
+				fmt.Fprintf(os.Stderr, "restack conflict; run 'jul merge' to resolve (%v)\n", err)
+				return 1
+			}
 		}
 		treeSHA, err := gitOutputDir(worktree, "write-tree")
 		if err != nil {
@@ -218,6 +222,26 @@ func runWorkspaceRestack(args []string) int {
 
 	fmt.Fprintf(os.Stdout, "Restacked %d checkpoints onto %s\n", len(newCheckpoints), strings.TrimSpace(baseTip))
 	return 0
+}
+
+func isEmptyCherryPick(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "cherry-pick") {
+		return false
+	}
+	if strings.Contains(msg, "previous cherry-pick is empty") {
+		return true
+	}
+	if strings.Contains(msg, "patch is empty") {
+		return true
+	}
+	if strings.Contains(msg, "nothing to commit") {
+		return true
+	}
+	return false
 }
 
 func checkpointChain(latestSHA, changeID string) ([]string, error) {

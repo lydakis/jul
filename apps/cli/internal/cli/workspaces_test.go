@@ -168,6 +168,10 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 	baseTip := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
 
 	// Advance main with a new commit.
+	runGitCmd(t, repo, "reset", "--hard", "HEAD")
+	writeFilePath(t, repo, "feat.txt", "one\n")
+	runGitCmd(t, repo, "add", "feat.txt")
+	runGitCmd(t, repo, "commit", "-m", "upstream feat one")
 	writeFilePath(t, repo, "upstream.txt", "upstream\n")
 	runGitCmd(t, repo, "add", "upstream.txt")
 	runGitCmd(t, repo, "commit", "-m", "upstream")
@@ -192,15 +196,20 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 		t.Fatalf("expected base_sha %s, got %s", newBase, strings.TrimSpace(cfg.BaseSHA))
 	}
 
-	latest, err := latestCheckpointForChange(checkpointRes.ChangeID)
-	if err != nil || latest == nil {
-		t.Fatalf("expected latest checkpoint after restack, got %v", err)
+	user, ws := workspaceParts()
+	tip, err := gitutil.ResolveRef(workspaceRef(user, ws))
+	if err != nil {
+		t.Fatalf("expected workspace tip after restack, got %v", err)
 	}
-	chain, err := checkpointChain(latest.SHA, checkpointRes.ChangeID)
+	tip = strings.TrimSpace(tip)
+	if tip == "" {
+		t.Fatalf("expected workspace tip after restack")
+	}
+	chain, err := checkpointChain(tip, checkpointRes.ChangeID)
 	if err != nil || len(chain) == 0 {
 		t.Fatalf("expected checkpoint chain after restack, got %v", err)
 	}
-	oldest := chain[len(chain)-1]
+	oldest := chain[0]
 	parent, err := gitutil.ParentOf(oldest)
 	if err != nil {
 		t.Fatalf("failed to read checkpoint parent: %v", err)
