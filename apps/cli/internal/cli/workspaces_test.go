@@ -20,6 +20,7 @@ func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
 	writeFilePath(t, repo, "base.txt", "base\n")
 	runGitCmd(t, repo, "add", "base.txt")
 	runGitCmd(t, repo, "commit", "-m", "base")
+	runGitCmd(t, repo, "branch", "-M", "main")
 
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
@@ -165,17 +166,17 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 		t.Fatalf("second checkpoint failed: %v", err)
 	}
 
-	baseTip := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+	baseTip := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "refs/heads/main"))
 
 	// Advance main with a new commit.
-	runGitCmd(t, repo, "reset", "--hard", "HEAD")
+	runGitCmd(t, repo, "checkout", "-B", "main")
 	writeFilePath(t, repo, "feat.txt", "one\n")
 	runGitCmd(t, repo, "add", "feat.txt")
 	runGitCmd(t, repo, "commit", "-m", "upstream feat one")
 	writeFilePath(t, repo, "upstream.txt", "upstream\n")
 	runGitCmd(t, repo, "add", "upstream.txt")
 	runGitCmd(t, repo, "commit", "-m", "upstream")
-	newBase := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+	newBase := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "refs/heads/main"))
 	if newBase == baseTip {
 		t.Fatalf("expected base to advance")
 	}

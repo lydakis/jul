@@ -13,7 +13,7 @@ func detectBaseRef(repoRoot string) string {
 	}
 	if ref, err := gitutil.Git("-C", repoRoot, "symbolic-ref", "-q", "HEAD"); err == nil {
 		ref = strings.TrimSpace(ref)
-		if ref != "" {
+		if ref != "" && !strings.HasPrefix(ref, "refs/heads/jul/") {
 			return ref
 		}
 	}
