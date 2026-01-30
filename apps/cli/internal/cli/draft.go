@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func currentDraftSHA() (string, error) {
@@ -19,16 +20,22 @@ func currentDraftSHA() (string, error) {
 			}
 		}
 	}
-	ref := workspaceRef(user, workspace)
-	if gitutil.RefExists(ref) {
-		if sha, err := gitutil.ResolveRef(ref); err == nil {
-			return sha, nil
-		}
-	}
 	return gitutil.Git("rev-parse", "HEAD")
 }
 
 func currentBaseSHA() (string, error) {
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err == nil {
+		_, wsName := workspaceParts()
+		if wsName == "" {
+			wsName = "@"
+		}
+		if cfg, ok, err := workspace.ReadConfig(repoRoot, wsName); err == nil && ok {
+			if strings.TrimSpace(cfg.BaseSHA) != "" {
+				return strings.TrimSpace(cfg.BaseSHA), nil
+			}
+		}
+	}
 	draftSHA, err := currentDraftSHA()
 	if err != nil {
 		return "", err
@@ -48,7 +55,11 @@ func currentDraftAndBase() (string, string, error) {
 		return "", "", err
 	}
 	parentSHA, _ := gitutil.ParentOf(draftSHA)
-	return strings.TrimSpace(draftSHA), strings.TrimSpace(parentSHA), nil
+	parentSHA = strings.TrimSpace(parentSHA)
+	if parentSHA == "" {
+		parentSHA = strings.TrimSpace(draftSHA)
+	}
+	return strings.TrimSpace(draftSHA), parentSHA, nil
 }
 
 func suggestionIsStale(baseSHA, draftSHA, parentSHA string) bool {

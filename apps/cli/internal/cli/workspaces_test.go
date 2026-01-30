@@ -9,6 +9,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/syncer"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
@@ -19,6 +20,7 @@ func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
 	writeFilePath(t, repo, "base.txt", "base\n")
 	runGitCmd(t, repo, "add", "base.txt")
 	runGitCmd(t, repo, "commit", "-m", "base")
+	runGitCmd(t, repo, "branch", "-M", "main")
 
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
@@ -39,6 +41,10 @@ func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
 	cwd, _ := os.Getwd()
 	_ = os.Chdir(repo)
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
 
 	if code := runWorkspaceNew([]string{"feature"}); code != 0 {
 		t.Fatalf("ws new failed with %d", code)
@@ -64,16 +70,12 @@ func TestWorkspaceNewCreatesDraftAndSavesCurrent(t *testing.T) {
 
 	baseSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
 	workspaceRef := "refs/jul/workspaces/tester/feature"
-	draftSHA, err := gitutil.ResolveRef(workspaceRef)
+	baseRefSHA, err := gitutil.ResolveRef(workspaceRef)
 	if err != nil {
 		t.Fatalf("failed to resolve workspace ref: %v", err)
 	}
-	parent, err := gitutil.ParentOf(draftSHA)
-	if err != nil {
-		t.Fatalf("failed to read draft parent: %v", err)
-	}
-	if strings.TrimSpace(parent) != baseSHA {
-		t.Fatalf("expected draft parent %s, got %s", baseSHA, parent)
+	if strings.TrimSpace(baseRefSHA) != baseSHA {
+		t.Fatalf("expected workspace ref %s, got %s", baseSHA, baseRefSHA)
 	}
 	if got := strings.TrimSpace(readFileContents(t, repo, "a.txt")); got != "from @" {
 		t.Fatalf("expected working tree to remain, got %q", got)
@@ -127,6 +129,130 @@ func TestWorkspaceNewFailsWhenWorkspaceExists(t *testing.T) {
 	}
 	if strings.TrimSpace(sha1) != strings.TrimSpace(sha2) {
 		t.Fatalf("expected workspace ref to remain unchanged")
+	}
+}
+
+func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	writeFilePath(t, repo, "base.txt", "base\n")
+	runGitCmd(t, repo, "add", "base.txt")
+	runGitCmd(t, repo, "commit", "-m", "base")
+
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	runGitCmd(t, repo, "config", "jul.workspace", "tester/@")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
+
+	writeFilePath(t, repo, "feat.txt", "one\n")
+	checkpointRes, err := syncer.Checkpoint("feat: one")
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if checkpointRes.CheckpointSHA == "" {
+		t.Fatalf("expected checkpoint sha")
+	}
+	writeFilePath(t, repo, "feat.txt", "one\nmore\n")
+	if _, err := syncer.Checkpoint("feat: two"); err != nil {
+		t.Fatalf("second checkpoint failed: %v", err)
+	}
+
+	baseTip := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "refs/heads/main"))
+
+	// Advance main with a new commit.
+	runGitCmd(t, repo, "checkout", "-B", "main")
+	writeFilePath(t, repo, "feat.txt", "one\n")
+	runGitCmd(t, repo, "add", "feat.txt")
+	runGitCmd(t, repo, "commit", "-m", "upstream feat one")
+	writeFilePath(t, repo, "upstream.txt", "upstream\n")
+	runGitCmd(t, repo, "add", "upstream.txt")
+	runGitCmd(t, repo, "commit", "-m", "upstream")
+	newBase := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "refs/heads/main"))
+	if newBase == baseTip {
+		t.Fatalf("expected base to advance")
+	}
+
+	if code := runWorkspaceRestack([]string{}); code != 0 {
+		t.Fatalf("ws restack failed with %d", code)
+	}
+
+	// Base config should now point at the new base tip.
+	cfg, ok, err := wsconfig.ReadConfig(repo, "@")
+	if err != nil {
+		t.Fatalf("read workspace config failed: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected workspace config to exist")
+	}
+	if strings.TrimSpace(cfg.BaseSHA) != newBase {
+		t.Fatalf("expected base_sha %s, got %s", newBase, strings.TrimSpace(cfg.BaseSHA))
+	}
+
+	user, ws := workspaceParts()
+	tip, err := gitutil.ResolveRef(workspaceRef(user, ws))
+	if err != nil {
+		t.Fatalf("expected workspace tip after restack, got %v", err)
+	}
+	tip = strings.TrimSpace(tip)
+	if tip == "" {
+		t.Fatalf("expected workspace tip after restack")
+	}
+	chain, err := checkpointChain(tip, checkpointRes.ChangeID)
+	if err != nil || len(chain) == 0 {
+		t.Fatalf("expected checkpoint chain after restack, got %v", err)
+	}
+	oldest := chain[0]
+	parent, err := gitutil.ParentOf(oldest)
+	if err != nil {
+		t.Fatalf("failed to read checkpoint parent: %v", err)
+	}
+	if strings.TrimSpace(parent) != newBase {
+		t.Fatalf("expected checkpoint base parent %s, got %s", newBase, strings.TrimSpace(parent))
+	}
+
+	// Trace-Base should remain in Trace-Head ancestry after restack.
+	checkpoints, err := listCheckpoints()
+	if err != nil {
+		t.Fatalf("list checkpoints failed: %v", err)
+	}
+	var restacked *checkpointInfo
+	for _, entry := range checkpoints {
+		if entry.ChangeID != checkpointRes.ChangeID {
+			continue
+		}
+		msg, err := gitutil.CommitMessage(entry.SHA)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(gitutil.ExtractTraceBase(msg)) == "" {
+			continue
+		}
+		restacked = &entry
+		break
+	}
+	if restacked == nil {
+		t.Fatalf("expected checkpoint with trace base after restack")
+	}
+	msg, err := gitutil.CommitMessage(restacked.SHA)
+	if err != nil {
+		t.Fatalf("failed to read checkpoint message: %v", err)
+	}
+	traceBase := strings.TrimSpace(gitutil.ExtractTraceBase(msg))
+	traceHead := strings.TrimSpace(gitutil.ExtractTraceHead(msg))
+	if traceBase == "" || traceHead == "" {
+		t.Fatalf("expected trace base/head on restacked checkpoint")
+	}
+	if !gitutil.IsAncestor(traceBase, traceHead) {
+		t.Fatalf("expected trace base %s to be ancestor of trace head %s", traceBase, traceHead)
 	}
 }
 
@@ -186,6 +312,10 @@ func TestWorkspaceSwitchKeepsConfigOnFailure(t *testing.T) {
 	cwd, _ := os.Getwd()
 	_ = os.Chdir(repo)
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
 
 	if code := runWorkspaceSwitch([]string{"missing"}); code == 0 {
 		t.Fatalf("expected ws switch to fail for missing workspace")
@@ -252,6 +382,10 @@ func TestWorkspaceStackUsesCheckpointBase(t *testing.T) {
 	_ = os.Chdir(repo)
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
+
 	writeFilePath(t, repo, "feature.txt", "feature\n")
 	if _, err := syncer.Checkpoint("feat: base"); err != nil {
 		t.Fatalf("checkpoint failed: %v", err)
@@ -266,16 +400,12 @@ func TestWorkspaceStackUsesCheckpointBase(t *testing.T) {
 	}
 
 	workspaceRef := "refs/jul/workspaces/tester/stacked"
-	draftSHA, err := gitutil.ResolveRef(workspaceRef)
+	baseRefSHA, err := gitutil.ResolveRef(workspaceRef)
 	if err != nil {
 		t.Fatalf("failed to resolve workspace ref: %v", err)
 	}
-	parent, err := gitutil.ParentOf(draftSHA)
-	if err != nil {
-		t.Fatalf("failed to read draft parent: %v", err)
-	}
-	if strings.TrimSpace(parent) != strings.TrimSpace(checkpoint.SHA) {
-		t.Fatalf("expected stacked draft parent %s, got %s", checkpoint.SHA, parent)
+	if strings.TrimSpace(baseRefSHA) != strings.TrimSpace(checkpoint.SHA) {
+		t.Fatalf("expected workspace ref %s, got %s", checkpoint.SHA, baseRefSHA)
 	}
 }
 

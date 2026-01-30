@@ -31,7 +31,10 @@ func TestStatusUsesDraftChangeIDWithoutCheckpoint(t *testing.T) {
 	}
 
 	user, workspace := workspaceParts()
-	draftRef := workspaceRef(user, workspace)
+	draftRef, err := syncRef(user, workspace)
+	if err != nil {
+		t.Fatalf("sync ref error: %v", err)
+	}
 	draftSHA, err := gitutil.ResolveRef(draftRef)
 	if err != nil || strings.TrimSpace(draftSHA) == "" {
 		t.Fatalf("failed to resolve draft ref: %v", err)

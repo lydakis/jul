@@ -132,8 +132,13 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		_ = metadata.WriteTraceSummary(traceSHA, summarizePrompt(prompt))
 	}
 
+	traceType := "prompt"
+	if opts.Implicit {
+		traceType = "sync"
+	}
 	note := metadata.TraceNote{
 		TraceSHA:  traceSHA,
+		TraceType: traceType,
 		Agent:     strings.TrimSpace(opts.Agent),
 		SessionID: strings.TrimSpace(opts.SessionID),
 		Turn:      opts.Turn,
@@ -166,6 +171,7 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 	}
 
 	canonical := ""
+	mergeSHA := ""
 	existingTip := ""
 	if allowCanonical {
 		canonical = traceSHA
@@ -183,7 +189,14 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 				canonical = existingTip
 			default:
 				mergeMessage := "[trace] merge"
-				mergeSHA, err := gitutil.CommitTreeWithParents(treeSHA, []string{existingTip, traceSHA}, mergeMessage)
+				mergeTree := treeSHA
+				workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+				if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
+					if tree, err := gitutil.TreeOf(strings.TrimSpace(sha)); err == nil && strings.TrimSpace(tree) != "" {
+						mergeTree = strings.TrimSpace(tree)
+					}
+				}
+				mergeSHA, err = gitutil.CommitTreeWithParents(mergeTree, []string{existingTip, traceSHA}, mergeMessage)
 				if err != nil {
 					return res, err
 				}
@@ -199,6 +212,17 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		}
 	} else if sha, err := gitutil.ResolveRef(traceRef); err == nil {
 		res.CanonicalSHA = strings.TrimSpace(sha)
+	}
+
+	if mergeSHA != "" {
+		mergeNote := metadata.TraceNote{
+			TraceSHA:  mergeSHA,
+			TraceType: "merge",
+			Agent:     "jul",
+			Device:    deviceID,
+			CreatedAt: time.Now().UTC(),
+		}
+		_ = metadata.WriteTrace(mergeNote)
 	}
 
 	if rerr == nil {

@@ -3,24 +3,34 @@
 ## Priority Roadmap (Spec → Safe Daily Use)
 
 ### P0 — Repo Safety & Core Invariants (must‑fix before daily use)
-- [ ] **Workspace base tracking**: persist `base_ref` + pinned `base_sha` per workspace (e.g., `.jul/workspaces/<ws>/config`) and use it for diffs, suggestions, CRs, status, and divergence checks.
-- [ ] **`jul ws restack`**: rebase checkpoint chain onto `base_ref` tip; support `--onto`; update `base_sha`, move `HEAD`, emit **restack trace per rewritten checkpoint**, mark suggestions stale, trigger CI for new SHAs.
-- [ ] **Stacked promote (auto‑land stack)**: `jul promote` should land full stack bottom‑up, rebasing each layer onto the target branch; stop on conflict and require `jul merge`.
-- [ ] **Promote safety invariant**: fetch target tip; only fast‑forward update target by default; rename flags to `--no-policy` and `--force-target`; record per‑layer `promote_events` mapping.
-- [ ] **Stack base resolution**: when `base_ref` is a workspace, resolve base tip to **parent’s latest checkpoint** (not its draft).
-- [ ] **Trace correctness**: add `trace_type` metadata; update `jul blame` to skip merge+restack traces; ensure trace merge tree uses canonical workspace tip after sync.
-- [ ] **Incident 2026‑01‑24 regression**: add safeguards + tests to prevent target overwrite (see `docs/incidents/2026-01-24-main-overwrite.md`).
+- [x] **Workspace base tracking**: persist `base_ref` + pinned `base_sha` per workspace (e.g., `.jul/workspaces/<ws>/config`) and use it for diffs, suggestions, CRs, status, and divergence checks.
+- [x] **`jul ws restack`**: rebase checkpoint chain onto `base_ref` tip; support `--onto`; update `base_sha`, move `HEAD`, emit **restack trace per rewritten checkpoint**, mark suggestions stale, trigger CI for new SHAs.
+- [x] **Sync algorithm alignment**: `jul sync` must **not** rewrite workspace refs by default; only checkpoint/restack/checkout update base. Detect base advancement via draft parent vs workspace tip; update `workspace_lease` only when incorporated; allow safe clean FF of worktree only when draft tree == base tree; honor lease corruption rule.
+- [x] **HEAD model**: keep `HEAD` on `refs/heads/jul/<workspace>` (base commit); update this ref on checkpoint/restack/checkout/switch/promote.
+- [x] **Stacked promote (auto‑land stack)**: `jul promote` should land full stack bottom‑up, rebasing each layer onto the target branch; stop on conflict and require `jul merge`.
+- [x] **Promote safety invariant**: fetch target tip; only fast‑forward update target by default; rename flags to `--no-policy` and `--force-target`; record per‑layer `promote_events` mapping.
+- [x] **Stack base resolution**: when `base_ref` is a workspace, resolve base tip to **parent’s latest checkpoint** (not its draft).
+- [x] **Trace correctness**: add `trace_type` metadata; update `jul blame` to skip merge+restack traces; ensure trace merge tree uses canonical workspace tip after sync.
+- [x] **Incident 2026‑01‑24 regression**: add safeguards + tests to prevent target overwrite (see `docs/incidents/2026-01-24-main-overwrite.md`).
 
 ### P1 — Core Workflow Completeness
+- [ ] **Repo meta + user namespace**: implement `refs/notes/jul/repo-meta` + stable `user_namespace` resolution for ref paths.
+- [ ] **Change refs**: stable per‑change tips (`refs/jul/change/<change-id>`) + anchor refs.
+- [ ] **Draft handoff**: `jul draft list/show/adopt` (per‑device drafts) + explicit adopt merge flow.
+- [ ] **Sync safety features**: draft secret scan before push (`--allow-secrets` override), `.jul/syncignore` support.
+- [ ] **Tracked base drift**: persist `track-tip` for publish branch; surface base‑advanced in status; update only on restack/checkout/promote.
 - [ ] **`jul doctor`**: verify remote supports custom refs + non‑FF updates under `refs/jul/*` (and report fallbacks).
 - [ ] **`jul log --traces`**: show trace history in log output.
 - [ ] **Suggestions default filter**: exclude stale suggestions unless explicitly requested.
 - [ ] **CI + privacy alignment**: sync only structured attestation fields by default; gate agent‑review summaries and CI output snippets behind opt‑in + scrubber.
+- [ ] **Restack attestation inheritance**: store `attestation_inherit_from` on rebased checkpoints and display prior results as **stale** (display‑only, never gating).
 - [ ] **Sync modes**: implement `on-command|continuous|explicit` with config wiring.
+- [ ] **Sync auto‑restack (opt‑in)**: implement `sync.autorestack=true` to allow sync to restack checkpoints when safe (per spec note).
 - [ ] **Retention cleanup**: `jul prune`, keep‑ref cascading cleanup (suggestions/notes) + CR anchor pinning.
 
 ### P2 — UX + Tooling
 - [ ] **`jul remote clear`** command.
+- [ ] **`jul git` passthrough** (thin wrapper for git commands).
 - [ ] **Promote policies**: `.jul/policy.toml` enforcement for CI/coverage/etc.
 - [ ] **Output polish**: align human output with spec (icons/colors/layout).
 - [ ] **Smoke‑test plan + coverage**: design doc + full local/remote/opencode scenarios.
@@ -55,8 +65,8 @@
 - [ ] Align Change-Id lifecycle + base-commit terminology in outputs/errors (e.g., `base_diverged`)
 - [x] Rename workspace lease file (`.jul/workspaces/<ws>/lease`) and update code/config from `workspace_base`
 - [x] Suggestion staleness uses `suggestion.base_sha == parent(current_draft)`
-- [ ] Add `trace_type` metadata and have `jul blame` skip merge traces
-- [ ] Trace merge tree should use canonical workspace tip after sync (not local draft tree)
+- [x] Add `trace_type` metadata and have `jul blame` skip merge traces
+- [x] Trace merge tree should use canonical workspace tip after sync (not local draft tree)
 - [ ] Fix sync draft creation when `.jul` is gitignored (no hard failure)
 - [ ] Expand smoke tests: full local-only flow, remote flow, opencode review, CI config/no-config
 - [ ] Define server scope: git-remote compatibility only + frontend API/static hosting
