@@ -248,8 +248,18 @@ func promoteLocal(branch, sha string, forceTarget bool, noPolicy bool) error {
 	if err != nil {
 		return err
 	}
-	if remoteTip != "" && !forceTarget {
-		if _, err := gitutil.Git("merge-base", "--is-ancestor", remoteTip, sha); err != nil {
+	localTip := ""
+	if gitutil.RefExists(ref) {
+		if current, err := gitutil.ResolveRef(ref); err == nil {
+			localTip = strings.TrimSpace(current)
+		}
+	}
+	guardTip := strings.TrimSpace(remoteTip)
+	if guardTip == "" {
+		guardTip = localTip
+	}
+	if guardTip != "" && !forceTarget {
+		if _, err := gitutil.Git("merge-base", "--is-ancestor", guardTip, sha); err != nil {
 			return fmt.Errorf("promote would not be fast-forward; use --force-target to override")
 		}
 	}

@@ -221,3 +221,27 @@ func TestPromoteForceTargetAllowsNonFastForwardRemote(t *testing.T) {
 		t.Fatalf("expected remote main to be %s, got %s", altSHA, remoteTip)
 	}
 }
+
+func TestPromoteRejectsNonFastForwardLocalOnly(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	runGitCmd(t, repo, "commit", "--allow-empty", "-m", "base")
+	baseSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	runGitCmd(t, repo, "checkout", "--orphan", "alt")
+	runGitCmd(t, repo, "commit", "--allow-empty", "-m", "alt")
+	altSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+	t.Setenv("HOME", filepath.Join(repo, "home"))
+
+	runGitCmd(t, repo, "branch", "-f", "main", baseSHA)
+	if err := promoteLocal("main", altSHA, false, false); err == nil {
+		t.Fatalf("expected local-only promote to fail for non-ff")
+	}
+}
