@@ -5,13 +5,13 @@
 ### P0 — Repo Safety & Core Invariants (must‑fix before daily use)
 - [x] **Workspace base tracking**: persist `base_ref` + pinned `base_sha` per workspace (e.g., `.jul/workspaces/<ws>/config`) and use it for diffs, suggestions, CRs, status, and divergence checks.
 - [x] **`jul ws restack`**: rebase checkpoint chain onto `base_ref` tip; support `--onto`; update `base_sha`, move `HEAD`, emit **restack trace per rewritten checkpoint**, mark suggestions stale, trigger CI for new SHAs.
-- [ ] **Sync algorithm alignment**: `jul sync` must **not** rewrite workspace refs by default; only checkpoint/restack/checkout update base. Detect base advancement via draft parent vs workspace tip; update `workspace_lease` only when incorporated; allow safe clean FF of worktree only when draft tree == base tree; honor lease corruption rule.
-- [ ] **HEAD model**: keep `HEAD` on `refs/heads/jul/<workspace>` (base commit); update this ref on checkpoint/restack/checkout/switch/promote.
-- [ ] **Stacked promote (auto‑land stack)**: `jul promote` should land full stack bottom‑up, rebasing each layer onto the target branch; stop on conflict and require `jul merge`.
-- [ ] **Promote safety invariant**: fetch target tip; only fast‑forward update target by default; rename flags to `--no-policy` and `--force-target`; record per‑layer `promote_events` mapping.
+- [x] **Sync algorithm alignment**: `jul sync` must **not** rewrite workspace refs by default; only checkpoint/restack/checkout update base. Detect base advancement via draft parent vs workspace tip; update `workspace_lease` only when incorporated; allow safe clean FF of worktree only when draft tree == base tree; honor lease corruption rule.
+- [x] **HEAD model**: keep `HEAD` on `refs/heads/jul/<workspace>` (base commit); update this ref on checkpoint/restack/checkout/switch/promote.
+- [x] **Stacked promote (auto‑land stack)**: `jul promote` should land full stack bottom‑up, rebasing each layer onto the target branch; stop on conflict and require `jul merge`.
+- [x] **Promote safety invariant**: fetch target tip; only fast‑forward update target by default; rename flags to `--no-policy` and `--force-target`; record per‑layer `promote_events` mapping.
 - [x] **Stack base resolution**: when `base_ref` is a workspace, resolve base tip to **parent’s latest checkpoint** (not its draft).
 - [x] **Trace correctness**: add `trace_type` metadata; update `jul blame` to skip merge+restack traces; ensure trace merge tree uses canonical workspace tip after sync.
-- [ ] **Incident 2026‑01‑24 regression**: add safeguards + tests to prevent target overwrite (see `docs/incidents/2026-01-24-main-overwrite.md`).
+- [x] **Incident 2026‑01‑24 regression**: add safeguards + tests to prevent target overwrite (see `docs/incidents/2026-01-24-main-overwrite.md`).
 
 ### P1 — Core Workflow Completeness
 - [ ] **Repo meta + user namespace**: implement `refs/notes/jul/repo-meta` + stable `user_namespace` resolution for ref paths.

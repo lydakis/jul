@@ -49,36 +49,20 @@ The divergence detection never compared `draft base` vs `target tip`, so it neve
    Same change for the "start new draft" step.
 3. **Smoke test added**  
    Ensures workspace checkout does not move `HEAD`.
+4. **Pinned base tracking (`base_ref` + `base_sha`)**  
+   Stored per-workspace; diffs/divergence use the pinned base.
+5. **`jul ws restack` implemented**  
+   Restacks checkpoint chains onto the pinned base; updates `base_sha`.
+6. **Promote safety invariant**  
+   Promote fetches target tip and only fast‑forwards by default; `--force-target` is explicit.
+7. **Stacked promote auto‑land**  
+   Promote lands stacked workspaces bottom‑up.
+8. **Lease validation + tests**  
+   Corrupted lease is detected and requires explicit recovery.
 
-## Outstanding Fixes (Spec-level, updated)
-1. **Pinned base tracking**  
-   Persist `base_ref` + `base_sha` per workspace; diffs and divergence are computed against `base_sha`.
-2. **Safe promote invariant**  
-   `jul promote` must fetch the current target tip and only fast‑forward update the branch unless
-   `--force-target` is explicitly used.
-3. **Explicit restack path**  
-   Base updates are handled explicitly via `jul ws restack` (or implicitly during promote),
-   not via silent sync‑pull.
-4. **Workspace lease consistency checks**  
-   Lease should be validated against actual draft ref; if mismatch, warn and require `jul ws checkout`.
-
-## Proposed Fixes (Implementation Plan)
-1. **Persist base_ref/base_sha**  
-   Store pinned base per workspace (used for diff, status, divergence, suggestions).
-2. **Implement `jul ws restack`**  
-   Rebase checkpoint chain onto `base_ref` tip; update `base_sha`; emit restack traces; re‑run CI.
-3. **Promote safety**  
-   Fetch target tip; only fast‑forward update by default; separate `--no-policy` vs `--force-target`.
-4. **Stacked promote auto‑land**  
-   Promote bottom‑up when base is another workspace; stop on conflicts.
-5. **Lease validation**
-   - On every sync, if `.jul/workspaces/<ws>/lease` points to a SHA that is not
-     equal to `workspace_ref` or `sync_ref`, warn and require re-checkout.
-6. **Tests**
-   - Integration test: `jul ws checkout` must not move `HEAD`.
-   - Integration test: `jul promote` rejects non‑FF target updates by default.
-   - Integration test: `jul ws restack` rebases checkpoints and updates `base_sha`.
-   - Integration test: mismatch lease → explicit error.
+## Follow‑ups
+- Keep the new safeguards covered by smoke/integration tests as we refactor sync and promote.
+- Re‑verify lease validation when adding repo‑meta and user namespace resolution.
 
 ## Lessons Learned
 - Jul must never change Git branch pointers during workspace operations.  

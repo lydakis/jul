@@ -1406,7 +1406,7 @@ Syncing...
 **Note:** `jul sync` never rewrites the workspace ref. It may restack when `sync.autorestack`
 is enabled; conflicts always require an explicit `jul merge`.
 
-**Default:** `sync.autorestack = true` (attempt restack when the base advances, but never auto‑merge).
+**Default:** `sync.autorestack = false` (leave the base pinned; require explicit `jul ws restack`).
 
 **Why the lease matters:** It tracks the last workspace checkpoint you have incorporated locally.
 Advancing it without updating the working tree risks clobbering remote changes later.
