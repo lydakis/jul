@@ -15,7 +15,9 @@ import (
 	"github.com/lydakis/jul/cli/internal/hooks"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
+	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/syncer"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func Commands(version string) []Command {
@@ -178,7 +180,8 @@ func newPromoteCommand() Command {
 			fs := flag.NewFlagSet("promote", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
 			toBranch := fs.String("to", "", "Target branch")
-			force := fs.Bool("force", false, "Force promotion despite policy")
+			noPolicy := fs.Bool("no-policy", false, "Skip promote policy checks")
+			forceTarget := fs.Bool("force-target", false, "Dangerous: allow non-fast-forward update of target branch")
 			_ = fs.Parse(args)
 
 			if *toBranch == "" {
@@ -209,23 +212,27 @@ func newPromoteCommand() Command {
 				fmt.Fprintln(os.Stderr, "failed to resolve commit to promote")
 				return 1
 			}
-			if err := promoteLocal(*toBranch, targetSHA, *force); err != nil {
+			if err := promoteWithStack(*toBranch, targetSHA, *forceTarget, *noPolicy); err != nil {
 				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
 				return 1
 			}
 
-			if *force {
-				fmt.Fprintln(os.Stdout, "promote completed (force)")
+			if *forceTarget {
+				fmt.Fprintln(os.Stdout, "promote completed (force-target)")
 				return 0
 			}
 
+			if *noPolicy {
+				fmt.Fprintln(os.Stdout, "promote completed (no-policy)")
+				return 0
+			}
 			fmt.Fprintln(os.Stdout, "promote completed")
 			return 0
 		},
 	}
 }
 
-func promoteLocal(branch, sha string, force bool) error {
+func promoteLocal(branch, sha string, forceTarget bool, noPolicy bool) error {
 	if strings.TrimSpace(branch) == "" {
 		return fmt.Errorf("branch required")
 	}
@@ -233,21 +240,34 @@ func promoteLocal(branch, sha string, force bool) error {
 		return fmt.Errorf("commit sha required")
 	}
 	ref := "refs/heads/" + strings.TrimSpace(branch)
-	if !force && gitutil.RefExists(ref) {
-		current, err := gitutil.ResolveRef(ref)
-		if err != nil {
-			return err
-		}
-		current = strings.TrimSpace(current)
-		if current != "" {
-			if _, err := gitutil.Git("merge-base", "--is-ancestor", current, sha); err != nil {
-				return fmt.Errorf("promote would not be fast-forward; use --force to override")
-			}
-		}
-	}
+	_ = noPolicy
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return err
+	}
+	remoteTip, remoteName, err := fetchPublishTip(branch)
+	if err != nil {
+		return err
+	}
+	localTip := ""
+	if gitutil.RefExists(ref) {
+		if current, err := gitutil.ResolveRef(ref); err == nil {
+			localTip = strings.TrimSpace(current)
+		}
+	}
+	guardTip := strings.TrimSpace(remoteTip)
+	if guardTip == "" {
+		guardTip = localTip
+	}
+	if guardTip != "" && !forceTarget {
+		if _, err := gitutil.Git("merge-base", "--is-ancestor", guardTip, sha); err != nil {
+			return fmt.Errorf("promote would not be fast-forward; use --force-target to override")
+		}
+	}
+	if remoteName != "" {
+		if err := pushPublish(remoteName, sha, branch, forceTarget); err != nil {
+			return err
+		}
 	}
 	if err := gitutil.UpdateRef(ref, sha); err != nil {
 		return err
@@ -256,6 +276,128 @@ func promoteLocal(branch, sha string, force bool) error {
 		return err
 	}
 	return startNewDraftAfterPromote(repoRoot, sha)
+}
+
+type stackWorkspace struct {
+	User string
+	Name string
+}
+
+func promoteWithStack(branch, targetSHA string, forceTarget, noPolicy bool) error {
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return err
+	}
+	user, workspace := workspaceParts()
+	stack, baseBranch, err := resolvePromoteStack(repoRoot, user, workspace)
+	if err != nil {
+		return err
+	}
+	if len(stack) == 1 {
+		sha := strings.TrimSpace(targetSHA)
+		if sha == "" {
+			if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
+				sha = checkpoint.SHA
+			} else if current, err := gitutil.CurrentCommit(); err == nil {
+				sha = current.SHA
+			}
+		}
+		if sha == "" {
+			return fmt.Errorf("failed to resolve commit to promote")
+		}
+		return promoteLocal(branch, sha, forceTarget, noPolicy)
+	}
+	if baseBranch != "" && strings.TrimSpace(branch) != strings.TrimSpace(baseBranch) {
+		return fmt.Errorf("stacked workspace targets %s; use --to %s", baseBranch, baseBranch)
+	}
+
+	originalEnv := os.Getenv(config.EnvWorkspace)
+	defer restoreWorkspaceEnv(originalEnv)
+
+	// Promote bottom-up (base workspace first).
+	for i := len(stack) - 1; i >= 0; i-- {
+		entry := stack[i]
+		wsID := entry.User + "/" + entry.Name
+		if err := withWorkspaceEnv(wsID); err != nil {
+			return err
+		}
+		sha := strings.TrimSpace(targetSHA)
+		if i != 0 || sha == "" {
+			sha = ""
+			if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
+				sha = checkpoint.SHA
+			}
+		}
+		if strings.TrimSpace(sha) == "" {
+			return fmt.Errorf("checkpoint required before promote for workspace %s", wsID)
+		}
+		if err := promoteLocal(branch, sha, forceTarget, noPolicy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func resolvePromoteStack(repoRoot, user, workspace string) ([]stackWorkspace, string, error) {
+	stack := []stackWorkspace{}
+	seen := map[string]bool{}
+	current := stackWorkspace{User: user, Name: workspace}
+	for {
+		key := current.User + "/" + current.Name
+		if seen[key] {
+			return nil, "", fmt.Errorf("workspace stack loop detected at %s", key)
+		}
+		seen[key] = true
+		stack = append(stack, current)
+
+		cfg, ok, err := wsconfig.ReadConfig(repoRoot, current.Name)
+		if err != nil {
+			return nil, "", err
+		}
+		if !ok || strings.TrimSpace(cfg.BaseRef) == "" {
+			return stack, "", nil
+		}
+		baseRef, err := normalizeBaseRef(repoRoot, cfg.BaseRef)
+		if err != nil {
+			return nil, "", err
+		}
+		if strings.HasPrefix(baseRef, "refs/jul/workspaces/") {
+			parentUser, parentWorkspace, ok := parseWorkspaceRef(baseRef)
+			if !ok {
+				return nil, "", fmt.Errorf("invalid workspace ref %s", baseRef)
+			}
+			current = stackWorkspace{User: parentUser, Name: parentWorkspace}
+			continue
+		}
+		if strings.HasPrefix(baseRef, "refs/heads/") {
+			return stack, strings.TrimPrefix(baseRef, "refs/heads/"), nil
+		}
+		return stack, baseRef, nil
+	}
+}
+
+func parseWorkspaceRef(ref string) (string, string, bool) {
+	const prefix = "refs/jul/workspaces/"
+	if !strings.HasPrefix(ref, prefix) {
+		return "", "", false
+	}
+	parts := strings.Split(strings.TrimPrefix(ref, prefix), "/")
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func withWorkspaceEnv(wsID string) error {
+	return os.Setenv(config.EnvWorkspace, wsID)
+}
+
+func restoreWorkspaceEnv(prev string) {
+	if strings.TrimSpace(prev) == "" {
+		_ = os.Unsetenv(config.EnvWorkspace)
+		return
+	}
+	_ = os.Setenv(config.EnvWorkspace, prev)
 }
 
 func recordPromoteMeta(branch, sha string) error {
@@ -325,10 +467,13 @@ func startNewDraftAfterPromote(repoRoot, publishedSHA string) error {
 	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
 		return err
 	}
-	if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+	if err := gitutil.UpdateRef(workspaceRef, publishedSHA); err != nil {
 		return err
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+	if err := writeWorkspaceLease(repoRoot, workspace, publishedSHA); err != nil {
+		return err
+	}
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), publishedSHA); err != nil {
 		return err
 	}
 	if _, err := gitutil.Git("read-tree", "--reset", "-u", newDraftSHA); err != nil {
@@ -338,6 +483,46 @@ func startNewDraftAfterPromote(repoRoot, publishedSHA string) error {
 		return err
 	}
 	return nil
+}
+
+func fetchPublishTip(branch string) (string, string, error) {
+	remote, err := remotesel.Resolve()
+	if err != nil {
+		switch err {
+		case remotesel.ErrNoRemote, remotesel.ErrRemoteMissing:
+			return "", "", nil
+		default:
+			return "", "", err
+		}
+	}
+	if strings.TrimSpace(remote.Name) == "" {
+		return "", "", nil
+	}
+	ref := "refs/heads/" + strings.TrimSpace(branch)
+	out, err := gitutil.Git("ls-remote", remote.Name, ref)
+	if err != nil {
+		return "", "", err
+	}
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) == 0 {
+		return "", remote.Name, nil
+	}
+	return strings.TrimSpace(fields[0]), remote.Name, nil
+}
+
+func pushPublish(remoteName, sha, branch string, forceTarget bool) error {
+	if strings.TrimSpace(remoteName) == "" {
+		return nil
+	}
+	ref := "refs/heads/" + strings.TrimSpace(branch)
+	spec := fmt.Sprintf("%s:%s", strings.TrimSpace(sha), ref)
+	args := []string{"push"}
+	if forceTarget {
+		args = append(args, "--force")
+	}
+	args = append(args, remoteName, spec)
+	_, err := gitutil.Git(args...)
+	return err
 }
 
 func changeIDForCommit(sha string) string {

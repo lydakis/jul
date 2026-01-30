@@ -13,6 +13,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/syncer"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func newWorkspaceCommand() Command {
@@ -39,6 +40,8 @@ func newWorkspaceCommand() Command {
 				return runWorkspaceSwitch(args[1:])
 			case "stack":
 				return runWorkspaceStack(args[1:])
+			case "restack":
+				return runWorkspaceRestack(args[1:])
 			case "rename":
 				return runWorkspaceRename(args[1:])
 			case "delete":
@@ -136,7 +139,13 @@ func runWorkspaceNew(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to snapshot working tree: %v\n", err)
 		return 1
 	}
-	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, baseSHA, treeSHA)
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to locate repo root: %v\n", err)
+		return 1
+	}
+	baseRef := detectBaseRef(repoRoot)
+	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, baseRef, baseSHA, treeSHA)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create workspace: %v\n", err)
 		return 1
@@ -235,7 +244,8 @@ func runWorkspaceStack(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to read checkpoint tree: %v\n", err)
 		return 1
 	}
-	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, checkpoint.SHA, treeSHA)
+	parentRef := workspaceRef(currentUser, currentName)
+	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, parentRef, checkpoint.SHA, treeSHA)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create stacked workspace: %v\n", err)
 		return 1
@@ -346,6 +356,10 @@ func runWorkspaceCheckout(args []string) int {
 	}
 	if err := writeWorkspaceLease(repoRoot, targetName, sha); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to update workspace lease: %v\n", err)
+		return 1
+	}
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(targetName), sha); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update workspace head: %v\n", err)
 		return 1
 	}
 
@@ -484,7 +498,41 @@ func switchToWorkspaceLocal(user, workspace string) error {
 	}
 	ref := workspaceRef(user, workspace)
 	if !gitutil.RefExists(ref) {
-		return fmt.Errorf("workspace ref not found: %s", ref)
+		if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err == nil && ok {
+			baseSHA := strings.TrimSpace(cfg.BaseSHA)
+			if baseSHA == "" {
+				if head, err := gitutil.Git("-C", repoRoot, "rev-parse", "HEAD"); err == nil {
+					baseSHA = strings.TrimSpace(head)
+				}
+			}
+			if baseSHA == "" {
+				if workspace == "@" {
+					if head, err := gitutil.Git("-C", repoRoot, "rev-parse", "HEAD"); err == nil && strings.TrimSpace(head) != "" {
+						baseSHA = strings.TrimSpace(head)
+					}
+				}
+				if baseSHA == "" {
+					return fmt.Errorf("workspace ref not found: %s", ref)
+				}
+			}
+			if err := gitutil.UpdateRef(ref, baseSHA); err != nil {
+				return fmt.Errorf("workspace ref not found: %s", ref)
+			}
+		} else {
+			if workspace == "@" {
+				if head, err := gitutil.Git("-C", repoRoot, "rev-parse", "HEAD"); err == nil && strings.TrimSpace(head) != "" {
+					if err := gitutil.UpdateRef(ref, strings.TrimSpace(head)); err == nil {
+						// ref restored from HEAD
+					} else {
+						return fmt.Errorf("workspace ref not found: %s", ref)
+					}
+				} else {
+					return fmt.Errorf("workspace ref not found: %s", ref)
+				}
+			} else {
+				return fmt.Errorf("workspace ref not found: %s", ref)
+			}
+		}
 	}
 	sha, err := gitutil.ResolveRef(ref)
 	if err != nil {
@@ -493,26 +541,46 @@ func switchToWorkspaceLocal(user, workspace string) error {
 	if err := resetToDraft(sha); err != nil {
 		return err
 	}
-	syncRef, err := syncRef(user, workspace)
-	if err != nil {
-		return err
-	}
-	if err := gitutil.UpdateRef(syncRef, sha); err != nil {
-		return err
-	}
-	if err := writeWorkspaceLease(repoRoot, workspace, sha); err != nil {
-		return err
-	}
 	if err := localRestore(workspace); err != nil {
 		if !strings.Contains(err.Error(), "local state not found") {
 			return err
 		}
 	}
+	syncRef, err := syncRef(user, workspace)
+	if err != nil {
+		return err
+	}
+	changeID := ""
+	if msg, err := gitutil.CommitMessage(sha); err == nil {
+		changeID = gitutil.ExtractChangeID(msg)
+	}
+	if changeID == "" {
+		if generated, err := gitutil.NewChangeID(); err == nil {
+			changeID = generated
+		}
+	}
+	treeSHA, err := gitutil.DraftTree()
+	if err != nil {
+		return err
+	}
+	draftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, sha, changeID)
+	if err != nil {
+		return err
+	}
+	if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
+		return err
+	}
+	if err := writeWorkspaceLease(repoRoot, workspace, sha); err != nil {
+		return err
+	}
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), sha); err != nil {
+		return err
+	}
 	return nil
 }
 
-func createWorkspaceDraft(user, workspace, parentSHA, treeSHA string) (string, error) {
-	if strings.TrimSpace(parentSHA) == "" {
+func createWorkspaceDraft(user, workspace, baseRef, baseSHA, treeSHA string) (string, error) {
+	if strings.TrimSpace(baseSHA) == "" {
 		return "", fmt.Errorf("base commit required")
 	}
 	if strings.TrimSpace(treeSHA) == "" {
@@ -538,17 +606,23 @@ func createWorkspaceDraft(user, workspace, parentSHA, treeSHA string) (string, e
 	if err != nil {
 		return "", err
 	}
-	draftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, parentSHA, changeID)
+	draftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, baseSHA, changeID)
 	if err != nil {
 		return "", err
 	}
 	if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
 		return "", err
 	}
-	if err := gitutil.UpdateRef(workspaceRef, draftSHA); err != nil {
+	if err := gitutil.UpdateRef(workspaceRef, baseSHA); err != nil {
 		return "", err
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
+	if err := writeWorkspaceLease(repoRoot, workspace, baseSHA); err != nil {
+		return "", err
+	}
+	if err := ensureWorkspaceConfig(repoRoot, workspace, baseRef, baseSHA); err != nil {
+		return "", err
+	}
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), baseSHA); err != nil {
 		return "", err
 	}
 	return draftSHA, nil
@@ -558,13 +632,11 @@ func resetToDraft(draftSHA string) error {
 	if strings.TrimSpace(draftSHA) == "" {
 		return fmt.Errorf("draft sha required")
 	}
-	if _, err := gitutil.Git("reset", "--hard", draftSHA); err != nil {
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
 		return err
 	}
-	if _, err := gitutil.Git("clean", "-fd", "--exclude=.jul"); err != nil {
-		return err
-	}
-	return nil
+	return updateWorktreeLocal(repoRoot, draftSHA)
 }
 
 func localWorkspaces() ([]client.Workspace, error) {
@@ -657,5 +729,5 @@ func runGitConfig(key, value string) error {
 }
 
 func printWorkspaceUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|checkout|set|new|stack|switch|rename|delete|current]")
+	fmt.Fprintln(os.Stdout, "Usage: jul ws [list|checkout|set|new|stack|restack|switch|rename|delete|current]")
 }

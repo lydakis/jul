@@ -98,10 +98,10 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 		return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
 	}
 
-	mergeBase, err := gitutil.MergeBase(oursSHA, theirsSHA)
-	if err != nil || strings.TrimSpace(mergeBase) == "" {
-		return output.MergeOutput{}, fmt.Errorf("failed to resolve merge base")
-	}
+		mergeBase, err := gitutil.MergeBase(oursSHA, theirsSHA)
+		if err != nil || strings.TrimSpace(mergeBase) == "" {
+			return output.MergeOutput{}, fmt.Errorf("failed to resolve merge base")
+		}
 
 	if draftParentMismatch(oursSHA, mergeBase) {
 		return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
@@ -128,6 +128,11 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 		return output.MergeOutput{}, fmt.Errorf("merge failed: %s", strings.TrimSpace(mergeOutput))
 	}
 
+	baseTarget := strings.TrimSpace(mergeBase)
+	theirsMsg, _ := gitutil.CommitMessage(theirsSHA)
+	if !isDraftMessage(theirsMsg) {
+		baseTarget = strings.TrimSpace(theirsSHA)
+	}
 	changeID := changeIDFromCommit(mergeBase)
 	if len(conflicts) > 0 {
 		diff, _ := gitOutputDir(worktree, "diff")
@@ -203,7 +208,7 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 	}
 
 	if apply {
-		if err := acceptMergeResolution(repoRoot, workspace, workspaceRef, syncRef, mergedDraftSHA, theirsSHA, remoteName); err != nil {
+		if err := acceptMergeResolution(repoRoot, workspace, workspaceRef, syncRef, mergedDraftSHA, baseTarget, theirsSHA, remoteName); err != nil {
 			return out, err
 		}
 		_, _ = metadata.UpdateSuggestionStatus(suggestion.SuggestionID, "applied", "merge accepted")
@@ -277,17 +282,19 @@ func mergeConflictDetails(worktree string, files []string) []agent.ReviewFile {
 	return details
 }
 
-func acceptMergeResolution(repoRoot, workspace, workspaceRef, syncRef, mergedSHA, oldWorkspace, remoteName string) error {
+func acceptMergeResolution(repoRoot, workspace, workspaceRef, syncRef, mergedSHA, baseSHA, oldWorkspace, remoteName string) error {
 	if err := gitutil.UpdateRef(syncRef, mergedSHA); err != nil {
 		return err
 	}
-	if err := gitutil.UpdateRef(workspaceRef, mergedSHA); err != nil {
-		return err
+	if strings.TrimSpace(baseSHA) != "" {
+		if err := gitutil.UpdateRef(workspaceRef, baseSHA); err != nil {
+			return err
+		}
+		if err := writeWorkspaceLease(repoRoot, workspace, baseSHA); err != nil {
+			return err
+		}
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, mergedSHA); err != nil {
-		return err
-	}
-	if err := updateWorktreeTo(repoRoot, mergedSHA); err != nil {
+	if err := updateWorktreeLocal(repoRoot, mergedSHA); err != nil {
 		return err
 	}
 	if strings.TrimSpace(remoteName) == "" {
@@ -296,20 +303,12 @@ func acceptMergeResolution(repoRoot, workspace, workspaceRef, syncRef, mergedSHA
 	if err := pushRef(remoteName, mergedSHA, syncRef, true); err != nil {
 		return err
 	}
-	if err := pushWorkspace(remoteName, mergedSHA, workspaceRef, oldWorkspace); err != nil {
-		return err
+	if strings.TrimSpace(baseSHA) != "" {
+		if err := pushWorkspace(remoteName, baseSHA, workspaceRef, oldWorkspace); err != nil {
+			return err
+		}
 	}
 	return nil
-}
-
-func updateWorktreeTo(repoRoot, ref string) error {
-	if strings.TrimSpace(ref) == "" {
-		return fmt.Errorf("ref required for worktree update")
-	}
-	if err := gitDir(repoRoot, nil, "checkout", "--force", ref, "--"); err != nil {
-		return err
-	}
-	return gitDir(repoRoot, nil, "clean", "-fd")
 }
 
 func gitOutputDirAllowErr(dir string, args ...string) (string, error) {

@@ -11,6 +11,8 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
+	"github.com/lydakis/jul/cli/internal/restack"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 type Result struct {
@@ -18,6 +20,8 @@ type Result struct {
 	WorkspaceRef     string
 	SyncRef          string
 	WorkspaceUpdated bool
+	BaseAdvanced     bool
+	FastForwarded    bool
 	RemoteName       string
 	RemotePushed     bool
 	Diverged         bool
@@ -58,33 +62,15 @@ func Sync() (Result, error) {
 	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
 	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
 
-	parentSHA, changeID := resolveDraftBase(workspaceRef, syncRef)
-	treeSHA, err := gitutil.DraftTree()
-	if err != nil {
-		return Result{}, err
-	}
-	existingDraft := resolveExistingDraft(syncRef, workspaceRef)
-	draftSHA, err := reuseOrCreateDraft(treeSHA, parentSHA, changeID, existingDraft)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
-		return Result{}, err
-	}
-
 	res := Result{
-		DraftSHA:     draftSHA,
 		WorkspaceRef: workspaceRef,
 		SyncRef:      syncRef,
 	}
 
+	workspaceTip := ""
 	remote, rerr := remotesel.Resolve()
 	if rerr == nil {
 		res.RemoteName = remote.Name
-		if err := pushRef(remote.Name, draftSHA, syncRef, true); err != nil {
-			return res, err
-		}
-		res.RemotePushed = true
 	} else {
 		switch rerr {
 		case remotesel.ErrNoRemote:
@@ -98,77 +84,162 @@ func Sync() (Result, error) {
 		}
 	}
 
-	workspaceRemote := ""
 	if rerr == nil {
 		_ = fetchRef(remote.Name, workspaceRef)
 		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
-			workspaceRemote = sha
+			workspaceTip = strings.TrimSpace(sha)
+		}
+	} else if gitutil.RefExists(workspaceRef) {
+		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
+			workspaceTip = strings.TrimSpace(sha)
 		}
 	}
 
 	baseSHA, _ := readWorkspaceLease(repoRoot, workspace)
-	if baseSHA == "" && workspaceRemote != "" {
+	leaseBase := strings.TrimSpace(baseSHA)
+	if leaseBase != "" {
+		if msg, err := gitutil.CommitMessage(leaseBase); err == nil && isDraftMessage(msg) {
+			if parent, err := gitutil.ParentOf(leaseBase); err == nil && strings.TrimSpace(parent) != "" {
+				leaseBase = strings.TrimSpace(parent)
+			}
+		}
+	}
+	workspaceBase := strings.TrimSpace(workspaceTip)
+	if workspaceBase != "" {
+		if msg, err := gitutil.CommitMessage(workspaceBase); err == nil && isDraftMessage(msg) {
+			if parent, err := gitutil.ParentOf(workspaceBase); err == nil && strings.TrimSpace(parent) != "" {
+				workspaceBase = strings.TrimSpace(parent)
+			}
+		}
+	}
+
+	if leaseBase == "" && workspaceBase != "" {
 		res.Diverged = true
 		res.RemoteProblem = "workspace lease missing; run 'jul ws checkout' first"
-		return finalizeSync(res, false)
 	}
-	if workspaceRemote != "" && baseSHA != "" && workspaceRemote != baseSHA {
-		localBase, _ := gitutil.ParentOf(draftSHA)
-		remoteBase, _ := gitutil.ParentOf(workspaceRemote)
-		localBase = strings.TrimSpace(localBase)
-		remoteBase = strings.TrimSpace(remoteBase)
-		if localBase != "" && remoteBase != "" && localBase != remoteBase {
+	if leaseBase != "" && workspaceBase != "" && leaseBase != workspaceBase {
+		if !gitutil.IsAncestor(leaseBase, workspaceBase) {
 			res.Diverged = true
-			res.RemoteProblem = "base divergence; run 'jul merge' or 'jul ws checkout' to realign"
-			return finalizeSync(res, false)
+			res.RemoteProblem = "workspace lease corrupted; run 'jul ws checkout' to realign"
 		}
-		mergedSHA, merged, err := autoMerge(repoRoot, workspaceRemote, draftSHA, changeID)
+	}
+
+	existingDraft := resolveExistingDraft(syncRef, workspaceRef)
+	localBase := ""
+	if existingDraft != "" {
+		if msg, err := gitutil.CommitMessage(existingDraft); err == nil && isDraftMessage(msg) {
+			if parent, err := gitutil.ParentOf(existingDraft); err == nil && strings.TrimSpace(parent) != "" {
+				localBase = strings.TrimSpace(parent)
+			}
+		}
+	}
+	if localBase == "" {
+		localBase = leaseBase
+	}
+
+	if !res.Diverged && workspaceTip != "" && localBase != "" && strings.TrimSpace(localBase) != strings.TrimSpace(workspaceTip) {
+		res.BaseAdvanced = true
+	}
+
+	parentSHA, changeID := resolveDraftBase(workspaceRef, syncRef)
+	if localBase != "" {
+		parentSHA = localBase
+	} else if leaseBase != "" {
+		parentSHA = leaseBase
+	}
+	if strings.TrimSpace(parentSHA) == "" {
+		if workspaceTip != "" {
+			parentSHA = strings.TrimSpace(workspaceTip)
+		} else if head, err := gitutil.ResolveRef("HEAD"); err == nil {
+			parentSHA = strings.TrimSpace(head)
+		}
+	}
+	if changeID == "" {
+		if parentSHA != "" {
+			if msg, err := gitutil.CommitMessage(parentSHA); err == nil {
+				changeID = gitutil.ExtractChangeID(msg)
+			}
+		}
+	}
+	treeSHA, err := gitutil.DraftTree()
+	if err != nil {
+		return Result{}, err
+	}
+
+	if res.BaseAdvanced && !res.Diverged && workspaceTip != "" && parentSHA != "" {
+		baseTree, err := gitutil.TreeOf(parentSHA)
+		if err == nil && baseTree == treeSHA {
+			if err := updateWorktree(repoRoot, workspaceTip); err != nil {
+				return res, err
+			}
+			if err := writeWorkspaceLease(repoRoot, workspace, workspaceTip); err != nil {
+				return res, err
+			}
+			res.FastForwarded = true
+			res.BaseAdvanced = false
+			parentSHA = strings.TrimSpace(workspaceTip)
+			treeSHA, err = gitutil.DraftTree()
+			if err != nil {
+				return res, err
+			}
+		}
+	}
+
+	if res.BaseAdvanced && !res.Diverged && config.SyncAutoRestack() && workspaceTip != "" {
+		cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace)
 		if err != nil {
 			return res, err
 		}
-		if !merged {
-			res.Diverged = true
-			return finalizeSync(res, false)
-		}
-		if err := gitutil.UpdateRef(syncRef, mergedSHA); err != nil {
-			return res, err
-		}
-		if err := gitutil.UpdateRef(workspaceRef, mergedSHA); err != nil {
-			return res, err
-		}
-		if err := updateWorktree(repoRoot, mergedSHA); err != nil {
-			return res, err
-		}
-		if err := writeWorkspaceLease(repoRoot, workspace, mergedSHA); err != nil {
-			return res, err
-		}
-		res.DraftSHA = mergedSHA
-		res.WorkspaceUpdated = true
-		res.AutoMerged = true
-		if rerr == nil {
-			if err := pushRef(remote.Name, mergedSHA, syncRef, true); err != nil {
-				return res, err
+		baseRef := strings.TrimSpace(cfg.BaseRef)
+		if !ok || baseRef == "" {
+			res.RemoteProblem = "base advanced; run 'jul ws restack' to update"
+		} else {
+			restackRes, err := restack.Run(restack.Options{
+				RepoRoot:  repoRoot,
+				User:      user,
+				Workspace: workspace,
+				BaseRef:   baseRef,
+				BaseTip:   strings.TrimSpace(workspaceTip),
+				BaseSHA:   strings.TrimSpace(cfg.BaseSHA),
+			})
+			if err != nil {
+				res.Diverged = true
+				res.RemoteProblem = "restack conflict; run 'jul merge' to resolve"
+				return res, nil
 			}
-			if err := pushWorkspace(remote.Name, mergedSHA, workspaceRef, workspaceRemote); err != nil {
-				return res, err
+			res.DraftSHA = restackRes.NewDraftSHA
+			res.WorkspaceUpdated = true
+			res.BaseAdvanced = false
+			workspaceTip = restackRes.NewParentSHA
+			parentSHA = restackRes.NewParentSHA
+			existingDraft = restackRes.NewDraftSHA
+			if restackRes.NewDraftSHA != "" {
+				if tree, err := gitutil.TreeOf(restackRes.NewDraftSHA); err == nil {
+					treeSHA = strings.TrimSpace(tree)
+				}
 			}
 		}
-		return finalizeSync(res, true)
 	}
 
-	if err := gitutil.UpdateRef(workspaceRef, draftSHA); err != nil {
-		return res, err
+	if res.DraftSHA == "" {
+		draftSHA, err := reuseOrCreateDraft(treeSHA, parentSHA, changeID, existingDraft)
+		if err != nil {
+			return Result{}, err
+		}
+		res.DraftSHA = draftSHA
 	}
-	res.WorkspaceUpdated = true
+	if err := gitutil.UpdateRef(syncRef, res.DraftSHA); err != nil {
+		return Result{}, err
+	}
+
 	if rerr == nil {
-		if err := pushWorkspace(remote.Name, draftSHA, workspaceRef, workspaceRemote); err != nil {
+		if err := pushRef(remote.Name, res.DraftSHA, syncRef, true); err != nil {
 			return res, err
 		}
+		res.RemotePushed = true
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, draftSHA); err != nil {
-		return res, err
-	}
-	return finalizeSync(res, true)
+
+	return finalizeSync(res, !res.Diverged)
 }
 
 func finalizeSync(res Result, allowCanonical bool) (Result, error) {
@@ -281,11 +352,14 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	}
 
 	if !syncRes.Diverged {
-		if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+		if err := gitutil.UpdateRef(workspaceRef, checkpointSHA); err != nil {
 			return res, err
 		}
 		res.WorkspaceUpdated = true
-		if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+		if err := writeWorkspaceLease(repoRoot, workspace, checkpointSHA); err != nil {
+			return res, err
+		}
+		if err := ensureWorkspaceHead(repoRoot, workspace, checkpointSHA); err != nil {
 			return res, err
 		}
 	}
@@ -301,7 +375,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		}
 		res.RemotePushed = true
 		if res.WorkspaceUpdated {
-			if err := pushWorkspace(syncRes.RemoteName, newDraftSHA, workspaceRef, workspaceRemote); err != nil {
+			if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err
 			}
 		}
@@ -393,11 +467,14 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 	}
 
 	if !syncRes.Diverged {
-		if err := gitutil.UpdateRef(workspaceRef, newDraftSHA); err != nil {
+		if err := gitutil.UpdateRef(workspaceRef, headSHA); err != nil {
 			return res, err
 		}
 		res.WorkspaceUpdated = true
-		if err := writeWorkspaceLease(repoRoot, workspace, newDraftSHA); err != nil {
+		if err := writeWorkspaceLease(repoRoot, workspace, headSHA); err != nil {
+			return res, err
+		}
+		if err := ensureWorkspaceHead(repoRoot, workspace, headSHA); err != nil {
 			return res, err
 		}
 	}
@@ -413,7 +490,7 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		}
 		res.RemotePushed = true
 		if res.WorkspaceUpdated {
-			if err := pushWorkspace(syncRes.RemoteName, newDraftSHA, workspaceRef, workspaceRemote); err != nil {
+			if err := pushWorkspace(syncRes.RemoteName, headSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err
 			}
 		}
@@ -491,11 +568,6 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 func resolveExistingDraft(syncRef, workspaceRef string) string {
 	if gitutil.RefExists(syncRef) {
 		if sha, err := gitutil.ResolveRef(syncRef); err == nil {
-			return sha
-		}
-	}
-	if gitutil.RefExists(workspaceRef) {
-		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
 			return sha
 		}
 	}
@@ -621,10 +693,10 @@ func updateWorktree(repoRoot, ref string) error {
 	if strings.TrimSpace(ref) == "" {
 		return fmt.Errorf("ref required for worktree update")
 	}
-	if _, err := gitWithEnv(repoRoot, nil, "checkout", "--force", ref, "--"); err != nil {
+	if _, err := gitWithEnv(repoRoot, nil, "read-tree", "--reset", "-u", ref); err != nil {
 		return err
 	}
-	_, err := gitWithEnv(repoRoot, nil, "clean", "-fd")
+	_, err := gitWithEnv(repoRoot, nil, "clean", "-fd", "--exclude=.jul")
 	return err
 }
 
@@ -686,4 +758,9 @@ func writeWorkspaceLease(repoRoot, workspace, sha string) error {
 
 func workspaceLeasePath(repoRoot, workspace string) string {
 	return filepath.Join(repoRoot, ".jul", "workspaces", workspace, "lease")
+}
+
+func ensureWorkspaceHead(repoRoot, workspace, sha string) error {
+	ref := fmt.Sprintf("refs/heads/jul/%s", workspace)
+	return gitutil.EnsureHeadRef(repoRoot, ref, sha)
 }

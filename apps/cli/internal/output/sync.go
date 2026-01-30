@@ -19,23 +19,21 @@ func RenderSync(w io.Writer, res syncer.Result, opts Options) {
 	}
 	fmt.Fprintf(w, "  %sDraft committed (%s)\n", ok, res.DraftSHA)
 	if res.RemoteName == "" {
-		fmt.Fprintf(w, "  %sWorkspace ref updated (local)\n", ok)
 		if res.RemoteProblem != "" {
 			fmt.Fprintf(w, "  (%s)\n", res.RemoteProblem)
 		} else {
 			fmt.Fprintln(w, "  (No remote configured)")
 		}
-		return
+	} else {
+		fmt.Fprintf(w, "  %sSync ref pushed (%s)\n", ok, res.SyncRef)
 	}
-	fmt.Fprintf(w, "  %sSync ref pushed (%s)\n", ok, res.SyncRef)
+	if res.FastForwarded {
+		fmt.Fprintf(w, "  %sBase fast-forwarded (clean)\n", ok)
+	}
+	if res.BaseAdvanced {
+		fmt.Fprintf(w, "  %sBase advanced — run 'jul ws restack' when ready\n", warn)
+	}
 	if res.Diverged {
-		fmt.Fprintf(w, "  %sWorkspace diverged — run 'jul merge' when ready\n", warn)
-		return
-	}
-	if res.AutoMerged {
-		fmt.Fprintf(w, "  %sAuto-merged (no conflicts)\n", ok)
-	}
-	if res.WorkspaceUpdated {
-		fmt.Fprintf(w, "  %sWorkspace ref updated\n", ok)
+		fmt.Fprintf(w, "  %sWorkspace lease mismatch — run 'jul ws checkout'\n", warn)
 	}
 }
