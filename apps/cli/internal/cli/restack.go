@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -66,6 +67,18 @@ func runWorkspaceRestack(args []string) int {
 		BaseTip:   baseTip,
 	})
 	if err != nil {
+		var conflict restack.ConflictError
+		if errors.As(err, &conflict) {
+			fmt.Fprintf(os.Stderr, "Restack conflict on checkpoint %s\n", strings.TrimSpace(conflict.CheckpointSHA))
+			if len(conflict.Conflicts) > 0 {
+				fmt.Fprintln(os.Stderr, "Conflicts in:")
+				for _, file := range conflict.Conflicts {
+					fmt.Fprintf(os.Stderr, "  - %s\n", file)
+				}
+			}
+			fmt.Fprintln(os.Stderr, "Run 'jul merge' to resolve.")
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "restack failed: %v\n", err)
 		return 1
 	}

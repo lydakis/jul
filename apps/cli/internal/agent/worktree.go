@@ -17,6 +17,9 @@ func EnsureWorktree(repoRoot, baseSHA string) (string, error) {
 	}
 
 	if _, err := os.Stat(worktree); err == nil {
+		if MergeInProgress(worktree) {
+			return worktree, nil
+		}
 		if err := resetWorktree(worktree, baseSHA); err == nil {
 			return worktree, nil
 		}
@@ -30,6 +33,14 @@ func EnsureWorktree(repoRoot, baseSHA string) (string, error) {
 		return "", err
 	}
 	return worktree, nil
+}
+
+func MergeInProgress(worktree string) bool {
+	cmd := exec.Command("git", "-C", worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return true
 }
 
 func addWorktree(repoRoot, worktree, baseSHA string) error {

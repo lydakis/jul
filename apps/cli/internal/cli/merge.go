@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -31,6 +32,17 @@ func newMergeCommand() Command {
 
 			res, err := runMerge(*autoApply)
 			if err != nil {
+				var conflictErr MergeConflictError
+				if errors.As(err, &conflictErr) {
+					output.RenderMerge(os.Stdout, res.Merge)
+					if strings.TrimSpace(conflictErr.Reason) != "" {
+						fmt.Fprintln(os.Stdout, conflictErr.Reason)
+					}
+					if strings.TrimSpace(conflictErr.Worktree) != "" {
+						fmt.Fprintf(os.Stdout, "Resolve conflicts in %s and rerun 'jul merge'.\n", conflictErr.Worktree)
+					}
+					return 1
+				}
 				fmt.Fprintf(os.Stderr, "merge failed: %v\n", err)
 				return 1
 			}
@@ -98,10 +110,10 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 		return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
 	}
 
-		mergeBase, err := gitutil.MergeBase(oursSHA, theirsSHA)
-		if err != nil || strings.TrimSpace(mergeBase) == "" {
-			return output.MergeOutput{}, fmt.Errorf("failed to resolve merge base")
-		}
+	mergeBase, err := gitutil.MergeBase(oursSHA, theirsSHA)
+	if err != nil || strings.TrimSpace(mergeBase) == "" {
+		return output.MergeOutput{}, fmt.Errorf("failed to resolve merge base")
+	}
 
 	if draftParentMismatch(oursSHA, mergeBase) {
 		return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
@@ -114,18 +126,27 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 	if err != nil {
 		return output.MergeOutput{}, err
 	}
-	_ = gitDir(worktree, nil, "merge", "--abort")
-	if err := gitDir(worktree, nil, "reset", "--hard", oursSHA); err != nil {
-		return output.MergeOutput{}, err
-	}
-	if err := gitDir(worktree, nil, "clean", "-fd"); err != nil {
-		return output.MergeOutput{}, err
+	mergeInProgress := agent.MergeInProgress(worktree)
+	if !mergeInProgress {
+		_ = gitDir(worktree, nil, "merge", "--abort")
+		if err := gitDir(worktree, nil, "reset", "--hard", oursSHA); err != nil {
+			return output.MergeOutput{}, err
+		}
+		if err := gitDir(worktree, nil, "clean", "-fd"); err != nil {
+			return output.MergeOutput{}, err
+		}
+
+		mergeOutput, mergeErr := gitOutputDirAllowErr(worktree, "merge", "--no-commit", "--no-ff", theirsSHA)
+		conflicts := mergeConflictFiles(worktree)
+		if mergeErr != nil && len(conflicts) == 0 {
+			return output.MergeOutput{}, fmt.Errorf("merge failed: %s", strings.TrimSpace(mergeOutput))
+		}
 	}
 
-	mergeOutput, mergeErr := gitOutputDirAllowErr(worktree, "merge", "--no-commit", "--no-ff", theirsSHA)
 	conflicts := mergeConflictFiles(worktree)
-	if mergeErr != nil && len(conflicts) == 0 {
-		return output.MergeOutput{}, fmt.Errorf("merge failed: %s", strings.TrimSpace(mergeOutput))
+	if mergeInProgress && len(conflicts) > 0 {
+		out := output.MergeOutput{Merge: output.MergeSummary{Status: "conflicts", Conflicts: conflicts}}
+		return out, MergeConflictError{Worktree: worktree, Conflicts: conflicts}
 	}
 
 	baseTarget := strings.TrimSpace(mergeBase)
@@ -151,6 +172,14 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 		}
 		provider, err := agent.ResolveProvider()
 		if err != nil {
+			if errors.Is(err, agent.ErrAgentNotConfigured) || errors.Is(err, agent.ErrBundledMissing) {
+				out := output.MergeOutput{Merge: output.MergeSummary{Status: "conflicts", Conflicts: conflicts}}
+				return out, MergeConflictError{
+					Worktree:  worktree,
+					Conflicts: conflicts,
+					Reason:    "Agent not available; resolve conflicts manually.",
+				}
+			}
 			return output.MergeOutput{}, err
 		}
 		if _, err := agent.RunReview(context.Background(), provider, req); err != nil {
@@ -162,7 +191,8 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 		return output.MergeOutput{}, err
 	}
 	if unresolved := mergeConflictFiles(worktree); len(unresolved) > 0 {
-		return output.MergeOutput{Merge: output.MergeSummary{Status: "conflicts", Conflicts: unresolved}}, fmt.Errorf("conflicts remain after merge")
+		out := output.MergeOutput{Merge: output.MergeSummary{Status: "conflicts", Conflicts: unresolved}}
+		return out, MergeConflictError{Worktree: worktree, Conflicts: unresolved}
 	}
 	treeSHA, err := gitOutputDir(worktree, "write-tree")
 	if err != nil {
@@ -264,6 +294,19 @@ func mergeConflictFiles(worktree string) []string {
 		conflicts = append(conflicts, line)
 	}
 	return conflicts
+}
+
+type MergeConflictError struct {
+	Worktree  string
+	Conflicts []string
+	Reason    string
+}
+
+func (e MergeConflictError) Error() string {
+	if strings.TrimSpace(e.Reason) != "" {
+		return e.Reason
+	}
+	return "conflicts detected"
 }
 
 func mergeConflictDetails(worktree string, files []string) []agent.ReviewFile {

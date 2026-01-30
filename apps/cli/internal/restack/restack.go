@@ -117,8 +117,9 @@ func Run(opts Options) (Result, error) {
 			if isEmptyCherryPick(err) {
 				_, _ = gitDir(worktree, nil, "cherry-pick", "--skip")
 			} else {
+				conflicts := restackConflictFiles(worktree)
 				_, _ = gitDir(worktree, nil, "cherry-pick", "--abort")
-				return Result{}, fmt.Errorf("restack conflict; run 'jul merge' to resolve (%v)", err)
+				return Result{}, ConflictError{CheckpointSHA: oldSHA, Conflicts: conflicts}
 			}
 		}
 		treeSHA, err := gitOutputDir(worktree, "write-tree")
@@ -438,4 +439,30 @@ func isEmptyCherryPick(err error) bool {
 		return true
 	}
 	return false
+}
+
+type ConflictError struct {
+	CheckpointSHA string
+	Conflicts     []string
+}
+
+func (e ConflictError) Error() string {
+	return "restack conflict"
+}
+
+func restackConflictFiles(worktree string) []string {
+	out, err := gitDir(worktree, nil, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	conflicts := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		conflicts = append(conflicts, line)
+	}
+	return conflicts
 }
