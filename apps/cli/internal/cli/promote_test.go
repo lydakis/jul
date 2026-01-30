@@ -9,6 +9,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
 func TestPromoteRecordsChangeMeta(t *testing.T) {
@@ -125,6 +126,62 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 
 	if strings.TrimSpace(draftSHA) == sha {
 		t.Fatalf("expected new draft sha to differ from promoted sha")
+	}
+}
+
+func TestPromoteAutoLandsStack(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	writeFilePath(t, repo, "base.txt", "base\n")
+	runGitCmd(t, repo, "add", "base.txt")
+	runGitCmd(t, repo, "commit", "-m", "base")
+	runGitCmd(t, repo, "branch", "-M", "main")
+	runGitCmd(t, repo, "config", "jul.workspace", "tester/@")
+
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	if code := runInit([]string{"demo"}); code != 0 {
+		t.Fatalf("init failed with %d", code)
+	}
+	if code := runWorkspaceNew([]string{"parent"}); code != 0 {
+		t.Fatalf("ws new failed with %d", code)
+	}
+	writeFilePath(t, repo, "parent.txt", "parent\n")
+	parentCheckpoint, err := syncer.Checkpoint("")
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if parentCheckpoint.CheckpointSHA == "" {
+		t.Fatalf("expected parent checkpoint sha")
+	}
+
+	if code := runWorkspaceStack([]string{"child"}); code != 0 {
+		t.Fatalf("ws stack failed with %d", code)
+	}
+	writeFilePath(t, repo, "child.txt", "child\n")
+	childCheckpoint, err := syncer.Checkpoint("")
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if childCheckpoint.CheckpointSHA == "" {
+		t.Fatalf("expected child checkpoint sha")
+	}
+
+	if err := promoteWithStack("main", "", false, false); err != nil {
+		t.Fatalf("stack promote failed: %v", err)
+	}
+
+	tip := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "refs/heads/main"))
+	if tip != strings.TrimSpace(childCheckpoint.CheckpointSHA) {
+		t.Fatalf("expected main to be %s, got %s", childCheckpoint.CheckpointSHA, tip)
 	}
 }
 
