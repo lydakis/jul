@@ -22,6 +22,7 @@ type Options struct {
 	Workspace string
 	BaseRef   string
 	BaseTip   string
+	BaseSHA   string
 }
 
 type Result struct {
@@ -200,9 +201,13 @@ func Run(opts Options) (Result, error) {
 	if err := ensureWorkspaceHead(repoRoot, workspace, newParent); err != nil {
 		return Result{}, err
 	}
+	baseSHA := strings.TrimSpace(opts.BaseSHA)
+	if baseSHA == "" {
+		baseSHA = baseTip
+	}
 	if err := wsconfig.WriteConfig(repoRoot, workspace, wsconfig.Config{
 		BaseRef: baseRef,
-		BaseSHA: baseTip,
+		BaseSHA: baseSHA,
 	}); err != nil {
 		return Result{}, err
 	}

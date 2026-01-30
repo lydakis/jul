@@ -200,6 +200,7 @@ func Sync() (Result, error) {
 				Workspace: workspace,
 				BaseRef:   baseRef,
 				BaseTip:   strings.TrimSpace(workspaceTip),
+				BaseSHA:   strings.TrimSpace(cfg.BaseSHA),
 			})
 			if err != nil {
 				res.Diverged = true
