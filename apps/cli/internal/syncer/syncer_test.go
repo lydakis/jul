@@ -299,6 +299,72 @@ func TestCheckpointKeepsChangeIDAcrossDrafts(t *testing.T) {
 	}
 }
 
+func TestCheckpointUpdatesWorkspaceHead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	repoDir := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	res, err := Checkpoint("feat: head")
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if res.CheckpointSHA == "" {
+		t.Fatalf("expected checkpoint sha")
+	}
+
+	headRef, err := gitOut(repoDir, "git", "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		t.Fatalf("expected HEAD symbolic ref, got %v", err)
+	}
+	if strings.TrimSpace(headRef) != "refs/heads/jul/@" {
+		t.Fatalf("expected HEAD ref refs/heads/jul/@, got %s", strings.TrimSpace(headRef))
+	}
+	headSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("failed to read HEAD sha: %v", err)
+	}
+	if strings.TrimSpace(headSHA) != strings.TrimSpace(res.CheckpointSHA) {
+		t.Fatalf("expected HEAD at checkpoint %s, got %s", strings.TrimSpace(res.CheckpointSHA), strings.TrimSpace(headSHA))
+	}
+}
+
 func TestSyncAssignsChangeIDToDraft(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

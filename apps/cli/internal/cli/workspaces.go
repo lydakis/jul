@@ -358,6 +358,10 @@ func runWorkspaceCheckout(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to update workspace lease: %v\n", err)
 		return 1
 	}
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(targetName), sha); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update workspace head: %v\n", err)
+		return 1
+	}
 
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
@@ -569,6 +573,9 @@ func switchToWorkspaceLocal(user, workspace string) error {
 	if err := writeWorkspaceLease(repoRoot, workspace, sha); err != nil {
 		return err
 	}
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), sha); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -615,6 +622,9 @@ func createWorkspaceDraft(user, workspace, baseRef, baseSHA, treeSHA string) (st
 	if err := ensureWorkspaceConfig(repoRoot, workspace, baseRef, baseSHA); err != nil {
 		return "", err
 	}
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), baseSHA); err != nil {
+		return "", err
+	}
 	return draftSHA, nil
 }
 
@@ -622,13 +632,11 @@ func resetToDraft(draftSHA string) error {
 	if strings.TrimSpace(draftSHA) == "" {
 		return fmt.Errorf("draft sha required")
 	}
-	if _, err := gitutil.Git("reset", "--hard", draftSHA); err != nil {
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
 		return err
 	}
-	if _, err := gitutil.Git("clean", "-fd", "--exclude=.jul"); err != nil {
-		return err
-	}
-	return nil
+	return updateWorktreeLocal(repoRoot, draftSHA)
 }
 
 func localWorkspaces() ([]client.Workspace, error) {

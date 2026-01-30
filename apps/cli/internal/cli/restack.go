@@ -211,6 +211,10 @@ func runWorkspaceRestack(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to update workspace lease: %v\n", err)
 		return 1
 	}
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(ws), newParent); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update workspace head: %v\n", err)
+		return 1
+	}
 	if err := ensureWorkspaceConfig(repoRoot, ws, baseRef, baseTip); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to update workspace config: %v\n", err)
 		return 1

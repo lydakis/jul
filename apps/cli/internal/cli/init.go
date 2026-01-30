@@ -255,6 +255,11 @@ func ensureWorkspaceReady(repoRoot string) (string, error) {
 			return "", err
 		}
 	}
+	if baseSHA != "" {
+		if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), baseSHA); err != nil {
+			return "", err
+		}
+	}
 	if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err != nil {
 		return "", err
 	} else if !ok || strings.TrimSpace(cfg.BaseRef) == "" || strings.TrimSpace(cfg.BaseSHA) == "" {

@@ -319,6 +319,9 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		if err := writeWorkspaceLease(repoRoot, workspace, checkpointSHA); err != nil {
 			return res, err
 		}
+		if err := ensureWorkspaceHead(repoRoot, workspace, checkpointSHA); err != nil {
+			return res, err
+		}
 	}
 
 	if syncRes.RemoteName != "" {
@@ -429,6 +432,9 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		}
 		res.WorkspaceUpdated = true
 		if err := writeWorkspaceLease(repoRoot, workspace, headSHA); err != nil {
+			return res, err
+		}
+		if err := ensureWorkspaceHead(repoRoot, workspace, headSHA); err != nil {
 			return res, err
 		}
 	}
@@ -712,4 +718,9 @@ func writeWorkspaceLease(repoRoot, workspace, sha string) error {
 
 func workspaceLeasePath(repoRoot, workspace string) string {
 	return filepath.Join(repoRoot, ".jul", "workspaces", workspace, "lease")
+}
+
+func ensureWorkspaceHead(repoRoot, workspace, sha string) error {
+	ref := fmt.Sprintf("refs/heads/jul/%s", workspace)
+	return gitutil.EnsureHeadRef(repoRoot, ref, sha)
 }

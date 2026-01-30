@@ -25,6 +25,10 @@ func workspaceRef(user, workspace string) string {
 	return fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
 }
 
+func workspaceHeadRef(workspace string) string {
+	return fmt.Sprintf("refs/heads/jul/%s", workspace)
+}
+
 func syncRef(user, workspace string) (string, error) {
 	deviceID, err := config.DeviceID()
 	if err != nil {
