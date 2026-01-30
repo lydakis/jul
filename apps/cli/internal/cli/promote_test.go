@@ -31,7 +31,7 @@ func TestPromoteRecordsChangeMeta(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 	t.Setenv("JUL_WORKSPACE", "tester/@")
 	t.Setenv("HOME", filepath.Join(repo, "home"))
-	if err := promoteLocal("main", sha, false); err != nil {
+	if err := promoteLocal("main", sha, false, false); err != nil {
 		t.Fatalf("promote failed: %v", err)
 	}
 
@@ -84,7 +84,7 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 		t.Fatalf("failed to get device id: %v", err)
 	}
 
-	if err := promoteLocal("main", sha, false); err != nil {
+	if err := promoteLocal("main", sha, false, false); err != nil {
 		t.Fatalf("promote failed: %v", err)
 	}
 	headSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
@@ -125,5 +125,99 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 
 	if strings.TrimSpace(draftSHA) == sha {
 		t.Fatalf("expected new draft sha to differ from promoted sha")
+	}
+}
+
+func TestPromotePushesFastForwardRemote(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	runGitCmd(t, repo, "commit", "--allow-empty", "-m", "base")
+	baseSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+	runGitCmd(t, filepath.Dir(remoteDir), "init", "--bare", remoteDir)
+	runGitCmd(t, repo, "remote", "add", "origin", remoteDir)
+	runGitCmd(t, repo, "push", "origin", baseSHA+":refs/heads/main")
+
+	writeFilePath(t, repo, "new.txt", "new\n")
+	runGitCmd(t, repo, "add", "new.txt")
+	runGitCmd(t, repo, "commit", "-m", "new")
+	newSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+	t.Setenv("HOME", filepath.Join(repo, "home"))
+
+	if err := promoteLocal("main", newSHA, false, false); err != nil {
+		t.Fatalf("promote failed: %v", err)
+	}
+
+	remoteTip := strings.TrimSpace(runGitCmd(t, repo, "ls-remote", "origin", "refs/heads/main"))
+	if !strings.HasPrefix(remoteTip, newSHA) {
+		t.Fatalf("expected remote main to be %s, got %s", newSHA, remoteTip)
+	}
+}
+
+func TestPromoteRejectsNonFastForwardRemote(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	runGitCmd(t, repo, "commit", "--allow-empty", "-m", "base")
+	baseSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+	runGitCmd(t, filepath.Dir(remoteDir), "init", "--bare", remoteDir)
+	runGitCmd(t, repo, "remote", "add", "origin", remoteDir)
+	runGitCmd(t, repo, "push", "origin", baseSHA+":refs/heads/main")
+
+	runGitCmd(t, repo, "checkout", "--orphan", "alt")
+	runGitCmd(t, repo, "commit", "--allow-empty", "-m", "alt")
+	altSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+	t.Setenv("HOME", filepath.Join(repo, "home"))
+
+	if err := promoteLocal("main", altSHA, false, false); err == nil {
+		t.Fatalf("expected promote to fail for non-ff remote")
+	}
+}
+
+func TestPromoteForceTargetAllowsNonFastForwardRemote(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	runGitCmd(t, repo, "commit", "--allow-empty", "-m", "base")
+	baseSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+	runGitCmd(t, filepath.Dir(remoteDir), "init", "--bare", remoteDir)
+	runGitCmd(t, repo, "remote", "add", "origin", remoteDir)
+	runGitCmd(t, repo, "push", "origin", baseSHA+":refs/heads/main")
+
+	runGitCmd(t, repo, "checkout", "--orphan", "alt")
+	runGitCmd(t, repo, "commit", "--allow-empty", "-m", "alt")
+	altSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+	t.Setenv("HOME", filepath.Join(repo, "home"))
+
+	if err := promoteLocal("main", altSHA, true, false); err != nil {
+		t.Fatalf("expected force-target promote to succeed, got %v", err)
+	}
+	remoteTip := strings.TrimSpace(runGitCmd(t, repo, "ls-remote", "origin", "refs/heads/main"))
+	if !strings.HasPrefix(remoteTip, altSHA) {
+		t.Fatalf("expected remote main to be %s, got %s", altSHA, remoteTip)
 	}
 }

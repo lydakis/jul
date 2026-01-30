@@ -15,6 +15,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/hooks"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
+	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
@@ -178,7 +179,8 @@ func newPromoteCommand() Command {
 			fs := flag.NewFlagSet("promote", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
 			toBranch := fs.String("to", "", "Target branch")
-			force := fs.Bool("force", false, "Force promotion despite policy")
+			noPolicy := fs.Bool("no-policy", false, "Skip promote policy checks")
+			forceTarget := fs.Bool("force-target", false, "Dangerous: allow non-fast-forward update of target branch")
 			_ = fs.Parse(args)
 
 			if *toBranch == "" {
@@ -209,23 +211,27 @@ func newPromoteCommand() Command {
 				fmt.Fprintln(os.Stderr, "failed to resolve commit to promote")
 				return 1
 			}
-			if err := promoteLocal(*toBranch, targetSHA, *force); err != nil {
+			if err := promoteLocal(*toBranch, targetSHA, *forceTarget, *noPolicy); err != nil {
 				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
 				return 1
 			}
 
-			if *force {
-				fmt.Fprintln(os.Stdout, "promote completed (force)")
+			if *forceTarget {
+				fmt.Fprintln(os.Stdout, "promote completed (force-target)")
 				return 0
 			}
 
+			if *noPolicy {
+				fmt.Fprintln(os.Stdout, "promote completed (no-policy)")
+				return 0
+			}
 			fmt.Fprintln(os.Stdout, "promote completed")
 			return 0
 		},
 	}
 }
 
-func promoteLocal(branch, sha string, force bool) error {
+func promoteLocal(branch, sha string, forceTarget bool, noPolicy bool) error {
 	if strings.TrimSpace(branch) == "" {
 		return fmt.Errorf("branch required")
 	}
@@ -233,21 +239,24 @@ func promoteLocal(branch, sha string, force bool) error {
 		return fmt.Errorf("commit sha required")
 	}
 	ref := "refs/heads/" + strings.TrimSpace(branch)
-	if !force && gitutil.RefExists(ref) {
-		current, err := gitutil.ResolveRef(ref)
-		if err != nil {
-			return err
-		}
-		current = strings.TrimSpace(current)
-		if current != "" {
-			if _, err := gitutil.Git("merge-base", "--is-ancestor", current, sha); err != nil {
-				return fmt.Errorf("promote would not be fast-forward; use --force to override")
-			}
-		}
-	}
+	_ = noPolicy
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return err
+	}
+	remoteTip, remoteName, err := fetchPublishTip(branch)
+	if err != nil {
+		return err
+	}
+	if remoteTip != "" && !forceTarget {
+		if _, err := gitutil.Git("merge-base", "--is-ancestor", remoteTip, sha); err != nil {
+			return fmt.Errorf("promote would not be fast-forward; use --force-target to override")
+		}
+	}
+	if remoteName != "" {
+		if err := pushPublish(remoteName, sha, branch, forceTarget); err != nil {
+			return err
+		}
 	}
 	if err := gitutil.UpdateRef(ref, sha); err != nil {
 		return err
@@ -341,6 +350,46 @@ func startNewDraftAfterPromote(repoRoot, publishedSHA string) error {
 		return err
 	}
 	return nil
+}
+
+func fetchPublishTip(branch string) (string, string, error) {
+	remote, err := remotesel.Resolve()
+	if err != nil {
+		switch err {
+		case remotesel.ErrNoRemote, remotesel.ErrRemoteMissing:
+			return "", "", nil
+		default:
+			return "", "", err
+		}
+	}
+	if strings.TrimSpace(remote.Name) == "" {
+		return "", "", nil
+	}
+	ref := "refs/heads/" + strings.TrimSpace(branch)
+	out, err := gitutil.Git("ls-remote", remote.Name, ref)
+	if err != nil {
+		return "", "", err
+	}
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) == 0 {
+		return "", remote.Name, nil
+	}
+	return strings.TrimSpace(fields[0]), remote.Name, nil
+}
+
+func pushPublish(remoteName, sha, branch string, forceTarget bool) error {
+	if strings.TrimSpace(remoteName) == "" {
+		return nil
+	}
+	ref := "refs/heads/" + strings.TrimSpace(branch)
+	spec := fmt.Sprintf("%s:%s", strings.TrimSpace(sha), ref)
+	args := []string{"push"}
+	if forceTarget {
+		args = append(args, "--force")
+	}
+	args = append(args, remoteName, spec)
+	_, err := gitutil.Git(args...)
+	return err
 }
 
 func changeIDForCommit(sha string) string {
