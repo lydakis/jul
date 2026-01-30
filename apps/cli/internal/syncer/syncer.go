@@ -11,6 +11,8 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
+	"github.com/lydakis/jul/cli/internal/restack"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 type Result struct {
@@ -183,17 +185,54 @@ func Sync() (Result, error) {
 		}
 	}
 
-	draftSHA, err := reuseOrCreateDraft(treeSHA, parentSHA, changeID, existingDraft)
-	if err != nil {
-		return Result{}, err
+	if res.BaseAdvanced && !res.Diverged && config.SyncAutoRestack() && workspaceTip != "" {
+		cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace)
+		if err != nil {
+			return res, err
+		}
+		baseRef := strings.TrimSpace(cfg.BaseRef)
+		if !ok || baseRef == "" {
+			res.RemoteProblem = "base advanced; run 'jul ws restack' to update"
+		} else {
+			restackRes, err := restack.Run(restack.Options{
+				RepoRoot:  repoRoot,
+				User:      user,
+				Workspace: workspace,
+				BaseRef:   baseRef,
+				BaseTip:   strings.TrimSpace(workspaceTip),
+			})
+			if err != nil {
+				res.Diverged = true
+				res.RemoteProblem = "restack conflict; run 'jul merge' to resolve"
+				return res, nil
+			}
+			res.DraftSHA = restackRes.NewDraftSHA
+			res.WorkspaceUpdated = true
+			res.BaseAdvanced = false
+			workspaceTip = restackRes.NewParentSHA
+			parentSHA = restackRes.NewParentSHA
+			existingDraft = restackRes.NewDraftSHA
+			if restackRes.NewDraftSHA != "" {
+				if tree, err := gitutil.TreeOf(restackRes.NewDraftSHA); err == nil {
+					treeSHA = strings.TrimSpace(tree)
+				}
+			}
+		}
 	}
-	res.DraftSHA = draftSHA
-	if err := gitutil.UpdateRef(syncRef, draftSHA); err != nil {
+
+	if res.DraftSHA == "" {
+		draftSHA, err := reuseOrCreateDraft(treeSHA, parentSHA, changeID, existingDraft)
+		if err != nil {
+			return Result{}, err
+		}
+		res.DraftSHA = draftSHA
+	}
+	if err := gitutil.UpdateRef(syncRef, res.DraftSHA); err != nil {
 		return Result{}, err
 	}
 
 	if rerr == nil {
-		if err := pushRef(remote.Name, draftSHA, syncRef, true); err != nil {
+		if err := pushRef(remote.Name, res.DraftSHA, syncRef, true); err != nil {
 			return res, err
 		}
 		res.RemotePushed = true

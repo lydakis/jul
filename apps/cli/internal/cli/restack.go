@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/lydakis/jul/cli/internal/agent"
-	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
-	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/restack"
 	"github.com/lydakis/jul/cli/internal/workspace"
 )
 
@@ -61,170 +58,19 @@ func runWorkspaceRestack(args []string) int {
 		return 1
 	}
 
-	draftSHA, err := currentDraftSHA()
+	res, err := restack.Run(restack.Options{
+		RepoRoot:  repoRoot,
+		User:      user,
+		Workspace: ws,
+		BaseRef:   baseRef,
+		BaseTip:   baseTip,
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve draft: %v\n", err)
-		return 1
-	}
-	msg, _ := gitutil.CommitMessage(draftSHA)
-	changeID := gitutil.ExtractChangeID(msg)
-	if changeID == "" {
-		changeID = gitutil.FallbackChangeID(draftSHA)
-	}
-
-	latest, err := latestCheckpointForChange(changeID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to list checkpoints: %v\n", err)
-		return 1
-	}
-	if latest == nil {
-		fmt.Fprintln(os.Stderr, "checkpoint required before restack")
+		fmt.Fprintf(os.Stderr, "restack failed: %v\n", err)
 		return 1
 	}
 
-	chain, err := checkpointChain(latest.SHA, changeID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to build checkpoint chain: %v\n", err)
-		return 1
-	}
-	if len(chain) == 0 {
-		fmt.Fprintln(os.Stderr, "no checkpoints found for current change")
-		return 1
-	}
-
-	deviceID, err := config.DeviceID()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read device id: %v\n", err)
-		return 1
-	}
-
-	worktree, err := agent.EnsureWorktree(repoRoot, baseTip)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to prepare restack worktree: %v\n", err)
-		return 1
-	}
-
-	newParent := baseTip
-	prevTrace := ""
-	newCheckpoints := make([]string, 0, len(chain))
-	for idx, oldSHA := range chain {
-		if err := gitDir(worktree, nil, "cherry-pick", "--no-commit", oldSHA); err != nil {
-			if isEmptyCherryPick(err) {
-				_ = gitDir(worktree, nil, "cherry-pick", "--skip")
-			} else {
-				_ = gitDir(worktree, nil, "cherry-pick", "--abort")
-				fmt.Fprintf(os.Stderr, "restack conflict; run 'jul merge' to resolve (%v)\n", err)
-				return 1
-			}
-		}
-		treeSHA, err := gitOutputDir(worktree, "write-tree")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to snapshot restack tree: %v\n", err)
-			return 1
-		}
-
-		oldMsg, _ := gitutil.CommitMessage(oldSHA)
-		oldTraceBase := strings.TrimSpace(gitutil.ExtractTraceBase(oldMsg))
-		oldTraceHead := strings.TrimSpace(gitutil.ExtractTraceHead(oldMsg))
-		if idx == 0 && prevTrace == "" {
-			prevTrace = oldTraceBase
-		}
-
-		traceParents := []string{}
-		if strings.TrimSpace(prevTrace) != "" {
-			traceParents = append(traceParents, strings.TrimSpace(prevTrace))
-		}
-		if strings.TrimSpace(oldTraceHead) != "" && strings.TrimSpace(oldTraceHead) != strings.TrimSpace(prevTrace) {
-			traceParents = append(traceParents, strings.TrimSpace(oldTraceHead))
-		}
-		traceSHA, err := createRestackTrace(treeSHA, traceParents, deviceID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create restack trace: %v\n", err)
-			return 1
-		}
-
-		newMsg := stripTrailer(stripTrailer(oldMsg, "Trace-Head"), "Trace-Base")
-		if prevTrace != "" {
-			newMsg = addTrailer(newMsg, "Trace-Base", prevTrace)
-		}
-		if traceSHA != "" {
-			newMsg = addTrailer(newMsg, "Trace-Head", traceSHA)
-		}
-
-		msgFile, err := os.CreateTemp("", "jul-restack-msg-")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create message file: %v\n", err)
-			return 1
-		}
-		if _, err := msgFile.WriteString(newMsg); err != nil {
-			_ = msgFile.Close()
-			_ = os.Remove(msgFile.Name())
-			fmt.Fprintf(os.Stderr, "failed to write message file: %v\n", err)
-			return 1
-		}
-		_ = msgFile.Close()
-		if err := gitDir(worktree, nil, "commit", "--no-verify", "--allow-empty", "-F", msgFile.Name()); err != nil {
-			_ = os.Remove(msgFile.Name())
-			fmt.Fprintf(os.Stderr, "failed to create checkpoint: %v\n", err)
-			return 1
-		}
-		_ = os.Remove(msgFile.Name())
-
-		newSHA, err := gitOutputDir(worktree, "rev-parse", "HEAD")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to resolve checkpoint: %v\n", err)
-			return 1
-		}
-		newSHA = strings.TrimSpace(newSHA)
-		newParent = newSHA
-		newCheckpoints = append(newCheckpoints, newSHA)
-		prevTrace = traceSHA
-
-		keepRef := keepRefPrefix(user, ws) + changeID + "/" + newSHA
-		if err := gitutil.UpdateRef(keepRef, newSHA); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to update keep-ref: %v\n", err)
-			return 1
-		}
-	}
-
-	newDraft, err := gitutil.CreateDraftCommit(newParent, changeID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create new draft: %v\n", err)
-		return 1
-	}
-
-	workspaceRef := workspaceRef(user, ws)
-	syncRef, err := syncRef(user, ws)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve sync ref: %v\n", err)
-		return 1
-	}
-	if err := gitutil.UpdateRef(syncRef, newDraft); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update sync ref: %v\n", err)
-		return 1
-	}
-	if err := gitutil.UpdateRef(workspaceRef, newParent); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update workspace ref: %v\n", err)
-		return 1
-	}
-	if err := writeWorkspaceLease(repoRoot, ws, newParent); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update workspace lease: %v\n", err)
-		return 1
-	}
-	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(ws), newParent); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update workspace head: %v\n", err)
-		return 1
-	}
-	if err := ensureWorkspaceConfig(repoRoot, ws, baseRef, baseTip); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update workspace config: %v\n", err)
-		return 1
-	}
-	if err := updateWorktreeLocal(repoRoot, newDraft); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update working tree: %v\n", err)
-		return 1
-	}
-
-	fmt.Fprintf(os.Stdout, "Restacked %d checkpoints onto %s\n", len(newCheckpoints), strings.TrimSpace(baseTip))
+	fmt.Fprintf(os.Stdout, "Restacked %d checkpoints onto %s\n", len(res.NewCheckpoints), strings.TrimSpace(baseTip))
 	return 0
 }
 
@@ -309,46 +155,6 @@ func resolveBaseTip(repoRoot, baseRef string) (string, error) {
 		return "", fmt.Errorf("base workspace has no checkpoint")
 	}
 	return sha, nil
-}
-
-func createRestackTrace(treeSHA string, parents []string, deviceID string) (string, error) {
-	traceSHA, err := gitutil.CommitTreeWithParents(treeSHA, parents, "[trace] restack")
-	if err != nil {
-		return "", err
-	}
-	note := metadata.TraceNote{
-		TraceSHA:  traceSHA,
-		TraceType: "restack",
-		Agent:     "jul",
-		Device:    strings.TrimSpace(deviceID),
-		CreatedAt: time.Now().UTC(),
-	}
-	_ = metadata.WriteTrace(note)
-	return traceSHA, nil
-}
-
-func stripTrailer(message, key string) string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return strings.TrimSpace(message)
-	}
-	lines := strings.Split(message, "\n")
-	out := make([]string, 0, len(lines))
-	prefix := key + ":"
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
-			continue
-		}
-		out = append(out, line)
-	}
-	return strings.TrimRight(strings.Join(out, "\n"), "\n")
-}
-
-func addTrailer(message, key, value string) string {
-	if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-		return strings.TrimSpace(message)
-	}
-	return strings.TrimSpace(message) + "\n\n" + strings.TrimSpace(key) + ": " + strings.TrimSpace(value) + "\n"
 }
 
 func updateWorktreeLocal(repoRoot, ref string) error {

@@ -123,6 +123,15 @@ func RemoteURL() string {
 	return ""
 }
 
+func SyncAutoRestack() bool {
+	if cfg := configValue("sync.autorestack"); cfg != "" {
+		if val, err := strconv.ParseBool(cfg); err == nil {
+			return val
+		}
+	}
+	return true
+}
+
 func CIRunOnCheckpoint() bool {
 	return configBool("ci.run_on_checkpoint", true)
 }
