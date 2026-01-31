@@ -67,14 +67,22 @@ func newSuggestionsCommand() Command {
 				fmt.Fprintf(os.Stderr, "failed to list suggestions: %v\n", err)
 				return 1
 			}
-			if statusFilter == "stale" {
+			if statusFilter == "stale" || statusFilter == "pending" {
 				staleOnly := make([]client.Suggestion, 0, len(results))
+				freshOnly := make([]client.Suggestion, 0, len(results))
 				for _, sug := range results {
-					if suggestionIsStale(sug.BaseCommitSHA, draftSHA, parentSHA) {
+					isStale := suggestionIsStale(sug.BaseCommitSHA, draftSHA, parentSHA)
+					if isStale {
 						staleOnly = append(staleOnly, sug)
+					} else {
+						freshOnly = append(freshOnly, sug)
 					}
 				}
-				results = staleOnly
+				if statusFilter == "stale" {
+					results = staleOnly
+				} else {
+					results = freshOnly
+				}
 			}
 			if *jsonOut {
 				enc := json.NewEncoder(os.Stdout)
