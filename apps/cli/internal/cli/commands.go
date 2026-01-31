@@ -30,6 +30,7 @@ func Commands(version string) []Command {
 		newWorkspaceCommand(),
 		newLocalCommand(),
 		newCheckpointCommand(),
+		newDraftCommand(),
 		newReviewCommand(),
 		newSubmitCommand(),
 		newTraceCommand(),
