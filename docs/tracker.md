@@ -17,7 +17,7 @@
 
 ### P1 — Core Workflow Completeness
 - [x] **Repo meta + user namespace**: implement `refs/notes/jul/repo-meta` + stable `user_namespace` resolution for ref paths.
-- [ ] **Change refs**: stable per‑change tips (`refs/jul/change/<change-id>`) + anchor refs.
+- [x] **Change refs**: stable per‑change tips (`refs/jul/change/<change-id>`) + anchor refs.
 - [ ] **Draft handoff**: `jul draft list/show/adopt` (per‑device drafts) + explicit adopt merge flow.
 - [ ] **Sync safety features**: draft secret scan before push (`--allow-secrets` override), `.jul/syncignore` support.
 - [ ] **Tracked base drift**: persist `track-tip` for publish branch; surface base‑advanced in status; update only on restack/checkout/promote.
