@@ -111,7 +111,7 @@ func traceChain(baseSHA, headSHA string) ([]string, error) {
 	}
 	var revRange string
 	if strings.TrimSpace(baseSHA) != "" {
-		revRange = fmt.Sprintf("%s^..%s", baseSHA, headSHA)
+		revRange = fmt.Sprintf("%s..%s", baseSHA, headSHA)
 	} else {
 		revRange = headSHA
 	}
@@ -120,5 +120,8 @@ func traceChain(baseSHA, headSHA string) ([]string, error) {
 		return nil, err
 	}
 	lines := strings.Fields(out)
+	if strings.TrimSpace(baseSHA) != "" {
+		lines = append([]string{strings.TrimSpace(baseSHA)}, lines...)
+	}
 	return lines, nil
 }
