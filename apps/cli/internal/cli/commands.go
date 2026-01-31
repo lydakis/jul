@@ -361,14 +361,23 @@ func resolvePromoteStack(repoRoot, user, workspace string) ([]stackWorkspace, st
 		if err != nil {
 			return nil, "", err
 		}
-		if strings.HasPrefix(baseRef, "refs/jul/workspaces/") {
-			parentUser, parentWorkspace, ok := parseWorkspaceRef(baseRef)
-			if !ok {
-				return nil, "", fmt.Errorf("invalid workspace ref %s", baseRef)
-			}
-			current = stackWorkspace{User: parentUser, Name: parentWorkspace}
-			continue
+	if strings.HasPrefix(baseRef, "refs/jul/workspaces/") {
+		parentUser, parentWorkspace, ok := parseWorkspaceRef(baseRef)
+		if !ok {
+			return nil, "", fmt.Errorf("invalid workspace ref %s", baseRef)
 		}
+		current = stackWorkspace{User: parentUser, Name: parentWorkspace}
+		continue
+	}
+	if strings.HasPrefix(baseRef, "refs/jul/changes/") {
+		changeID := strings.TrimPrefix(baseRef, "refs/jul/changes/")
+		parentUser, parentWorkspace, ok := findWorkspaceForChange(changeID)
+		if !ok {
+			return nil, "", fmt.Errorf("could not resolve parent workspace for change %s", changeID)
+		}
+		current = stackWorkspace{User: parentUser, Name: parentWorkspace}
+		continue
+	}
 		if strings.HasPrefix(baseRef, "refs/heads/") {
 			return stack, strings.TrimPrefix(baseRef, "refs/heads/"), nil
 		}
@@ -386,6 +395,42 @@ func parseWorkspaceRef(ref string) (string, string, bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+func findWorkspaceForChange(changeID string) (string, string, bool) {
+	changeID = strings.TrimSpace(changeID)
+	if changeID == "" {
+		return "", "", false
+	}
+	refsOut, err := gitutil.Git("show-ref")
+	if err != nil {
+		return "", "", false
+	}
+	lines := strings.Split(strings.TrimSpace(refsOut), "\n")
+	prefix := "refs/jul/keep/"
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		ref := fields[1]
+		if !strings.HasPrefix(ref, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(ref, prefix)
+		parts := strings.Split(rest, "/")
+		if len(parts) < 3 {
+			continue
+		}
+		user := parts[0]
+		workspace := parts[1]
+		refChange := parts[2]
+		if refChange != changeID {
+			continue
+		}
+		return user, workspace, true
+	}
+	return "", "", false
 }
 
 func withWorkspaceEnv(wsID string) error {

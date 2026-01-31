@@ -199,6 +199,16 @@ func Run(opts Options) (Result, error) {
 	if err := gitutil.UpdateRef(workspaceRef, newParent); err != nil {
 		return Result{}, err
 	}
+	changeRef := fmt.Sprintf("refs/jul/changes/%s", changeID)
+	if err := gitutil.UpdateRef(changeRef, newParent); err != nil {
+		return Result{}, err
+	}
+	anchorRef := fmt.Sprintf("refs/jul/anchors/%s", changeID)
+	if !gitutil.RefExists(anchorRef) && len(newCheckpoints) > 0 {
+		if err := gitutil.UpdateRef(anchorRef, newCheckpoints[0]); err != nil {
+			return Result{}, err
+		}
+	}
 	if err := writeWorkspaceLease(repoRoot, workspace, newParent); err != nil {
 		return Result{}, err
 	}

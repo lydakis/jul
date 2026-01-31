@@ -244,7 +244,7 @@ func runWorkspaceStack(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to read checkpoint tree: %v\n", err)
 		return 1
 	}
-	parentRef := workspaceRef(currentUser, currentName)
+	parentRef := changeRef(checkpoint.ChangeID)
 	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, parentRef, checkpoint.SHA, treeSHA)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create stacked workspace: %v\n", err)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/agent"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/restack"
 	"github.com/lydakis/jul/cli/internal/workspace"
 )
@@ -89,6 +90,26 @@ func runWorkspaceRestack(args []string) int {
 	}
 
 	fmt.Fprintf(os.Stdout, "Restacked %d checkpoints onto %s\n", len(res.NewCheckpoints), strings.TrimSpace(baseTip))
+
+	if len(res.NewCheckpoints) > 0 {
+		remote, rerr := remotesel.Resolve()
+		if rerr == nil && strings.TrimSpace(remote.Name) != "" {
+			ref := changeRef(res.ChangeID)
+			remoteTip, _ := remoteRefTip(remote.Name, ref)
+			if err := pushWorkspace(remote.Name, res.NewCheckpoints[len(res.NewCheckpoints)-1], ref, remoteTip); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to push change ref: %v\n", err)
+				return 1
+			}
+			anchor := anchorRef(res.ChangeID)
+			anchorTip, _ := remoteRefTip(remote.Name, anchor)
+			if anchorTip == "" {
+				if err := pushRef(remote.Name, res.NewCheckpoints[0], anchor, false); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to push anchor ref: %v\n", err)
+					return 1
+				}
+			}
+		}
+	}
 	return 0
 }
 
@@ -171,6 +192,12 @@ func resolveBaseTip(repoRoot, baseRef string) (string, error) {
 			return strings.TrimSpace(parent), nil
 		}
 		return "", fmt.Errorf("base workspace has no checkpoint")
+	}
+	if strings.HasPrefix(baseRef, "refs/jul/changes/") {
+		if sha == "" {
+			return "", fmt.Errorf("change ref missing")
+		}
+		return sha, nil
 	}
 	return sha, nil
 }

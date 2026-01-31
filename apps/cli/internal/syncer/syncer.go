@@ -334,6 +334,16 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	if err := gitutil.UpdateRef(keepRef, checkpointSHA); err != nil {
 		return CheckpointResult{}, err
 	}
+	changeRef := changeRefPath(changeID)
+	if err := gitutil.UpdateRef(changeRef, checkpointSHA); err != nil {
+		return CheckpointResult{}, err
+	}
+	anchorRef := anchorRefPath(changeID)
+	if !gitutil.RefExists(anchorRef) {
+		if err := gitutil.UpdateRef(anchorRef, checkpointSHA); err != nil {
+			return CheckpointResult{}, err
+		}
+	}
 
 	newDraftSHA, err := gitutil.CreateDraftCommit(checkpointSHA, changeID)
 	if err != nil {
@@ -388,6 +398,18 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		}
 		if err := pushRef(syncRes.RemoteName, checkpointSHA, keepRef, true); err != nil {
 			return res, err
+		}
+		changeRemote, _ := remoteRefTip(syncRes.RemoteName, changeRef)
+		if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, changeRef, changeRemote); err != nil {
+			return res, err
+		}
+		anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
+		if strings.TrimSpace(anchorRemote) == "" {
+			if err := pushRef(syncRes.RemoteName, checkpointSHA, anchorRef, false); err != nil {
+				return res, err
+			}
+		} else if strings.TrimSpace(anchorRemote) != strings.TrimSpace(checkpointSHA) {
+			return res, fmt.Errorf("anchor ref mismatch for change %s", changeID)
 		}
 	}
 
@@ -444,6 +466,16 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 	keepRef := keepRefPath(user, workspace, changeID, headSHA)
 	if err := gitutil.UpdateRef(keepRef, headSHA); err != nil {
 		return CheckpointResult{}, err
+	}
+	changeRef := changeRefPath(changeID)
+	if err := gitutil.UpdateRef(changeRef, headSHA); err != nil {
+		return CheckpointResult{}, err
+	}
+	anchorRef := anchorRefPath(changeID)
+	if !gitutil.RefExists(anchorRef) {
+		if err := gitutil.UpdateRef(anchorRef, headSHA); err != nil {
+			return CheckpointResult{}, err
+		}
 	}
 
 	treeSHA, err := gitutil.DraftTree()
@@ -503,6 +535,18 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		}
 		if err := pushRef(syncRes.RemoteName, headSHA, keepRef, true); err != nil {
 			return res, err
+		}
+		changeRemote, _ := remoteRefTip(syncRes.RemoteName, changeRef)
+		if err := pushWorkspace(syncRes.RemoteName, headSHA, changeRef, changeRemote); err != nil {
+			return res, err
+		}
+		anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
+		if strings.TrimSpace(anchorRemote) == "" {
+			if err := pushRef(syncRes.RemoteName, headSHA, anchorRef, false); err != nil {
+				return res, err
+			}
+		} else if strings.TrimSpace(anchorRemote) != strings.TrimSpace(headSHA) {
+			return res, fmt.Errorf("anchor ref mismatch for change %s", changeID)
 		}
 	}
 
@@ -640,6 +684,14 @@ func keepRefPath(user, workspace, changeID, checkpointSHA string) string {
 	return strings.Join(parts, "/")
 }
 
+func changeRefPath(changeID string) string {
+	return fmt.Sprintf("refs/jul/changes/%s", strings.TrimSpace(changeID))
+}
+
+func anchorRefPath(changeID string) string {
+	return fmt.Sprintf("refs/jul/anchors/%s", strings.TrimSpace(changeID))
+}
+
 func isDraftMessage(message string) bool {
 	trimmed := strings.TrimSpace(message)
 	return strings.HasPrefix(trimmed, "[draft]")
@@ -745,6 +797,21 @@ func pushWorkspace(remoteName, sha, ref, old string) error {
 	args = append(args, remoteName, spec)
 	_, err := gitutil.Git(args...)
 	return err
+}
+
+func remoteRefTip(remoteName, ref string) (string, error) {
+	if strings.TrimSpace(remoteName) == "" || strings.TrimSpace(ref) == "" {
+		return "", nil
+	}
+	out, err := gitutil.Git("ls-remote", remoteName, ref)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(fields[0]), nil
 }
 
 func readWorkspaceLease(repoRoot, workspace string) (string, error) {

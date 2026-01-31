@@ -232,6 +232,83 @@ func TestSyncMarksBaseAdvancedWhenDirty(t *testing.T) {
 	}
 }
 
+func TestCheckpointCreatesChangeAndAnchorRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	repoDir := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "init"); err != nil {
+		t.Fatal(err)
+	}
+	baseSHA, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leasePath := filepath.Join(repoDir, ".jul", "workspaces", "@", "lease")
+	if err := os.MkdirAll(filepath.Dir(leasePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leasePath, []byte(baseSHA+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	res, err := Checkpoint("checkpoint")
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	changeRef := "refs/jul/changes/" + res.ChangeID
+	anchorRef := "refs/jul/anchors/" + res.ChangeID
+
+	changeSHA, err := gitOut(repoDir, "git", "rev-parse", changeRef)
+	if err != nil {
+		t.Fatalf("change ref: %v", err)
+	}
+	if strings.TrimSpace(changeSHA) != strings.TrimSpace(res.CheckpointSHA) {
+		t.Fatalf("expected change ref to point to checkpoint")
+	}
+	anchorSHA, err := gitOut(repoDir, "git", "rev-parse", anchorRef)
+	if err != nil {
+		t.Fatalf("anchor ref: %v", err)
+	}
+	if strings.TrimSpace(anchorSHA) != strings.TrimSpace(res.CheckpointSHA) {
+		t.Fatalf("expected anchor ref to point to checkpoint")
+	}
+}
+
 func TestCheckpointKeepsChangeIDAcrossDrafts(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

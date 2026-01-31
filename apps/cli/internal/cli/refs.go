@@ -30,6 +30,14 @@ func workspaceRef(user, workspace string) string {
 	return fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
 }
 
+func changeRef(changeID string) string {
+	return fmt.Sprintf("refs/jul/changes/%s", strings.TrimSpace(changeID))
+}
+
+func anchorRef(changeID string) string {
+	return fmt.Sprintf("refs/jul/anchors/%s", strings.TrimSpace(changeID))
+}
+
 func workspaceHeadRef(workspace string) string {
 	return fmt.Sprintf("refs/heads/jul/%s", workspace)
 }
@@ -40,6 +48,21 @@ func syncRef(user, workspace string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace), nil
+}
+
+func remoteRefTip(remoteName, ref string) (string, error) {
+	if strings.TrimSpace(remoteName) == "" || strings.TrimSpace(ref) == "" {
+		return "", nil
+	}
+	out, err := gitutil.Git("ls-remote", remoteName, ref)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(fields[0]), nil
 }
 
 func keepRefPrefix(user, workspace string) string {
