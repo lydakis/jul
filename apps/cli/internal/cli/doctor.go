@@ -35,8 +35,12 @@ func runDoctor() error {
 		switch err {
 		case remotesel.ErrNoRemote, remotesel.ErrRemoteMissing:
 			fmt.Fprintln(os.Stdout, "No sync remote configured; draft and checkpoint sync disabled.")
-			_ = config.SetRepoConfigValue("remote", "checkpoint_sync", "disabled")
-			_ = config.SetRepoConfigValue("remote", "draft_sync", "disabled")
+			if err := config.SetRepoConfigValue("remote", "checkpoint_sync", "disabled"); err != nil {
+				return err
+			}
+			if err := config.SetRepoConfigValue("remote", "draft_sync", "disabled"); err != nil {
+				return err
+			}
 			return nil
 		case remotesel.ErrMultipleRemote:
 			return fmt.Errorf("multiple remotes found; run 'jul remote set <name>'")
@@ -48,16 +52,26 @@ func runDoctor() error {
 	headSHA, err := gitutil.Git("rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(headSHA) == "" {
 		fmt.Fprintln(os.Stdout, "No commits found; sync probes skipped.")
-		_ = config.SetRepoConfigValue("remote", "checkpoint_sync", "disabled")
-		_ = config.SetRepoConfigValue("remote", "draft_sync", "disabled")
+		if err := config.SetRepoConfigValue("remote", "checkpoint_sync", "disabled"); err != nil {
+			return err
+		}
+		if err := config.SetRepoConfigValue("remote", "draft_sync", "disabled"); err != nil {
+			return err
+		}
 		return nil
 	}
 	headSHA = strings.TrimSpace(headSHA)
-	deviceID, _ := config.DeviceID()
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return err
+	}
 	ref := fmt.Sprintf("refs/jul/doctor/%s", strings.TrimSpace(deviceID))
 	noteRef := "refs/notes/jul/doctor"
 
-	checkpointOK, draftOK := probeSyncCapabilities(remote.Name, headSHA, ref, noteRef)
+	checkpointOK, draftOK, err := probeSyncCapabilities(remote.Name, headSHA, ref, noteRef)
+	if err != nil {
+		return err
+	}
 
 	checkpointState := "disabled"
 	if checkpointOK {
@@ -68,26 +82,33 @@ func runDoctor() error {
 		draftState = "enabled"
 	}
 
-	_ = config.SetRepoConfigValue("remote", "checkpoint_sync", checkpointState)
-	_ = config.SetRepoConfigValue("remote", "draft_sync", draftState)
+	if err := config.SetRepoConfigValue("remote", "checkpoint_sync", checkpointState); err != nil {
+		return err
+	}
+	if err := config.SetRepoConfigValue("remote", "draft_sync", draftState); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(os.Stdout, "checkpoint_sync: %s\n", checkpointState)
 	fmt.Fprintf(os.Stdout, "draft_sync: %s\n", draftState)
 	return nil
 }
 
-func probeSyncCapabilities(remoteName, headSHA, ref, noteRef string) (bool, bool) {
+func probeSyncCapabilities(remoteName, headSHA, ref, noteRef string) (bool, bool, error) {
 	checkpointOK := false
 	draftOK := false
 
 	if err := pushRef(remoteName, headSHA, ref, false); err != nil {
-		return false, false
+		return false, false, err
 	}
-	_, _ = gitutil.Git("notes", "--ref", noteRef, "add", "-f", "-m", "jul doctor", headSHA)
+	if _, err := gitutil.Git("notes", "--ref", noteRef, "add", "-f", "-m", "jul doctor", headSHA); err != nil {
+		_, _ = gitutil.Git("push", remoteName, ":"+ref)
+		return false, false, err
+	}
 	if _, err := gitutil.Git("push", remoteName, noteRef+":"+noteRef); err != nil {
 		_, _ = gitutil.Git("notes", "--ref", noteRef, "remove", headSHA)
 		_, _ = gitutil.Git("push", remoteName, ":"+ref)
-		return false, false
+		return false, false, err
 	}
 	checkpointOK = true
 
@@ -104,5 +125,5 @@ func probeSyncCapabilities(remoteName, headSHA, ref, noteRef string) (bool, bool
 	_, _ = gitutil.Git("notes", "--ref", noteRef, "remove", headSHA)
 	_, _ = gitutil.Git("push", remoteName, ":"+ref)
 	_, _ = gitutil.Git("push", remoteName, ":"+noteRef)
-	return checkpointOK, draftOK
+	return checkpointOK, draftOK, nil
 }
