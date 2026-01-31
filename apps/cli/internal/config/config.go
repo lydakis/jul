@@ -18,7 +18,10 @@ func WorkspaceID() string {
 		if strings.Contains(value, "/") {
 			return value
 		}
-		user := UserName()
+		user := UserNamespace()
+		if user == "" {
+			user = UserName()
+		}
 		if user != "" {
 			return user + "/" + value
 		}
@@ -36,7 +39,10 @@ func WorkspaceID() string {
 	if cfg := gitConfigValue("jul.workspace"); cfg != "" {
 		return cfg
 	}
-	user := UserName()
+	user := UserNamespace()
+	if user == "" {
+		user = UserName()
+	}
 	workspace := WorkspaceName()
 	if user == "" {
 		user = usernameFallback()
@@ -97,6 +103,16 @@ func UserName() string {
 		return cfg
 	}
 	return usernameFallback()
+}
+
+func UserNamespace() string {
+	if cfg := configValue("user.user_namespace"); cfg != "" {
+		return cfg
+	}
+	if cfg := configValue("user_namespace"); cfg != "" {
+		return cfg
+	}
+	return ""
 }
 
 func WorkspaceName() string {

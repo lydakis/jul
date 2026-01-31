@@ -6,15 +6,20 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/identity"
 )
 
 func workspaceParts() (string, string) {
+	_, _ = identity.ResolveUserNamespace("")
 	id := strings.TrimSpace(config.WorkspaceID())
 	parts := strings.SplitN(id, "/", 2)
 	if len(parts) == 2 {
 		return parts[0], parts[1]
 	}
-	user := config.UserName()
+	user := strings.TrimSpace(config.UserNamespace())
+	if user == "" {
+		user = strings.TrimSpace(config.UserName())
+	}
 	if user == "" {
 		user = "user"
 	}

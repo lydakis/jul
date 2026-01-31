@@ -292,7 +292,10 @@ func runWorkspaceCheckout(args []string) int {
 		}
 	}
 	if user == "" {
-		user = config.UserName()
+		user = strings.TrimSpace(config.UserNamespace())
+		if user == "" {
+			user = config.UserName()
+		}
 	}
 	if user == "" {
 		fmt.Fprintln(os.Stderr, "workspace user required")

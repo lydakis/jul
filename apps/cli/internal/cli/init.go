@@ -10,9 +10,10 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/identity"
 	"github.com/lydakis/jul/cli/internal/hooks"
-	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func newInitCommand() Command {
@@ -100,8 +101,10 @@ func runInit(args []string) int {
 	}
 
 	localOnly := false
+	remoteName := ""
 	selected, err := remotesel.Resolve()
 	if err == nil {
+		remoteName = selected.Name
 		if err := ensureJulRefspecs(repoRoot, selected.Name); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to configure remote refspecs: %v\n", err)
 			return 1
@@ -125,6 +128,11 @@ func runInit(args []string) int {
 		localOnly = true
 	} else if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to resolve remote: %v\n", err)
+		return 1
+	}
+
+	if _, err := identity.ResolveUserNamespace(remoteName); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve user namespace: %v\n", err)
 		return 1
 	}
 

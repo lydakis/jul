@@ -47,7 +47,10 @@ func Run(opts Options) (Result, error) {
 		workspace = "@"
 	}
 	if user == "" {
-		user = config.UserName()
+		user = strings.TrimSpace(config.UserNamespace())
+		if user == "" {
+			user = config.UserName()
+		}
 	}
 	if user == "" {
 		return Result{}, fmt.Errorf("user required for restack")

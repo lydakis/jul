@@ -10,6 +10,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/identity"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/restack"
 	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
@@ -50,23 +51,8 @@ func Sync() (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	user, workspace := workspaceParts()
-	if workspace == "" {
-		workspace = "@"
-	}
-	deviceID, err := config.DeviceID()
-	if err != nil {
-		return Result{}, err
-	}
 
-	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
-	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
-
-	res := Result{
-		WorkspaceRef: workspaceRef,
-		SyncRef:      syncRef,
-	}
-
+	res := Result{}
 	workspaceTip := ""
 	remote, rerr := remotesel.Resolve()
 	if rerr == nil {
@@ -83,6 +69,27 @@ func Sync() (Result, error) {
 			return res, rerr
 		}
 	}
+
+	if rerr == nil {
+		_, _ = identity.ResolveUserNamespace(remote.Name)
+	} else {
+		_, _ = identity.ResolveUserNamespace("")
+	}
+
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return Result{}, err
+	}
+
+	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
+	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
+
+	res.WorkspaceRef = workspaceRef
+	res.SyncRef = syncRef
 
 	if rerr == nil {
 		_ = fetchRef(remote.Name, workspaceRef)
@@ -503,12 +510,16 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 }
 
 func workspaceParts() (string, string) {
+	_, _ = identity.ResolveUserNamespace("")
 	id := strings.TrimSpace(config.WorkspaceID())
 	parts := strings.SplitN(id, "/", 2)
 	if len(parts) == 2 {
 		return parts[0], parts[1]
 	}
-	user := config.UserName()
+	user := strings.TrimSpace(config.UserNamespace())
+	if user == "" {
+		user = strings.TrimSpace(config.UserName())
+	}
 	if user == "" {
 		user = "user"
 	}

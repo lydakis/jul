@@ -62,6 +62,21 @@ func RepoTopLevel() (string, error) {
 	return git("rev-parse", "--show-toplevel")
 }
 
+func RootCommit() (string, error) {
+	if _, err := git("rev-parse", "--verify", "HEAD"); err != nil {
+		return "", nil
+	}
+	out, err := git("rev-list", "--max-parents=0", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Fields(out)
+	if len(lines) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(lines[0]), nil
+}
+
 func GitPath(repoRoot, path string) (string, error) {
 	if strings.TrimSpace(repoRoot) == "" {
 		return "", fmt.Errorf("repo root required")
