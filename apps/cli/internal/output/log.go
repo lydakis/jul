@@ -13,6 +13,14 @@ type LogEntry struct {
 	When              string `json:"when"`
 	AttestationStatus string `json:"attestation_status,omitempty"`
 	Suggestions       int    `json:"suggestions,omitempty"`
+	Traces            []TraceSummary `json:"traces,omitempty"`
+}
+
+type TraceSummary struct {
+	TraceSHA      string `json:"trace_sha"`
+	TraceType     string `json:"trace_type,omitempty"`
+	Agent         string `json:"agent,omitempty"`
+	PromptSummary string `json:"prompt_summary,omitempty"`
 }
 
 func RenderLog(w io.Writer, entries []LogEntry, opts Options) {
@@ -32,6 +40,19 @@ func RenderLog(w io.Writer, entries []LogEntry, opts Options) {
 		}
 		if entry.Suggestions > 0 {
 			fmt.Fprintf(w, "        %d suggestion(s) pending\n", entry.Suggestions)
+		}
+		if len(entry.Traces) > 0 {
+			fmt.Fprintf(w, "  └── %d trace(s):\n", len(entry.Traces))
+			for _, trace := range entry.Traces {
+				line := fmt.Sprintf("      (sha:%s)", trace.TraceSHA)
+				if trace.Agent != "" {
+					line += " " + trace.Agent
+				}
+				if trace.PromptSummary != "" {
+					line += " " + fmt.Sprintf("%q", trace.PromptSummary)
+				}
+				fmt.Fprintln(w, line)
+			}
 		}
 		fmt.Fprintln(w, "")
 	}
