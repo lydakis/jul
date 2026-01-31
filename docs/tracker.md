@@ -22,7 +22,7 @@
 - [ ] **Sync safety features**: draft secret scan before push (`--allow-secrets` override), `.jul/syncignore` support.
 - [ ] **Tracked base drift**: persist `track-tip` for publish branch; surface base‑advanced in status; update only on restack/checkout/promote.
 - [x] **`jul doctor`**: verify remote supports custom refs + non‑FF updates under `refs/jul/*` (and report fallbacks).
-- [ ] **`jul log --traces`**: show trace history in log output.
+- [x] **`jul log --traces`**: show trace history in log output.
 - [ ] **Suggestions default filter**: exclude stale suggestions unless explicitly requested.
 - [ ] **CI + privacy alignment**: sync only structured attestation fields by default; gate agent‑review summaries and CI output snippets behind opt‑in + scrubber.
 - [ ] **Restack attestation inheritance**: store `attestation_inherit_from` on rebased checkpoints and display prior results as **stale** (display‑only, never gating).
