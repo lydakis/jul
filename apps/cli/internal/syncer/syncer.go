@@ -403,12 +403,17 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, changeRef, changeRemote); err != nil {
 			return res, err
 		}
+		localAnchor, _ := gitutil.ResolveRef(anchorRef)
+		localAnchor = strings.TrimSpace(localAnchor)
+		if localAnchor == "" {
+			return res, fmt.Errorf("anchor ref missing for change %s", changeID)
+		}
 		anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
 		if strings.TrimSpace(anchorRemote) == "" {
-			if err := pushRef(syncRes.RemoteName, checkpointSHA, anchorRef, false); err != nil {
+			if err := pushRef(syncRes.RemoteName, localAnchor, anchorRef, false); err != nil {
 				return res, err
 			}
-		} else if strings.TrimSpace(anchorRemote) != strings.TrimSpace(checkpointSHA) {
+		} else if strings.TrimSpace(anchorRemote) != localAnchor {
 			return res, fmt.Errorf("anchor ref mismatch for change %s", changeID)
 		}
 	}
@@ -540,12 +545,17 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		if err := pushWorkspace(syncRes.RemoteName, headSHA, changeRef, changeRemote); err != nil {
 			return res, err
 		}
+		localAnchor, _ := gitutil.ResolveRef(anchorRef)
+		localAnchor = strings.TrimSpace(localAnchor)
+		if localAnchor == "" {
+			return res, fmt.Errorf("anchor ref missing for change %s", changeID)
+		}
 		anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
 		if strings.TrimSpace(anchorRemote) == "" {
-			if err := pushRef(syncRes.RemoteName, headSHA, anchorRef, false); err != nil {
+			if err := pushRef(syncRes.RemoteName, localAnchor, anchorRef, false); err != nil {
 				return res, err
 			}
-		} else if strings.TrimSpace(anchorRemote) != strings.TrimSpace(headSHA) {
+		} else if strings.TrimSpace(anchorRemote) != localAnchor {
 			return res, fmt.Errorf("anchor ref mismatch for change %s", changeID)
 		}
 	}
