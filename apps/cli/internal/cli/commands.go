@@ -26,6 +26,7 @@ func Commands(version string) []Command {
 		newInitCommand(),
 		newRemoteCommand(),
 		newConfigureCommand(),
+		newDoctorCommand(),
 		newWorkspaceCommand(),
 		newLocalCommand(),
 		newCheckpointCommand(),
