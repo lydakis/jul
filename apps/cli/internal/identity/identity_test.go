@@ -49,6 +49,17 @@ func TestResolveUserNamespaceFromConfig(t *testing.T) {
 	if ns != "cached-7777" {
 		t.Fatalf("expected cached namespace, got %q", ns)
 	}
+	root, _ := gitutil.RootCommit()
+	meta, ok, err := metadata.ReadRepoMeta(root)
+	if err != nil {
+		t.Fatalf("read repo meta: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected repo meta note")
+	}
+	if meta.UserNamespace != ns {
+		t.Fatalf("expected repo meta namespace %q got %q", ns, meta.UserNamespace)
+	}
 }
 
 func TestResolveUserNamespaceGeneratesAndPublishes(t *testing.T) {

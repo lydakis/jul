@@ -23,16 +23,27 @@ func ResolveUserNamespace(remoteName string) (string, error) {
 	}
 
 	rootSHA, _ := gitutil.RootCommit()
+	repoMetaOK := false
 	if rootSHA != "" {
 		if meta, ok, err := metadata.ReadRepoMeta(rootSHA); err == nil && ok {
 			if strings.TrimSpace(meta.UserNamespace) != "" {
 				_ = config.SetRepoConfigValue("user", "user_namespace", strings.TrimSpace(meta.UserNamespace))
 				return strings.TrimSpace(meta.UserNamespace), nil
 			}
+			repoMetaOK = ok
 		}
 	}
 
 	if ns := strings.TrimSpace(config.UserNamespace()); ns != "" {
+		if rootSHA != "" && !repoMetaOK {
+			meta := metadata.RepoMeta{
+				RepoID:        repoIDFromRoot(rootSHA),
+				UserNamespace: ns,
+				CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+				UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+			}
+			_ = metadata.WriteRepoMeta(rootSHA, meta)
+		}
 		return ns, nil
 	}
 

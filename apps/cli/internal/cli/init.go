@@ -101,7 +101,7 @@ func runInit(args []string) int {
 	}
 
 	localOnly := false
-	remoteName := ""
+	remoteName = ""
 	selected, err := remotesel.Resolve()
 	if err == nil {
 		remoteName = selected.Name
