@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,7 +9,13 @@ import (
 	"strings"
 )
 
-func EnsureWorktree(repoRoot, baseSHA string) (string, error) {
+type WorktreeOptions struct {
+	AllowMergeInProgress bool
+}
+
+var ErrMergeInProgress = errors.New("merge in progress in agent worktree")
+
+func EnsureWorktree(repoRoot, baseSHA string, opts WorktreeOptions) (string, error) {
 	agentRoot := filepath.Join(repoRoot, ".jul", "agent-workspace")
 	worktree := filepath.Join(agentRoot, "worktree")
 
@@ -18,7 +25,10 @@ func EnsureWorktree(repoRoot, baseSHA string) (string, error) {
 
 	if _, err := os.Stat(worktree); err == nil {
 		if MergeInProgress(worktree) {
-			return worktree, nil
+			if opts.AllowMergeInProgress {
+				return worktree, nil
+			}
+			return "", ErrMergeInProgress
 		}
 		if err := resetWorktree(worktree, baseSHA); err == nil {
 			return worktree, nil

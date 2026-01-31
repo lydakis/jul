@@ -104,7 +104,7 @@ func Run(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("no checkpoints found for change")
 	}
 
-	worktree, err := agent.EnsureWorktree(repoRoot, baseTip)
+	worktree, err := agent.EnsureWorktree(repoRoot, baseTip, agent.WorktreeOptions{})
 	if err != nil {
 		return Result{}, err
 	}

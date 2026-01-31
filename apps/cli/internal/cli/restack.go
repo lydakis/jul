@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lydakis/jul/cli/internal/agent"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/restack"
 	"github.com/lydakis/jul/cli/internal/workspace"
@@ -67,6 +68,10 @@ func runWorkspaceRestack(args []string) int {
 		BaseTip:   baseTip,
 	})
 	if err != nil {
+		if errors.Is(err, agent.ErrMergeInProgress) {
+			fmt.Fprintln(os.Stderr, "restack blocked: merge in progress; run 'jul merge' first")
+			return 1
+		}
 		var conflict restack.ConflictError
 		if errors.As(err, &conflict) {
 			fmt.Fprintf(os.Stderr, "Restack conflict on checkpoint %s\n", strings.TrimSpace(conflict.CheckpointSHA))

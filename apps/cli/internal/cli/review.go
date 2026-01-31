@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -68,8 +69,11 @@ func runReview() ([]client.Suggestion, output.ReviewSummary, error) {
 		return nil, output.ReviewSummary{}, err
 	}
 
-	worktree, err := agent.EnsureWorktree(repoRoot, baseSHA)
+	worktree, err := agent.EnsureWorktree(repoRoot, baseSHA, agent.WorktreeOptions{})
 	if err != nil {
+		if errors.Is(err, agent.ErrMergeInProgress) {
+			return nil, output.ReviewSummary{}, fmt.Errorf("merge in progress; run 'jul merge' first")
+		}
 		return nil, output.ReviewSummary{}, err
 	}
 

@@ -122,11 +122,18 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 		return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
 	}
 
-	worktree, err := agent.EnsureWorktree(repoRoot, oursSHA)
+	worktree, err := agent.EnsureWorktree(repoRoot, oursSHA, agent.WorktreeOptions{AllowMergeInProgress: true})
 	if err != nil {
 		return output.MergeOutput{}, err
 	}
 	mergeInProgress := agent.MergeInProgress(worktree)
+	if mergeInProgress {
+		mergeHead, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+		headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
+		if strings.TrimSpace(mergeHead) != strings.TrimSpace(theirsSHA) || strings.TrimSpace(headSHA) != strings.TrimSpace(oursSHA) {
+			mergeInProgress = false
+		}
+	}
 	if !mergeInProgress {
 		_ = gitDir(worktree, nil, "merge", "--abort")
 		if err := gitDir(worktree, nil, "reset", "--hard", oursSHA); err != nil {
