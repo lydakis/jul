@@ -6,14 +6,16 @@ import (
 )
 
 type LogEntry struct {
-	CommitSHA         string `json:"commit_sha"`
-	ChangeID          string `json:"change_id"`
-	Author            string `json:"author"`
-	Message           string `json:"message"`
-	When              string `json:"when"`
-	AttestationStatus string `json:"attestation_status,omitempty"`
-	Suggestions       int    `json:"suggestions,omitempty"`
-	Traces            []TraceSummary `json:"traces,omitempty"`
+	CommitSHA                string         `json:"commit_sha"`
+	ChangeID                 string         `json:"change_id"`
+	Author                   string         `json:"author"`
+	Message                  string         `json:"message"`
+	When                     string         `json:"when"`
+	AttestationStatus        string         `json:"attestation_status,omitempty"`
+	AttestationStale         bool           `json:"attestation_stale,omitempty"`
+	AttestationInheritedFrom string         `json:"attestation_inherited_from,omitempty"`
+	Suggestions              int            `json:"suggestions,omitempty"`
+	Traces                   []TraceSummary `json:"traces,omitempty"`
 }
 
 type TraceSummary struct {
@@ -36,7 +38,11 @@ func RenderLog(w io.Writer, entries []LogEntry, opts Options) {
 		}
 		if entry.AttestationStatus != "" {
 			icon := statusIconColored(entry.AttestationStatus, opts)
-			fmt.Fprintf(w, "        %sCI %s\n", icon, statusText(entry.AttestationStatus, opts))
+			line := fmt.Sprintf("        %sCI %s", icon, statusText(entry.AttestationStatus, opts))
+			if entry.AttestationStale {
+				line += " (stale)"
+			}
+			fmt.Fprintln(w, line)
 		}
 		if entry.Suggestions > 0 {
 			fmt.Fprintf(w, "        %d suggestion(s) pending\n", entry.Suggestions)

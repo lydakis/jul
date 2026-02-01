@@ -40,6 +40,7 @@ func Commands(version string) []Command {
 		newLogCommand(),
 		newDiffCommand(),
 		newShowCommand(),
+		newPruneCommand(),
 		newBlameCommand(),
 		newApplyCommand(),
 		newReflogCommand(),
@@ -63,7 +64,12 @@ func newSyncCommand() Command {
 			fs.SetOutput(os.Stdout)
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			allowSecrets := fs.Bool("allow-secrets", false, "Allow draft push even if secrets are detected")
+			daemon := fs.Bool("daemon", false, "Run sync continuously in the foreground")
 			_ = fs.Parse(args)
+
+			if *daemon {
+				return runSyncDaemon(syncer.SyncOptions{AllowSecrets: *allowSecrets})
+			}
 
 			res, err := syncer.SyncWithOptions(syncer.SyncOptions{AllowSecrets: *allowSecrets})
 			if err != nil {

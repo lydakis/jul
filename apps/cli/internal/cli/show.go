@@ -74,17 +74,19 @@ func buildShowPayload(id string) (output.ShowResult, error) {
 		changeID = gitutil.FallbackChangeID(sha)
 	}
 
-	att, _ := metadata.GetAttestation(sha)
+	attView, _ := resolveAttestationView(sha)
 	diffstat := diffStatParent(sha)
 	return output.ShowResult{
-		Type:        "checkpoint",
-		CommitSHA:   sha,
-		ChangeID:    changeID,
-		Message:     strings.TrimSpace(message),
-		Author:      strings.TrimSpace(author),
-		When:        strings.TrimSpace(when),
-		Attestation: att,
-		DiffStat:    diffstat,
+		Type:                     "checkpoint",
+		CommitSHA:                sha,
+		ChangeID:                 changeID,
+		Message:                  strings.TrimSpace(message),
+		Author:                   strings.TrimSpace(author),
+		When:                     strings.TrimSpace(when),
+		Attestation:              attView.Attestation,
+		AttestationStale:         attView.Stale,
+		AttestationInheritedFrom: attView.InheritedFrom,
+		DiffStat:                 diffstat,
 	}, nil
 }
 

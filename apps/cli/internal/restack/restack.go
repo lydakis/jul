@@ -114,8 +114,18 @@ func Run(opts Options) (Result, error) {
 
 	newParent := baseTip
 	prevTrace := ""
+	lastAttested := ""
 	newCheckpoints := make([]string, 0, len(chain))
 	for idx, oldSHA := range chain {
+		if att, _ := metadata.GetAttestation(oldSHA); att != nil {
+			if strings.TrimSpace(att.Status) != "" {
+				lastAttested = oldSHA
+			} else if inheritFrom := strings.TrimSpace(att.AttestationInheritFrom); inheritFrom != "" {
+				if inherited, _ := metadata.GetAttestation(inheritFrom); inherited != nil && strings.TrimSpace(inherited.Status) != "" {
+					lastAttested = inheritFrom
+				}
+			}
+		}
 		if _, err := gitDir(worktree, nil, "cherry-pick", "--no-commit", oldSHA); err != nil {
 			if isEmptyCherryPick(err) {
 				_, _ = gitDir(worktree, nil, "cherry-pick", "--skip")
@@ -181,6 +191,10 @@ func Run(opts Options) (Result, error) {
 		newParent = newSHA
 		newCheckpoints = append(newCheckpoints, newSHA)
 		prevTrace = traceSHA
+
+		if lastAttested != "" {
+			_ = metadata.WriteAttestationInheritance(newSHA, lastAttested)
+		}
 
 		keepRef := keepRefPrefix(user, workspace) + changeID + "/" + newSHA
 		if err := gitutil.UpdateRef(keepRef, newSHA); err != nil {

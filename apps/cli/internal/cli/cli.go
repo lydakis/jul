@@ -4,6 +4,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
 type Command struct {
@@ -28,6 +32,15 @@ func (a *App) Run(args []string) int {
 
 	for _, cmd := range a.Commands {
 		if cmd.Name == args[0] {
+			if shouldAutoSync(cmd.Name) && config.SyncMode() == "on-command" {
+				if os.Getenv("JUL_NO_SYNC") == "" {
+					if _, err := gitutil.RepoTopLevel(); err == nil {
+						if _, err := syncer.Sync(); err != nil {
+							fmt.Fprintf(os.Stderr, "sync warning: %v\n", err)
+						}
+					}
+				}
+			}
 			return cmd.Run(args[1:])
 		}
 	}
@@ -59,4 +72,18 @@ func (a *App) usage(problem string) int {
 
 func FormatLines(lines ...string) string {
 	return strings.Join(lines, "\n")
+}
+
+func shouldAutoSync(command string) bool {
+	if command == "" {
+		return false
+	}
+	return !autoSyncSkip[strings.ToLower(command)]
+}
+
+var autoSyncSkip = map[string]bool{
+	"clone":   true,
+	"init":    true,
+	"sync":    true,
+	"version": true,
 }

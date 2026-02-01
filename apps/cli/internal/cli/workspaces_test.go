@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/syncer"
 	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
@@ -162,9 +164,23 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 		t.Fatalf("expected checkpoint sha")
 	}
 	writeFilePath(t, repo, "feat.txt", "one\nmore\n")
-	if _, err := syncer.Checkpoint("feat: two"); err != nil {
+	secondCheckpoint, err := syncer.Checkpoint("feat: two")
+	if err != nil {
 		t.Fatalf("second checkpoint failed: %v", err)
 	}
+
+	for _, sha := range []string{checkpointRes.CheckpointSHA, secondCheckpoint.CheckpointSHA} {
+		att := client.Attestation{
+			CommitSHA: sha,
+			ChangeID:  checkpointRes.ChangeID,
+			Type:      "ci",
+			Status:    "pass",
+		}
+		if _, err := metadata.WriteAttestation(att); err != nil {
+			t.Fatalf("WriteAttestation failed: %v", err)
+		}
+	}
+	oldChain := []string{checkpointRes.CheckpointSHA, secondCheckpoint.CheckpointSHA}
 
 	baseTip := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "refs/heads/main"))
 
@@ -210,6 +226,9 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 	if err != nil || len(chain) == 0 {
 		t.Fatalf("expected checkpoint chain after restack, got %v", err)
 	}
+	if len(chain) != len(oldChain) {
+		t.Fatalf("expected %d checkpoints after restack, got %d", len(oldChain), len(chain))
+	}
 	oldest := chain[0]
 	parent, err := gitutil.ParentOf(oldest)
 	if err != nil {
@@ -217,6 +236,12 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 	}
 	if strings.TrimSpace(parent) != newBase {
 		t.Fatalf("expected checkpoint base parent %s, got %s", newBase, strings.TrimSpace(parent))
+	}
+	for idx, newSHA := range chain {
+		att, _ := metadata.GetAttestation(newSHA)
+		if att == nil || strings.TrimSpace(att.AttestationInheritFrom) != oldChain[idx] {
+			t.Fatalf("expected inherited attestation %s for %s, got %+v", oldChain[idx], newSHA, att)
+		}
 	}
 
 	// Trace-Base should remain in Trace-Head ancestry after restack.

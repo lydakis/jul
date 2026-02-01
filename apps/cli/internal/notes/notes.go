@@ -82,6 +82,25 @@ func ReadJSON(ref, objectSHA string, target any) (bool, error) {
 	return true, nil
 }
 
+func Remove(ref, objectSHA string) error {
+	if strings.TrimSpace(ref) == "" || strings.TrimSpace(objectSHA) == "" {
+		return fmt.Errorf("note ref and object sha required")
+	}
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "-C", repoRoot, "notes", "--ref", ref, "remove", objectSHA)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if isNoteMissing(output) {
+			return nil
+		}
+		return fmt.Errorf("git notes remove failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func List(ref string) ([]Entry, error) {
 	if strings.TrimSpace(ref) == "" {
 		return nil, fmt.Errorf("note ref required")

@@ -16,14 +16,14 @@ func newLogCommand() Command {
 	return Command{
 		Name:    "log",
 		Summary: "Show checkpoint history",
-	Run: func(args []string) int {
-		fs := flag.NewFlagSet("log", flag.ContinueOnError)
-		fs.SetOutput(os.Stdout)
-		limit := fs.Int("limit", 20, "Max checkpoints to show")
-		changeID := fs.String("change-id", "", "Filter by Change-Id")
-		showTraces := fs.Bool("traces", false, "Include trace history")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		_ = fs.Parse(args)
+		Run: func(args []string) int {
+			fs := flag.NewFlagSet("log", flag.ContinueOnError)
+			fs.SetOutput(os.Stdout)
+			limit := fs.Int("limit", 20, "Max checkpoints to show")
+			changeID := fs.String("change-id", "", "Filter by Change-Id")
+			showTraces := fs.Bool("traces", false, "Include trace history")
+			jsonOut := fs.Bool("json", false, "Output JSON")
+			_ = fs.Parse(args)
 
 			entries, err := listCheckpoints()
 			if err != nil {
@@ -36,21 +36,23 @@ func newLogCommand() Command {
 				if *changeID != "" && cp.ChangeID != *changeID {
 					continue
 				}
-				att, _ := metadata.GetAttestation(cp.SHA)
+				attView, _ := resolveAttestationView(cp.SHA)
 				suggestions, _ := metadata.ListSuggestions(cp.ChangeID, "pending", 1000)
-			entry := output.LogEntry{
-				CommitSHA:   cp.SHA,
-				ChangeID:    cp.ChangeID,
-				Author:      cp.Author,
-				Message:     firstLine(cp.Message),
-				When:        cp.When.Format("2006-01-02 15:04:05"),
-				Suggestions: len(suggestions),
-			}
-			if *showTraces {
-				entry.Traces = traceSummaries(cp.Message)
-			}
-				if att != nil {
-					entry.AttestationStatus = att.Status
+				entry := output.LogEntry{
+					CommitSHA:   cp.SHA,
+					ChangeID:    cp.ChangeID,
+					Author:      cp.Author,
+					Message:     firstLine(cp.Message),
+					When:        cp.When.Format("2006-01-02 15:04:05"),
+					Suggestions: len(suggestions),
+				}
+				if *showTraces {
+					entry.Traces = traceSummaries(cp.Message)
+				}
+				if attView.Status != "" {
+					entry.AttestationStatus = attView.Status
+					entry.AttestationStale = attView.Stale
+					entry.AttestationInheritedFrom = attView.InheritedFrom
 				}
 				filtered = append(filtered, entry)
 				if *limit > 0 && len(filtered) >= *limit {

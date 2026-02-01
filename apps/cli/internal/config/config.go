@@ -159,6 +159,26 @@ func SyncAutoRestack() bool {
 	return true
 }
 
+func SyncMode() string {
+	mode := strings.ToLower(strings.TrimSpace(configValue("sync.mode")))
+	switch mode {
+	case "continuous", "explicit", "on-command":
+		return mode
+	}
+	if mode == "" {
+		return "on-command"
+	}
+	return "on-command"
+}
+
+func SyncDebounceSeconds() int {
+	return configInt("sync.debounce_seconds", 2)
+}
+
+func SyncMinIntervalSeconds() int {
+	return configInt("sync.min_interval_seconds", 5)
+}
+
 func CIRunOnCheckpoint() bool {
 	return configBool("ci.run_on_checkpoint", true)
 }
@@ -260,6 +280,10 @@ func CheckpointAdoptRunReview() bool {
 	return configBool("checkpoint.adopt_run_review", false)
 }
 
+func RetentionCheckpointKeepDays() int {
+	return configInt("retention.checkpoint_keep_days", 90)
+}
+
 func hostnameFallback() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -357,6 +381,15 @@ func configBool(key string, def bool) bool {
 			return true
 		case "false", "no", "0", "off":
 			return false
+		}
+	}
+	return def
+}
+
+func configInt(key string, def int) int {
+	if cfg := configValue(key); cfg != "" {
+		if val, err := strconv.Atoi(strings.TrimSpace(cfg)); err == nil {
+			return val
 		}
 	}
 	return def

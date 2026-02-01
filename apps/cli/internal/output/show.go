@@ -9,15 +9,17 @@ import (
 )
 
 type ShowResult struct {
-	Type        string              `json:"type"`
-	CommitSHA   string              `json:"commit_sha,omitempty"`
-	ChangeID    string              `json:"change_id,omitempty"`
-	Message     string              `json:"message,omitempty"`
-	Author      string              `json:"author,omitempty"`
-	When        string              `json:"when,omitempty"`
-	Attestation *client.Attestation `json:"attestation,omitempty"`
-	Suggestion  *client.Suggestion  `json:"suggestion,omitempty"`
-	DiffStat    string              `json:"diffstat,omitempty"`
+	Type                     string              `json:"type"`
+	CommitSHA                string              `json:"commit_sha,omitempty"`
+	ChangeID                 string              `json:"change_id,omitempty"`
+	Message                  string              `json:"message,omitempty"`
+	Author                   string              `json:"author,omitempty"`
+	When                     string              `json:"when,omitempty"`
+	Attestation              *client.Attestation `json:"attestation,omitempty"`
+	AttestationStale         bool                `json:"attestation_stale,omitempty"`
+	AttestationInheritedFrom string              `json:"attestation_inherited_from,omitempty"`
+	Suggestion               *client.Suggestion  `json:"suggestion,omitempty"`
+	DiffStat                 string              `json:"diffstat,omitempty"`
 }
 
 func RenderShow(w io.Writer, payload ShowResult) {
@@ -53,7 +55,14 @@ func RenderShow(w io.Writer, payload ShowResult) {
 		fmt.Fprintf(w, "Change-Id: %s\n", payload.ChangeID)
 	}
 	if payload.Attestation != nil {
-		fmt.Fprintf(w, "\nAttestation: %s\n", payload.Attestation.Status)
+		line := fmt.Sprintf("\nAttestation: %s", payload.Attestation.Status)
+		if payload.AttestationStale {
+			line += " (stale)"
+			if payload.AttestationInheritedFrom != "" {
+				line += fmt.Sprintf(" from %s", payload.AttestationInheritedFrom)
+			}
+		}
+		fmt.Fprintln(w, line)
 	}
 	if payload.DiffStat != "" {
 		fmt.Fprintln(w, "\nFiles changed:")

@@ -63,19 +63,20 @@ type Revision struct {
 }
 
 type Attestation struct {
-	AttestationID     string    `json:"attestation_id"`
-	CommitSHA         string    `json:"commit_sha"`
-	ChangeID          string    `json:"change_id"`
-	Type              string    `json:"type"`
-	Status            string    `json:"status"`
-	CompileStatus     string    `json:"compile_status,omitempty"`
-	TestStatus        string    `json:"test_status,omitempty"`
-	CoverageLinePct   *float64  `json:"coverage_line_pct,omitempty"`
-	CoverageBranchPct *float64  `json:"coverage_branch_pct,omitempty"`
-	StartedAt         time.Time `json:"started_at"`
-	FinishedAt        time.Time `json:"finished_at"`
-	SignalsJSON       string    `json:"signals_json"`
-	CreatedAt         time.Time `json:"created_at,omitempty"`
+	AttestationID          string    `json:"attestation_id"`
+	CommitSHA              string    `json:"commit_sha"`
+	AttestationInheritFrom string    `json:"attestation_inherit_from,omitempty"`
+	ChangeID               string    `json:"change_id"`
+	Type                   string    `json:"type"`
+	Status                 string    `json:"status"`
+	CompileStatus          string    `json:"compile_status,omitempty"`
+	TestStatus             string    `json:"test_status,omitempty"`
+	CoverageLinePct        *float64  `json:"coverage_line_pct,omitempty"`
+	CoverageBranchPct      *float64  `json:"coverage_branch_pct,omitempty"`
+	StartedAt              time.Time `json:"started_at"`
+	FinishedAt             time.Time `json:"finished_at"`
+	SignalsJSON            string    `json:"signals_json"`
+	CreatedAt              time.Time `json:"created_at,omitempty"`
 }
 
 type ReflogEntry struct {

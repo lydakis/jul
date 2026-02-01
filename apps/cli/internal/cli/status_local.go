@@ -6,7 +6,6 @@ import (
 	"time"
 
 	cicmd "github.com/lydakis/jul/cli/internal/ci"
-	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
@@ -44,7 +43,7 @@ func buildLocalStatus() (output.Status, error) {
 	}
 
 	var checkpoint *output.CheckpointStatus
-	var att *client.Attestation
+	var attView attestationView
 	last, err := latestCheckpoint()
 	if err != nil {
 		return output.Status{}, err
@@ -57,13 +56,13 @@ func buildLocalStatus() (output.Status, error) {
 			When:      last.When.Format("2006-01-02 15:04:05"),
 			ChangeID:  last.ChangeID,
 		}
-		att, _ = metadata.GetAttestation(last.SHA)
+		attView, _ = resolveAttestationView(last.SHA)
 	}
-	if att == nil && draftSHA != "" {
-		att, _ = metadata.GetAttestation(draftSHA)
+	if attView.Attestation == nil && draftSHA != "" {
+		attView, _ = resolveAttestationView(draftSHA)
 	}
-	if att == nil {
-		att, _ = metadata.GetAttestation(info.SHA)
+	if attView.Attestation == nil {
+		attView, _ = resolveAttestationView(info.SHA)
 	}
 
 	draftChangeID := ""
@@ -117,8 +116,10 @@ func buildLocalStatus() (output.Status, error) {
 			}
 		}
 	}
-	if att != nil {
-		status.AttestationStatus = att.Status
+	if attView.Status != "" {
+		status.AttestationStatus = attView.Status
+		status.AttestationStale = attView.Stale
+		status.AttestationInheritedFrom = attView.InheritedFrom
 	}
 
 	filesChanged := draftFilesChanged(draftSHA)
@@ -138,10 +139,8 @@ func buildLocalStatus() (output.Status, error) {
 	}
 	summaries := make([]output.CheckpointSummary, 0, len(checkpoints))
 	for _, cp := range checkpoints {
-		ciStatus := ""
-		if att, _ := metadata.GetAttestation(cp.SHA); att != nil {
-			ciStatus = att.Status
-		}
+		ciView, _ := resolveAttestationView(cp.SHA)
+		ciStatus := ciView.Status
 		suggestions, _ := metadata.ListSuggestions(cp.ChangeID, "pending", 1000)
 		summaries = append(summaries, output.CheckpointSummary{
 			CommitSHA:          cp.SHA,
@@ -149,6 +148,8 @@ func buildLocalStatus() (output.Status, error) {
 			ChangeID:           cp.ChangeID,
 			When:               cp.When.Format("2006-01-02 15:04:05"),
 			CIStatus:           ciStatus,
+			CIStale:            ciView.Stale,
+			CIInheritedFrom:    ciView.InheritedFrom,
 			SuggestionsPending: len(suggestions),
 		})
 	}

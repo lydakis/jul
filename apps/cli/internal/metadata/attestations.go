@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/notes"
 )
 
@@ -66,6 +67,54 @@ func GetAttestationFrom(ref, commitSHA string) (*client.Attestation, error) {
 		return nil, nil
 	}
 	return &att, nil
+}
+
+func GetAttestationWithInheritance(commitSHA string) (*client.Attestation, *client.Attestation, error) {
+	att, err := GetAttestation(commitSHA)
+	if err != nil || att == nil {
+		return att, nil, err
+	}
+	inheritFrom := strings.TrimSpace(att.AttestationInheritFrom)
+	if inheritFrom == "" {
+		return att, nil, nil
+	}
+	inherited, err := GetAttestation(inheritFrom)
+	if err != nil {
+		return att, nil, err
+	}
+	return att, inherited, nil
+}
+
+func WriteAttestationInheritance(commitSHA, inheritFrom string) error {
+	commitSHA = strings.TrimSpace(commitSHA)
+	inheritFrom = strings.TrimSpace(inheritFrom)
+	if commitSHA == "" || inheritFrom == "" {
+		return fmt.Errorf("commit and inherit-from required")
+	}
+	existing, err := GetAttestation(commitSHA)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if strings.TrimSpace(existing.Status) != "" || strings.TrimSpace(existing.AttestationInheritFrom) != "" {
+			return nil
+		}
+	}
+	changeID := ""
+	if msg, err := gitutil.CommitMessage(commitSHA); err == nil {
+		changeID = gitutil.ExtractChangeID(msg)
+	}
+	if changeID == "" {
+		changeID = gitutil.FallbackChangeID(commitSHA)
+	}
+	att := client.Attestation{
+		AttestationID:          newID(),
+		CommitSHA:              commitSHA,
+		ChangeID:               changeID,
+		AttestationInheritFrom: inheritFrom,
+		CreatedAt:              time.Now().UTC(),
+	}
+	return notes.AddJSON(notes.RefAttestationsCheckpoint, commitSHA, att)
 }
 
 func shrinkAttestationSignals(att client.Attestation, attempt int) client.Attestation {

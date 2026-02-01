@@ -7,26 +7,28 @@ import (
 )
 
 type Status struct {
-	WorkspaceID        string              `json:"workspace_id"`
-	Workspace          string              `json:"workspace,omitempty"`
-	WorkspaceDefault   bool                `json:"workspace_default,omitempty"`
-	Repo               string              `json:"repo"`
-	Branch             string              `json:"branch"`
-	DraftSHA           string              `json:"draft_sha"`
-	ChangeID           string              `json:"change_id"`
-	SyncStatus         string              `json:"sync_status"`
-	TrackRef           string              `json:"track_ref,omitempty"`
-	TrackTip           string              `json:"track_tip,omitempty"`
-	TrackTipCurrent    string              `json:"track_tip_current,omitempty"`
-	BaseAdvanced       bool                `json:"base_advanced,omitempty"`
-	LastCheckpoint     *CheckpointStatus   `json:"last_checkpoint,omitempty"`
-	AttestationStatus  string              `json:"attestation_status,omitempty"`
-	SuggestionsPending int                 `json:"suggestions_pending"`
-	Draft              *DraftStatus        `json:"draft,omitempty"`
-	DraftCI            *CIStatusDetails    `json:"draft_ci,omitempty"`
-	WorkingTree        *WorkingTreeStatus  `json:"working_tree,omitempty"`
-	Checkpoints        []CheckpointSummary `json:"checkpoints,omitempty"`
-	PromoteStatus      *PromoteStatus      `json:"promote_status,omitempty"`
+	WorkspaceID              string              `json:"workspace_id"`
+	Workspace                string              `json:"workspace,omitempty"`
+	WorkspaceDefault         bool                `json:"workspace_default,omitempty"`
+	Repo                     string              `json:"repo"`
+	Branch                   string              `json:"branch"`
+	DraftSHA                 string              `json:"draft_sha"`
+	ChangeID                 string              `json:"change_id"`
+	SyncStatus               string              `json:"sync_status"`
+	TrackRef                 string              `json:"track_ref,omitempty"`
+	TrackTip                 string              `json:"track_tip,omitempty"`
+	TrackTipCurrent          string              `json:"track_tip_current,omitempty"`
+	BaseAdvanced             bool                `json:"base_advanced,omitempty"`
+	LastCheckpoint           *CheckpointStatus   `json:"last_checkpoint,omitempty"`
+	AttestationStatus        string              `json:"attestation_status,omitempty"`
+	AttestationStale         bool                `json:"attestation_stale,omitempty"`
+	AttestationInheritedFrom string              `json:"attestation_inherited_from,omitempty"`
+	SuggestionsPending       int                 `json:"suggestions_pending"`
+	Draft                    *DraftStatus        `json:"draft,omitempty"`
+	DraftCI                  *CIStatusDetails    `json:"draft_ci,omitempty"`
+	WorkingTree              *WorkingTreeStatus  `json:"working_tree,omitempty"`
+	Checkpoints              []CheckpointSummary `json:"checkpoints,omitempty"`
+	PromoteStatus            *PromoteStatus      `json:"promote_status,omitempty"`
 }
 
 type CheckpointStatus struct {
@@ -61,6 +63,8 @@ type CheckpointSummary struct {
 	ChangeID           string `json:"change_id,omitempty"`
 	When               string `json:"when,omitempty"`
 	CIStatus           string `json:"ci_status,omitempty"`
+	CIStale            bool   `json:"ci_stale,omitempty"`
+	CIInheritedFrom    string `json:"ci_inherited_from,omitempty"`
 	SuggestionsPending int    `json:"suggestions_pending,omitempty"`
 }
 
@@ -138,6 +142,9 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 					icon = statusIcon(cp.CIStatus, opts)
 				}
 				line += fmt.Sprintf(" %sCI %s", icon, statusText(cp.CIStatus, opts))
+				if cp.CIStale {
+					line += " (stale)"
+				}
 			}
 			fmt.Fprintln(w, line)
 			if cp.SuggestionsPending > 0 {

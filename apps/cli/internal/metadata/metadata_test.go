@@ -120,6 +120,37 @@ func TestAttestationOutputSyncScrubsWhenEnabled(t *testing.T) {
 	})
 }
 
+func TestAttestationInheritance(t *testing.T) {
+	repo := initRepo(t)
+	base := commitFile(t, repo, "README.md", "hello\n", "base commit")
+	next := commitFile(t, repo, "README.md", "hello\nworld\n", "next commit")
+
+	withRepo(t, repo, func() {
+		att := client.Attestation{
+			CommitSHA: base,
+			ChangeID:  gitutil.FallbackChangeID(base),
+			Type:      "ci",
+			Status:    "pass",
+		}
+		if _, err := WriteAttestation(att); err != nil {
+			t.Fatalf("WriteAttestation failed: %v", err)
+		}
+		if err := WriteAttestationInheritance(next, base); err != nil {
+			t.Fatalf("WriteAttestationInheritance failed: %v", err)
+		}
+		note, inherited, err := GetAttestationWithInheritance(next)
+		if err != nil {
+			t.Fatalf("GetAttestationWithInheritance failed: %v", err)
+		}
+		if note == nil || note.AttestationInheritFrom != base {
+			t.Fatalf("expected inherit_from %s, got %+v", base, note)
+		}
+		if inherited == nil || inherited.CommitSHA != base || inherited.Status != "pass" {
+			t.Fatalf("expected inherited attestation for %s, got %+v", base, inherited)
+		}
+	})
+}
+
 func TestSuggestionLifecycle(t *testing.T) {
 	repo := initRepo(t)
 	base := commitFile(t, repo, "README.md", "hello\n", "base commit")
