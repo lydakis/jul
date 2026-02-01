@@ -278,7 +278,7 @@ func promoteLocal(branch, sha string, forceTarget bool, noPolicy bool) error {
 	if err := recordPromoteMeta(branch, sha); err != nil {
 		return err
 	}
-	return startNewDraftAfterPromote(repoRoot, sha)
+	return startNewDraftAfterPromote(repoRoot, sha, branch)
 }
 
 type stackWorkspace struct {
@@ -486,7 +486,7 @@ func recordPromoteMeta(branch, sha string) error {
 	return metadata.WriteChangeMeta(meta)
 }
 
-func startNewDraftAfterPromote(repoRoot, publishedSHA string) error {
+func startNewDraftAfterPromote(repoRoot, publishedSHA, branch string) error {
 	if strings.TrimSpace(publishedSHA) == "" {
 		return nil
 	}
@@ -523,6 +523,10 @@ func startNewDraftAfterPromote(repoRoot, publishedSHA string) error {
 	}
 	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), publishedSHA); err != nil {
 		return err
+	}
+	if strings.TrimSpace(branch) != "" {
+		trackRef := "refs/heads/" + strings.TrimSpace(branch)
+		_ = updateWorkspaceTracking(repoRoot, workspace, trackRef, publishedSHA)
 	}
 	if _, err := gitutil.Git("read-tree", "--reset", "-u", newDraftSHA); err != nil {
 		return err

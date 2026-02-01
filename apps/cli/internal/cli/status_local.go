@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
+	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func buildLocalStatus() (output.Status, error) {
@@ -101,6 +102,20 @@ func buildLocalStatus() (output.Status, error) {
 		SyncStatus:         "local",
 		LastCheckpoint:     checkpoint,
 		SuggestionsPending: len(suggestions),
+	}
+	if repoRoot, err := gitutil.RepoTopLevel(); err == nil {
+		if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err == nil && ok {
+			status.TrackRef = strings.TrimSpace(cfg.TrackRef)
+			status.TrackTip = strings.TrimSpace(cfg.TrackTip)
+			if status.TrackRef != "" {
+				if tip, err := gitutil.Git("-C", repoRoot, "rev-parse", status.TrackRef); err == nil {
+					status.TrackTipCurrent = strings.TrimSpace(tip)
+					if status.TrackTip != "" && status.TrackTipCurrent != "" && status.TrackTipCurrent != status.TrackTip {
+						status.BaseAdvanced = true
+					}
+				}
+			}
+		}
 	}
 	if att != nil {
 		status.AttestationStatus = att.Status

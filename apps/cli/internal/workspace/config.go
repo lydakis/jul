@@ -7,8 +7,10 @@ import (
 )
 
 type Config struct {
-	BaseRef string
-	BaseSHA string
+	BaseRef  string
+	BaseSHA  string
+	TrackRef string
+	TrackTip string
 }
 
 func ConfigPath(repoRoot, workspace string) string {
@@ -57,6 +59,10 @@ func parseConfig(raw string) Config {
 			cfg.BaseRef = val
 		case "base_sha":
 			cfg.BaseSHA = val
+		case "track_ref":
+			cfg.TrackRef = val
+		case "track_tip":
+			cfg.TrackTip = val
 		}
 	}
 	return cfg
@@ -72,6 +78,16 @@ func renderConfig(cfg Config) string {
 	if strings.TrimSpace(cfg.BaseSHA) != "" {
 		b.WriteString("base_sha = \"")
 		b.WriteString(cfg.BaseSHA)
+		b.WriteString("\"\n")
+	}
+	if strings.TrimSpace(cfg.TrackRef) != "" {
+		b.WriteString("track_ref = \"")
+		b.WriteString(cfg.TrackRef)
+		b.WriteString("\"\n")
+	}
+	if strings.TrimSpace(cfg.TrackTip) != "" {
+		b.WriteString("track_tip = \"")
+		b.WriteString(cfg.TrackTip)
 		b.WriteString("\"\n")
 	}
 	return b.String()

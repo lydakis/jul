@@ -219,9 +219,17 @@ func Run(opts Options) (Result, error) {
 	if baseSHA == "" {
 		baseSHA = baseTip
 	}
+	trackRef := ""
+	trackTip := ""
+	if strings.HasPrefix(baseRef, "refs/heads/") {
+		trackRef = baseRef
+		trackTip = baseTip
+	}
 	if err := wsconfig.WriteConfig(repoRoot, workspace, wsconfig.Config{
-		BaseRef: baseRef,
-		BaseSHA: baseSHA,
+		BaseRef:  baseRef,
+		BaseSHA:  baseSHA,
+		TrackRef: trackRef,
+		TrackTip: trackTip,
 	}); err != nil {
 		return Result{}, err
 	}

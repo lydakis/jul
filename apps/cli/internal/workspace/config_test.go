@@ -13,8 +13,10 @@ func TestReadWriteConfig(t *testing.T) {
 	}
 
 	cfg := Config{
-		BaseRef: "refs/heads/main",
-		BaseSHA: "abc123",
+		BaseRef:  "refs/heads/main",
+		BaseSHA:  "abc123",
+		TrackRef: "refs/heads/main",
+		TrackTip: "def456",
 	}
 	if err := WriteConfig(root, "@", cfg); err != nil {
 		t.Fatalf("write config failed: %v", err)
@@ -32,5 +34,11 @@ func TestReadWriteConfig(t *testing.T) {
 	}
 	if read.BaseSHA != cfg.BaseSHA {
 		t.Fatalf("expected base_sha %s, got %s", cfg.BaseSHA, read.BaseSHA)
+	}
+	if read.TrackRef != cfg.TrackRef {
+		t.Fatalf("expected track_ref %s, got %s", cfg.TrackRef, read.TrackRef)
+	}
+	if read.TrackTip != cfg.TrackTip {
+		t.Fatalf("expected track_tip %s, got %s", cfg.TrackTip, read.TrackTip)
 	}
 }

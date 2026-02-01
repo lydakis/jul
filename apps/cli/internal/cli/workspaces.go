@@ -365,6 +365,7 @@ func runWorkspaceCheckout(args []string) int {
 		fmt.Fprintf(os.Stderr, "failed to update workspace head: %v\n", err)
 		return 1
 	}
+	refreshWorkspaceTrackTip(repoRoot, targetName)
 
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)

@@ -15,6 +15,10 @@ type Status struct {
 	DraftSHA           string              `json:"draft_sha"`
 	ChangeID           string              `json:"change_id"`
 	SyncStatus         string              `json:"sync_status"`
+	TrackRef           string              `json:"track_ref,omitempty"`
+	TrackTip           string              `json:"track_tip,omitempty"`
+	TrackTipCurrent    string              `json:"track_tip_current,omitempty"`
+	BaseAdvanced       bool                `json:"base_advanced,omitempty"`
 	LastCheckpoint     *CheckpointStatus   `json:"last_checkpoint,omitempty"`
 	AttestationStatus  string              `json:"attestation_status,omitempty"`
 	SuggestionsPending int                 `json:"suggestions_pending"`
@@ -109,6 +113,15 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 
 	if status.DraftCI != nil {
 		renderDraftCI(w, status.DraftCI, opts, draft.CommitSHA)
+	}
+	if status.BaseAdvanced && status.TrackRef != "" {
+		from := shortID(status.TrackTip, 6)
+		to := shortID(status.TrackTipCurrent, 6)
+		if from != "" && to != "" && from != to {
+			fmt.Fprintf(w, "  ⚠ Base advanced: %s → %s (run 'jul ws restack')\n", from, to)
+		} else {
+			fmt.Fprintln(w, "  ⚠ Base advanced — run 'jul ws restack'")
+		}
 	}
 	if status.WorkingTree != nil {
 		renderWorkingTree(w, status.WorkingTree, opts)
