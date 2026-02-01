@@ -20,7 +20,7 @@
 - [x] **Change refs**: stable per‑change tips (`refs/jul/change/<change-id>`) + anchor refs.
 - [x] **Draft handoff**: `jul draft list/show/adopt` (per‑device drafts) + explicit adopt merge flow.
 - [x] **Sync safety features**: draft secret scan before push (`--allow-secrets` override), `.jul/syncignore` support.
-- [ ] **Tracked base drift**: persist `track-tip` for publish branch; surface base‑advanced in status; update only on restack/checkout/promote.
+- [x] **Tracked base drift**: persist `track-tip` for publish branch; surface base‑advanced in status; update only on restack/checkout/promote.
 - [x] **`jul doctor`**: verify remote supports custom refs + non‑FF updates under `refs/jul/*` (and report fallbacks).
 - [x] **`jul log --traces`**: show trace history in log output.
 - [x] **Suggestions default filter**: exclude stale suggestions unless explicitly requested.
