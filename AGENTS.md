@@ -27,6 +27,7 @@
 - Unit tests should cover core logic and error paths.
 - Integration tests live in `apps/server/integration/` and exercise real CLI local/remote flows; server API tests are separate.
 - New features should include unit tests and, when relevant, a smoke/integration scenario.
+- Bug fixes should add a unit test or a spec integration test that reproduces the issue; if it’s a new spec scenario, update `docs/jul-integration-tests.md`.
 - Run smoke tests with `cd apps/server && go test ./integration -run Smoke`.
 - Track coverage with `./scripts/coverage.sh` (generates `coverage.out` in `apps/cli` and `apps/server`).
 
