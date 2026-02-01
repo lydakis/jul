@@ -149,8 +149,48 @@ printf '{"version":1,"status":"completed","suggestions":[]}'
 	}
 }
 
+func TestIT_MERGE_008(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo, true)
+	julPath := buildCLI(t)
+	device := newDeviceEnv(t, "dev1")
+
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+
+	setupMergeConflictWithContents(t, repo, device, julPath, "base\n", "ours-one\n", "theirs-one\n")
+	if _, err := runCmdAllowFailure(t, repo, device.Env, julPath, "merge", "--json"); err == nil {
+		t.Fatalf("expected merge conflict")
+	}
+
+	worktree := filepath.Join(repo, ".jul", "agent-workspace", "worktree")
+	if err := os.WriteFile(filepath.Join(worktree, "conflict.txt"), []byte("stale resolution\n"), 0o644); err != nil {
+		t.Fatalf("failed to write stale resolution: %v", err)
+	}
+
+	setupMergeConflictWithContents(t, repo, device, julPath, "base\n", "ours-two\n", "theirs-two\n")
+	if _, err := runCmdAllowFailure(t, repo, device.Env, julPath, "merge", "--json"); err == nil {
+		t.Fatalf("expected merge conflict after ref mismatch")
+	}
+
+	contents, err := os.ReadFile(filepath.Join(worktree, "conflict.txt"))
+	if err != nil {
+		t.Fatalf("failed to read conflict file: %v", err)
+	}
+	text := string(contents)
+	if strings.Contains(text, "stale resolution") {
+		t.Fatalf("expected stale resolution to be cleared, got %s", text)
+	}
+	if !strings.Contains(text, "ours-two") || !strings.Contains(text, "theirs-two") {
+		t.Fatalf("expected refreshed conflict markers, got %s", text)
+	}
+}
+
 func setupMergeConflict(t *testing.T, repo string, device deviceEnv, julPath string) (string, string, string) {
-	writeFile(t, repo, "conflict.txt", "base\n")
+	return setupMergeConflictWithContents(t, repo, device, julPath, "base\n", "ours\n", "theirs\n")
+}
+
+func setupMergeConflictWithContents(t *testing.T, repo string, device deviceEnv, julPath, base, ours, theirs string) (string, string, string) {
+	writeFile(t, repo, "conflict.txt", base)
 	runCmd(t, repo, device.Env, julPath, "sync")
 
 	checkpointOut := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "base", "--no-ci", "--no-review", "--json")
@@ -163,24 +203,24 @@ func setupMergeConflict(t *testing.T, repo string, device deviceEnv, julPath str
 	}
 
 	runCmd(t, repo, nil, "git", "reset", "--hard", cp.CheckpointSHA)
-	writeFile(t, repo, "conflict.txt", "ours\n")
+	writeFile(t, repo, "conflict.txt", ours)
 	oursOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
-	var ours syncResult
-	if err := json.NewDecoder(strings.NewReader(oursOut)).Decode(&ours); err != nil {
+	var oursRes syncResult
+	if err := json.NewDecoder(strings.NewReader(oursOut)).Decode(&oursRes); err != nil {
 		t.Fatalf("failed to decode sync output: %v", err)
 	}
-	if ours.DraftSHA == "" {
+	if oursRes.DraftSHA == "" {
 		t.Fatalf("expected draft sha")
 	}
 
 	runCmd(t, repo, nil, "git", "reset", "--hard", cp.CheckpointSHA)
-	writeFile(t, repo, "conflict.txt", "theirs\n")
+	writeFile(t, repo, "conflict.txt", theirs)
 	theirsOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
-	var theirs syncResult
-	if err := json.NewDecoder(strings.NewReader(theirsOut)).Decode(&theirs); err != nil {
+	var theirsRes syncResult
+	if err := json.NewDecoder(strings.NewReader(theirsOut)).Decode(&theirsRes); err != nil {
 		t.Fatalf("failed to decode sync output: %v", err)
 	}
-	if theirs.DraftSHA == "" {
+	if theirsRes.DraftSHA == "" {
 		t.Fatalf("expected draft sha")
 	}
 
@@ -188,13 +228,13 @@ func setupMergeConflict(t *testing.T, repo string, device deviceEnv, julPath str
 	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
 	workspaceRef := "refs/jul/workspaces/tester/@"
 
-	runCmd(t, repo, nil, "git", "update-ref", syncRef, ours.DraftSHA)
-	runCmd(t, repo, nil, "git", "update-ref", workspaceRef, theirs.DraftSHA)
+	runCmd(t, repo, nil, "git", "update-ref", syncRef, oursRes.DraftSHA)
+	runCmd(t, repo, nil, "git", "update-ref", workspaceRef, theirsRes.DraftSHA)
 
 	leasePath := filepath.Join(repo, ".jul", "workspaces", "@", "lease")
 	if err := os.WriteFile(leasePath, []byte(strings.TrimSpace(cp.CheckpointSHA)+"\n"), 0o644); err != nil {
 		t.Fatalf("failed to write workspace lease: %v", err)
 	}
 
-	return ours.DraftSHA, workspaceRef, cp.CheckpointSHA
+	return oursRes.DraftSHA, workspaceRef, cp.CheckpointSHA
 }

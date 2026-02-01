@@ -973,6 +973,20 @@ Note: The v0.3 spec describes `jul merge` as an agent-assisted flow producing a 
 **Steps:** Run `jul merge` when no conflicts exist.  
 **Assertions:** Clear message; no state changes; deterministic exit code.
 
+### IT-MERGE-007 — Rejecting a Suggestion Preserves Manual Merge Path
+
+**Covers:** Suggestion lifecycle; manual resolution path.  
+**Setup:** Create a merge conflict with agent suggestions enabled.  
+**Steps:** Run `jul merge` to create a suggestion, reject it, manually resolve conflicts in the agent worktree, then run `jul merge --apply`.  
+**Assertions:** Manual resolution is applied; suggestion is recorded as rejected; no conflict markers remain.
+
+### IT-MERGE-008 — Stale Agent Worktree Is Reset When Merge Refs Change
+
+**Covers:** Correctness across ref changes; merge state hygiene.  
+**Setup:** Create a merge conflict and run `jul merge` so MERGE_HEAD is set; modify files in the agent worktree.  
+**Steps:** Advance sync/workspace refs to a new conflicting pair, then run `jul merge` again.  
+**Assertions:** Agent worktree is reset to the new merge; stale edits are discarded; conflict markers reflect the new ours/theirs.
+
 ---
 
 # V) Offline-to-Online Transitions

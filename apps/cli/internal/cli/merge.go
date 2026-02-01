@@ -128,14 +128,16 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 	}
 	mergeInProgress := agent.MergeInProgress(worktree)
 	dirtyWorktree, _ := worktreeDirty(worktree)
+	resumeMerge := false
 	if mergeInProgress {
 		mergeHead, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD")
 		headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
-		if strings.TrimSpace(mergeHead) != strings.TrimSpace(theirsSHA) || strings.TrimSpace(headSHA) != strings.TrimSpace(oursSHA) {
-			mergeInProgress = false
+		if strings.TrimSpace(mergeHead) == strings.TrimSpace(theirsSHA) && strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA) {
+			resumeMerge = true
 		}
 	}
-	if !mergeInProgress && !dirtyWorktree {
+	if !resumeMerge {
+		dirtyWorktree = false
 		_ = gitDir(worktree, nil, "merge", "--abort")
 		if err := gitDir(worktree, nil, "reset", "--hard", oursSHA); err != nil {
 			return output.MergeOutput{}, err
@@ -152,7 +154,7 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 	}
 
 	conflicts := mergeConflictFiles(worktree)
-	if mergeInProgress && len(conflicts) > 0 && !dirtyWorktree {
+	if resumeMerge && len(conflicts) > 0 && !dirtyWorktree {
 		out := output.MergeOutput{Merge: output.MergeSummary{Status: "conflicts", Conflicts: conflicts}}
 		return out, MergeConflictError{Worktree: worktree, Conflicts: conflicts}
 	}
