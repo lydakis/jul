@@ -1,76 +1,98 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/output"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 )
+
+type doctorOutput struct {
+	Status         string `json:"status"`
+	RemoteName     string `json:"remote_name,omitempty"`
+	CheckpointSync string `json:"checkpoint_sync"`
+	DraftSync      string `json:"draft_sync"`
+	Message        string `json:"message,omitempty"`
+}
 
 func newDoctorCommand() Command {
 	return Command{
 		Name:    "doctor",
 		Summary: "Probe remote compatibility for Jul sync",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("doctor")
 			_ = fs.Parse(args)
 
-			if err := runDoctor(); err != nil {
-				fmt.Fprintf(os.Stderr, "doctor failed: %v\n", err)
+			out, err := runDoctor()
+			if err != nil {
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "doctor_failed", err.Error(), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "doctor failed: %v\n", err)
+				}
 				return 1
 			}
+			if *jsonOut {
+				return writeJSON(out)
+			}
+			renderDoctorOutput(out)
 			return 0
 		},
 	}
 }
 
-func runDoctor() error {
+func runDoctor() (doctorOutput, error) {
+	out := doctorOutput{Status: "ok"}
 	remote, err := remotesel.Resolve()
 	if err != nil {
 		switch err {
 		case remotesel.ErrNoRemote, remotesel.ErrRemoteMissing:
-			fmt.Fprintln(os.Stdout, "No sync remote configured; draft and checkpoint sync disabled.")
 			if err := config.SetRepoConfigValue("remote", "checkpoint_sync", "disabled"); err != nil {
-				return err
+				return out, err
 			}
 			if err := config.SetRepoConfigValue("remote", "draft_sync", "disabled"); err != nil {
-				return err
+				return out, err
 			}
-			return nil
+			out.CheckpointSync = "disabled"
+			out.DraftSync = "disabled"
+			out.Message = "No sync remote configured; draft and checkpoint sync disabled."
+			return out, nil
 		case remotesel.ErrMultipleRemote:
-			return fmt.Errorf("multiple remotes found; run 'jul remote set <name>'")
+			return out, fmt.Errorf("multiple remotes found; run 'jul remote set <name>'")
 		default:
-			return err
+			return out, err
 		}
 	}
+	out.RemoteName = remote.Name
 
 	headSHA, err := gitutil.Git("rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(headSHA) == "" {
-		fmt.Fprintln(os.Stdout, "No commits found; sync probes skipped.")
 		if err := config.SetRepoConfigValue("remote", "checkpoint_sync", "disabled"); err != nil {
-			return err
+			return out, err
 		}
 		if err := config.SetRepoConfigValue("remote", "draft_sync", "disabled"); err != nil {
-			return err
+			return out, err
 		}
-		return nil
+		out.CheckpointSync = "disabled"
+		out.DraftSync = "disabled"
+		out.Message = "No commits found; sync probes skipped."
+		return out, nil
 	}
 	headSHA = strings.TrimSpace(headSHA)
 	deviceID, err := config.DeviceID()
 	if err != nil {
-		return err
+		return out, err
 	}
 	ref := fmt.Sprintf("refs/jul/doctor/%s", strings.TrimSpace(deviceID))
 	noteRef := "refs/notes/jul/doctor"
 
 	checkpointOK, draftOK, err := probeSyncCapabilities(remote.Name, headSHA, ref, noteRef)
 	if err != nil {
-		return err
+		return out, err
 	}
 
 	checkpointState := "disabled"
@@ -83,15 +105,27 @@ func runDoctor() error {
 	}
 
 	if err := config.SetRepoConfigValue("remote", "checkpoint_sync", checkpointState); err != nil {
-		return err
+		return out, err
 	}
 	if err := config.SetRepoConfigValue("remote", "draft_sync", draftState); err != nil {
-		return err
+		return out, err
 	}
 
-	fmt.Fprintf(os.Stdout, "checkpoint_sync: %s\n", checkpointState)
-	fmt.Fprintf(os.Stdout, "draft_sync: %s\n", draftState)
-	return nil
+	out.CheckpointSync = checkpointState
+	out.DraftSync = draftState
+	return out, nil
+}
+
+func renderDoctorOutput(out doctorOutput) {
+	if out.Message != "" {
+		fmt.Fprintln(os.Stdout, out.Message)
+	}
+	if out.CheckpointSync != "" {
+		fmt.Fprintf(os.Stdout, "checkpoint_sync: %s\n", out.CheckpointSync)
+	}
+	if out.DraftSync != "" {
+		fmt.Fprintf(os.Stdout, "draft_sync: %s\n", out.DraftSync)
+	}
 }
 
 func probeSyncCapabilities(remoteName, headSHA, ref, noteRef string) (bool, bool, error) {

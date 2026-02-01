@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -15,30 +14,50 @@ import (
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
+type traceOutput struct {
+	TraceSHA       string     `json:"trace_sha"`
+	TraceRef       string     `json:"trace_ref,omitempty"`
+	TraceSyncRef   string     `json:"trace_sync_ref,omitempty"`
+	CanonicalSHA   string     `json:"canonical_sha,omitempty"`
+	PromptHash     string     `json:"prompt_hash,omitempty"`
+	PromptProvided bool       `json:"prompt_provided,omitempty"`
+	PromptStored   bool       `json:"prompt_stored,omitempty"`
+	Agent          string     `json:"agent,omitempty"`
+	Merged         bool       `json:"merged"`
+	Skipped        bool       `json:"skipped"`
+	CI             *ci.Result `json:"ci,omitempty"`
+}
+
 func newTraceCommand() Command {
 	return Command{
 		Name:    "trace",
 		Summary: "Record a trace for the current working tree",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("trace", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("trace")
 			prompt := fs.String("prompt", "", "Prompt text to attach")
 			promptStdin := fs.Bool("prompt-stdin", false, "Read prompt from stdin")
 			agent := fs.String("agent", "", "Agent name")
 			sessionID := fs.String("session-id", "", "Session identifier")
 			turn := fs.Int("turn", 0, "Turn number within session")
-			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
 			var promptText string
 			if *promptStdin {
 				if strings.TrimSpace(*prompt) != "" {
-					fmt.Fprintln(os.Stderr, "cannot combine --prompt with --prompt-stdin")
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "trace_prompt_conflict", "cannot combine --prompt with --prompt-stdin", nil)
+					} else {
+						fmt.Fprintln(os.Stderr, "cannot combine --prompt with --prompt-stdin")
+					}
 					return 1
 				}
 				data, err := io.ReadAll(os.Stdin)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "failed to read prompt: %v\n", err)
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "trace_prompt_read_failed", fmt.Sprintf("failed to read prompt: %v", err), nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to read prompt: %v\n", err)
+					}
 					return 1
 				}
 				promptText = strings.TrimSpace(string(data))
@@ -55,65 +74,66 @@ func newTraceCommand() Command {
 				UpdateCanonical: true,
 			})
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "trace failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "trace_failed", fmt.Sprintf("trace failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "trace failed: %v\n", err)
+				}
 				return 1
 			}
 
-			if *jsonOut {
-				payload := struct {
-					TraceSHA     string `json:"trace_sha"`
-					TraceRef     string `json:"trace_ref"`
-					TraceSyncRef string `json:"trace_sync_ref"`
-					CanonicalSHA string `json:"canonical_sha,omitempty"`
-					PromptHash   string `json:"prompt_hash,omitempty"`
-					Merged       bool   `json:"merged"`
-					Skipped      bool   `json:"skipped"`
-				}{
-					TraceSHA:     res.TraceSHA,
-					TraceRef:     res.TraceRef,
-					TraceSyncRef: res.TraceSyncRef,
-					CanonicalSHA: res.CanonicalSHA,
-					PromptHash:   res.PromptHash,
-					Merged:       res.Merged,
-					Skipped:      res.Skipped,
-				}
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(payload); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
-			}
-
-			label := "Trace created"
-			if res.Skipped {
-				label = "Trace unchanged"
-			}
-			fmt.Fprintf(os.Stdout, "%s (sha:%s).\n", label, shortSHA(res.TraceSHA))
-			if strings.TrimSpace(*agent) != "" {
-				fmt.Fprintf(os.Stdout, "  Agent: %s\n", strings.TrimSpace(*agent))
-			}
-			if promptText != "" {
-				if config.TraceSyncPromptHash() && res.PromptHash != "" {
-					fmt.Fprintf(os.Stdout, "  Prompt: [hash %s]\n", res.PromptHash)
-				} else {
-					fmt.Fprintln(os.Stdout, "  Prompt: [local only]")
-				}
-			}
-			if res.Merged && res.CanonicalSHA != "" && res.CanonicalSHA != res.TraceSHA {
-				fmt.Fprintf(os.Stdout, "  Trace tip merged: %s\n", shortSHA(res.CanonicalSHA))
+			out := traceOutput{
+				TraceSHA:       res.TraceSHA,
+				TraceRef:       res.TraceRef,
+				TraceSyncRef:   res.TraceSyncRef,
+				CanonicalSHA:   res.CanonicalSHA,
+				PromptHash:     res.PromptHash,
+				PromptProvided: promptText != "",
+				PromptStored:   config.TraceSyncPromptHash() && res.PromptHash != "",
+				Agent:          strings.TrimSpace(*agent),
+				Merged:         res.Merged,
+				Skipped:        res.Skipped,
 			}
 			if config.TraceRunOnTrace() && !res.Skipped {
 				if att, err := metadata.GetTraceAttestation(res.TraceSHA); err == nil && att != nil && att.SignalsJSON != "" {
 					var result ci.Result
 					if err := json.Unmarshal([]byte(att.SignalsJSON), &result); err == nil {
-						output.RenderCIResult(os.Stdout, result, output.DefaultOptions())
+						out.CI = &result
 					}
 				}
 			}
+
+			if *jsonOut {
+				return writeJSON(out)
+			}
+
+			renderTraceOutput(out)
 			return 0
 		},
+	}
+}
+
+func renderTraceOutput(out traceOutput) {
+	label := "Trace created"
+	if out.Skipped {
+		label = "Trace unchanged"
+	}
+	fmt.Fprintf(os.Stdout, "%s (sha:%s).\n", label, shortSHA(out.TraceSHA))
+	if strings.TrimSpace(out.Agent) != "" {
+		fmt.Fprintf(os.Stdout, "  Agent: %s\n", strings.TrimSpace(out.Agent))
+	}
+	if out.PromptProvided {
+		if out.PromptStored && out.PromptHash != "" {
+			fmt.Fprintf(os.Stdout, "  Prompt: [hash %s]\n", out.PromptHash)
+		} else {
+			fmt.Fprintln(os.Stdout, "  Prompt: [local only]")
+		}
+	}
+	if out.Merged && out.CanonicalSHA != "" && out.CanonicalSHA != out.TraceSHA {
+		fmt.Fprintf(os.Stdout, "  Trace tip merged: %s\n", shortSHA(out.CanonicalSHA))
+	}
+	if out.CI != nil {
+		output.RenderCIResult(os.Stdout, *out.CI, output.DefaultOptions())
 	}
 }
 

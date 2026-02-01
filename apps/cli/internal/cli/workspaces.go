@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,45 +10,73 @@ import (
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/output"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/syncer"
 	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
+
+type workspaceActionOutput struct {
+	Status       string `json:"status"`
+	Action       string `json:"action"`
+	Workspace    string `json:"workspace_id"`
+	Message      string `json:"message,omitempty"`
+	DraftSHA     string `json:"draft_sha,omitempty"`
+	Parent       string `json:"parent_workspace,omitempty"`
+	WorkspaceRef string `json:"workspace_ref,omitempty"`
+	SyncRef      string `json:"sync_ref,omitempty"`
+	WorkspaceSHA string `json:"workspace_sha,omitempty"`
+}
+
+type workspaceListOutput struct {
+	Workspaces []client.Workspace `json:"workspaces"`
+}
 
 func newWorkspaceCommand() Command {
 	return Command{
 		Name:    "ws",
 		Summary: "Manage workspaces",
 		Run: func(args []string) int {
+			jsonOut, args := stripJSONFlag(args)
 			if len(args) == 0 {
-				fmt.Fprintln(os.Stdout, config.WorkspaceID())
-				return 0
+				if jsonOut {
+					args = ensureJSONFlag(args)
+				}
+				return runWorkspaceCurrent(args)
 			}
 
 			sub := args[0]
+			subArgs := args[1:]
+			if jsonOut {
+				subArgs = ensureJSONFlag(subArgs)
+			}
+			if sub == "current" {
+				return runWorkspaceCurrent(subArgs)
+			}
 			switch sub {
 			case "list":
-				return runWorkspaceList(args[1:])
+				return runWorkspaceList(subArgs)
 			case "checkout":
-				return runWorkspaceCheckout(args[1:])
+				return runWorkspaceCheckout(subArgs)
 			case "set":
-				return runWorkspaceSet(args[1:])
+				return runWorkspaceSet(subArgs)
 			case "new":
-				return runWorkspaceNew(args[1:])
+				return runWorkspaceNew(subArgs)
 			case "switch":
-				return runWorkspaceSwitch(args[1:])
+				return runWorkspaceSwitch(subArgs)
 			case "stack":
-				return runWorkspaceStack(args[1:])
+				return runWorkspaceStack(subArgs)
 			case "restack":
-				return runWorkspaceRestack(args[1:])
+				return runWorkspaceRestack(subArgs)
 			case "rename":
-				return runWorkspaceRename(args[1:])
+				return runWorkspaceRename(subArgs)
 			case "delete":
-				return runWorkspaceDelete(args[1:])
-			case "current":
-				fmt.Fprintln(os.Stdout, config.WorkspaceID())
-				return 0
+				return runWorkspaceDelete(subArgs)
 			default:
+				if jsonOut {
+					_ = output.EncodeError(os.Stdout, "workspace_unknown_subcommand", fmt.Sprintf("unknown subcommand %q", sub), nil)
+					return 1
+				}
 				printWorkspaceUsage()
 				return 1
 			}
@@ -57,74 +84,127 @@ func newWorkspaceCommand() Command {
 	}
 }
 
+func runWorkspaceCurrent(args []string) int {
+	fs, jsonOut := newFlagSet("ws")
+	_ = fs.Parse(args)
+
+	out := workspaceActionOutput{
+		Status:    "ok",
+		Action:    "current",
+		Workspace: config.WorkspaceID(),
+		Message:   config.WorkspaceID(),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderWorkspaceAction(out)
+	return 0
+}
+
 func runWorkspaceList(args []string) int {
-	fs := flag.NewFlagSet("ws list", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("ws list")
 	_ = fs.Parse(args)
 	workspaces, err := localWorkspaces()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to list workspaces: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_list_failed", fmt.Sprintf("failed to list workspaces: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to list workspaces: %v\n", err)
+		}
 		return 1
 	}
-	if len(workspaces) == 0 {
-		fmt.Fprintln(os.Stdout, "No workspaces.")
-		return 0
+	out := workspaceListOutput{Workspaces: workspaces}
+	if *jsonOut {
+		return writeJSON(out)
 	}
-	for _, ws := range workspaces {
-		fmt.Fprintf(os.Stdout, "%s %s %s\n", ws.WorkspaceID, ws.Repo, ws.Branch)
-	}
+	renderWorkspaceList(out)
 	return 0
 }
 
 func runWorkspaceSet(args []string) int {
-	fs := flag.NewFlagSet("ws set", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("ws set")
 	user := fs.String("user", "", "Override user for workspace id")
 	_ = fs.Parse(args)
 
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "workspace name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_missing_name", "workspace name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "workspace name required")
+		}
 		return 1
 	}
 
 	wsID, _, _, err := resolveWorkspaceID(name, *user)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_resolve_failed", err.Error(), nil)
+		} else {
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
 		return 1
 	}
 
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_set_failed", fmt.Sprintf("failed to set workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		}
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "Workspace set to %s\n", wsID)
+	out := workspaceActionOutput{
+		Status:    "ok",
+		Action:    "set",
+		Workspace: wsID,
+		Message:   fmt.Sprintf("Workspace set to %s", wsID),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderWorkspaceAction(out)
 	return 0
 }
 
 func runWorkspaceNew(args []string) int {
-	fs := flag.NewFlagSet("ws new", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("ws new")
 	user := fs.String("user", "", "Override user for workspace id")
 	_ = fs.Parse(args)
 
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "workspace name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_missing_name", "workspace name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "workspace name required")
+		}
 		return 1
 	}
 	wsID, wsUser, wsName, err := resolveWorkspaceID(name, *user)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_resolve_failed", err.Error(), nil)
+		} else {
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
 		return 1
 	}
 	_, currentWorkspace := workspaceParts()
 	if err := saveWorkspaceState(currentWorkspace); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_save_failed", fmt.Sprintf("failed to save workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		}
 		return 1
 	}
 	if _, err := syncer.Sync(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_sync_failed", fmt.Sprintf("failed to sync current workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		}
 		return 1
 	}
 
@@ -136,149 +216,266 @@ func runWorkspaceNew(args []string) int {
 	}
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to snapshot working tree: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_snapshot_failed", fmt.Sprintf("failed to snapshot working tree: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to snapshot working tree: %v\n", err)
+		}
 		return 1
 	}
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to locate repo root: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_repo_failed", fmt.Sprintf("failed to locate repo root: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to locate repo root: %v\n", err)
+		}
 		return 1
 	}
 	baseRef := detectBaseRef(repoRoot)
 	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, baseRef, baseSHA, treeSHA)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_create_failed", fmt.Sprintf("failed to create workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to create workspace: %v\n", err)
+		}
 		return 1
 	}
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_set_failed", fmt.Sprintf("failed to set workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		}
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "Created workspace '%s'\n", wsName)
-	fmt.Fprintf(os.Stdout, "Draft %s started.\n", strings.TrimSpace(newDraftSHA))
+	out := workspaceActionOutput{
+		Status:    "ok",
+		Action:    "new",
+		Workspace: wsID,
+		DraftSHA:  strings.TrimSpace(newDraftSHA),
+		Message:   fmt.Sprintf("Created workspace '%s'", wsName),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderWorkspaceAction(out)
 	return 0
 }
 
 func runWorkspaceSwitch(args []string) int {
-	fs := flag.NewFlagSet("ws switch", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("ws switch")
 	_ = fs.Parse(args)
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "workspace name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_missing_name", "workspace name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "workspace name required")
+		}
 		return 1
 	}
 	currentUser, currentWorkspace := workspaceParts()
 	if err := saveWorkspaceState(currentWorkspace); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_save_failed", fmt.Sprintf("failed to save workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		}
 		return 1
 	}
 	if _, err := syncer.Sync(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_sync_failed", fmt.Sprintf("failed to sync current workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		}
 		return 1
 	}
 
 	wsID, wsUser, wsName, err := resolveWorkspaceID(name, "")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_resolve_failed", err.Error(), nil)
+		} else {
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
 		return 1
 	}
 	if err := switchToWorkspace(wsUser, wsName); err != nil {
-		fmt.Fprintf(os.Stderr, "switch failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_switch_failed", fmt.Sprintf("switch failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "switch failed: %v\n", err)
+		}
 		return 1
 	}
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
 		rollbackErr := switchToWorkspaceLocal(currentUser, currentWorkspace)
 		if rollbackErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
-			fmt.Fprintf(os.Stderr, "switch rollback failed: %v\n", rollbackErr)
-			fmt.Fprintf(os.Stderr, "workspace is now '%s' but config remains '%s'\n", wsName, config.WorkspaceID())
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "workspace_set_failed", fmt.Sprintf("failed to set workspace: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+				fmt.Fprintf(os.Stderr, "switch rollback failed: %v\n", rollbackErr)
+				fmt.Fprintf(os.Stderr, "workspace is now '%s' but config remains '%s'\n", wsName, config.WorkspaceID())
+			}
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
-		fmt.Fprintln(os.Stderr, "switch rolled back")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_set_failed", fmt.Sprintf("failed to set workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+			fmt.Fprintln(os.Stderr, "switch rolled back")
+		}
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "Switched to workspace '%s'\n", wsName)
+	out := workspaceActionOutput{
+		Status:    "ok",
+		Action:    "switch",
+		Workspace: wsID,
+		Message:   fmt.Sprintf("Switched to workspace '%s'", wsName),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderWorkspaceAction(out)
 	return 0
 }
 
 func runWorkspaceStack(args []string) int {
-	fs := flag.NewFlagSet("ws stack", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("ws stack")
 	user := fs.String("user", "", "Override user for workspace id")
 	_ = fs.Parse(args)
 
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "workspace name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_missing_name", "workspace name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "workspace name required")
+		}
 		return 1
 	}
 	wsID, wsUser, wsName, err := resolveWorkspaceID(name, *user)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_resolve_failed", err.Error(), nil)
+		} else {
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
 		return 1
 	}
 
 	currentUser, currentName := workspaceParts()
 	if err := saveWorkspaceState(currentName); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_save_failed", fmt.Sprintf("failed to save workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to save workspace: %v\n", err)
+		}
 		return 1
 	}
 	if _, err := syncer.Sync(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_sync_failed", fmt.Sprintf("failed to sync current workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to sync current workspace: %v\n", err)
+		}
 		return 1
 	}
 
 	checkpoint, err := latestCheckpoint()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read checkpoints: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_checkpoint_failed", fmt.Sprintf("failed to read checkpoints: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to read checkpoints: %v\n", err)
+		}
 		return 1
 	}
 	if checkpoint == nil {
-		fmt.Fprintln(os.Stderr, "checkpoint required before stacking; run 'jul checkpoint' first")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_checkpoint_required", "checkpoint required before stacking; run 'jul checkpoint' first", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "checkpoint required before stacking; run 'jul checkpoint' first")
+		}
 		return 1
 	}
 	treeSHA, err := gitutil.TreeOf(checkpoint.SHA)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read checkpoint tree: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_checkpoint_tree_failed", fmt.Sprintf("failed to read checkpoint tree: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to read checkpoint tree: %v\n", err)
+		}
 		return 1
 	}
 	parentRef := changeRef(checkpoint.ChangeID)
 	newDraftSHA, err := createWorkspaceDraft(wsUser, wsName, parentRef, checkpoint.SHA, treeSHA)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create stacked workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_create_failed", fmt.Sprintf("failed to create stacked workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to create stacked workspace: %v\n", err)
+		}
 		return 1
 	}
 	if err := resetToDraft(newDraftSHA); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to reset to new workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_reset_failed", fmt.Sprintf("failed to reset to new workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to reset to new workspace: %v\n", err)
+		}
 		return 1
 	}
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
 		rollbackErr := switchToWorkspaceLocal(currentUser, currentName)
 		if rollbackErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
-			fmt.Fprintf(os.Stderr, "switch rollback failed: %v\n", rollbackErr)
-			fmt.Fprintf(os.Stderr, "workspace is now '%s' but config remains '%s'\n", wsName, config.WorkspaceID())
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "workspace_set_failed", fmt.Sprintf("failed to set workspace: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+				fmt.Fprintf(os.Stderr, "switch rollback failed: %v\n", rollbackErr)
+				fmt.Fprintf(os.Stderr, "workspace is now '%s' but config remains '%s'\n", wsName, config.WorkspaceID())
+			}
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
-		fmt.Fprintln(os.Stderr, "switch rolled back")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_set_failed", fmt.Sprintf("failed to set workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+			fmt.Fprintln(os.Stderr, "switch rolled back")
+		}
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "Created workspace '%s' (stacked on %s)\n", wsName, currentName)
-	fmt.Fprintf(os.Stdout, "Draft %s started.\n", strings.TrimSpace(newDraftSHA))
+	out := workspaceActionOutput{
+		Status:    "ok",
+		Action:    "stack",
+		Workspace: wsID,
+		Parent:    currentUser + "/" + currentName,
+		DraftSHA:  strings.TrimSpace(newDraftSHA),
+		Message:   fmt.Sprintf("Created workspace '%s' (stacked on %s)", wsName, currentName),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderWorkspaceAction(out)
 	return 0
 }
 
 func runWorkspaceCheckout(args []string) int {
-	fs := flag.NewFlagSet("ws checkout", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("ws checkout")
 	_ = fs.Parse(args)
 
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "workspace name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_missing_name", "workspace name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "workspace name required")
+		}
 		return 1
 	}
 
@@ -298,95 +495,159 @@ func runWorkspaceCheckout(args []string) int {
 		}
 	}
 	if user == "" {
-		fmt.Fprintln(os.Stderr, "workspace user required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_missing_user", "workspace user required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "workspace user required")
+		}
 		return 1
 	}
 	wsID := user + "/" + targetName
 
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to locate repo: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_repo_failed", fmt.Sprintf("failed to locate repo: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to locate repo: %v\n", err)
+		}
 		return 1
 	}
 
 	remote, rerr := remotesel.Resolve()
 	if rerr == nil {
 		if err := ensureJulRefspecs(repoRoot, remote.Name); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to configure remote: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "workspace_remote_failed", fmt.Sprintf("failed to configure remote: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to configure remote: %v\n", err)
+			}
 			return 1
 		}
-		fmt.Fprintf(os.Stdout, "Fetching workspace '%s'...\n", targetName)
 		if _, err := gitutil.Git("-C", repoRoot, "fetch", remote.Name); err != nil {
-			fmt.Fprintf(os.Stderr, "fetch failed: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "workspace_fetch_failed", fmt.Sprintf("fetch failed: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "fetch failed: %v\n", err)
+			}
 			return 1
 		}
 	} else if rerr != remotesel.ErrNoRemote {
-		fmt.Fprintf(os.Stderr, "remote resolution failed: %v\n", rerr)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_remote_failed", fmt.Sprintf("remote resolution failed: %v", rerr), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "remote resolution failed: %v\n", rerr)
+		}
 		return 1
-	} else {
-		fmt.Fprintf(os.Stdout, "Checking out workspace '%s'...\n", targetName)
 	}
 
 	ref := workspaceRef(user, targetName)
 	if !gitutil.RefExists(ref) {
-		fmt.Fprintf(os.Stderr, "workspace ref not found: %s\n", ref)
-		fmt.Fprintln(os.Stderr, "Run 'jul sync' or create a workspace first.")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_ref_missing", fmt.Sprintf("workspace ref not found: %s", ref), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "workspace ref not found: %s\n", ref)
+			fmt.Fprintln(os.Stderr, "Run 'jul sync' or create a workspace first.")
+		}
 		return 1
 	}
 	sha, err := gitutil.ResolveRef(ref)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve workspace ref: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_ref_failed", fmt.Sprintf("failed to resolve workspace ref: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to resolve workspace ref: %v\n", err)
+		}
 		return 1
 	}
 
 	if _, err := gitutil.Git("-C", repoRoot, "read-tree", "--reset", "-u", sha); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update working tree: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_read_tree_failed", fmt.Sprintf("failed to update working tree: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to update working tree: %v\n", err)
+		}
 		return 1
 	}
 	if _, err := gitutil.Git("-C", repoRoot, "clean", "-fd", "--exclude=.jul"); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to clean working tree: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_clean_failed", fmt.Sprintf("failed to clean working tree: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to clean working tree: %v\n", err)
+		}
 		return 1
 	}
 
 	syncRef, err := syncRef(user, targetName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve sync ref: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_sync_ref_failed", fmt.Sprintf("failed to resolve sync ref: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to resolve sync ref: %v\n", err)
+		}
 		return 1
 	}
 	if err := gitutil.UpdateRef(syncRef, sha); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update sync ref: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_sync_ref_failed", fmt.Sprintf("failed to update sync ref: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to update sync ref: %v\n", err)
+		}
 		return 1
 	}
 	if err := writeWorkspaceLease(repoRoot, targetName, sha); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update workspace lease: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_lease_failed", fmt.Sprintf("failed to update workspace lease: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to update workspace lease: %v\n", err)
+		}
 		return 1
 	}
 	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(targetName), sha); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update workspace head: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_head_failed", fmt.Sprintf("failed to update workspace head: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to update workspace head: %v\n", err)
+		}
 		return 1
 	}
 	refreshWorkspaceTrackTip(repoRoot, targetName)
 
 	if err := runGitConfig("jul.workspace", wsID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_set_failed", fmt.Sprintf("failed to set workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to set workspace: %v\n", err)
+		}
 		return 1
 	}
 
-	fmt.Fprintf(os.Stdout, "  ✓ Workspace ref: %s\n", strings.TrimSpace(sha))
-	fmt.Fprintln(os.Stdout, "  ✓ Working tree updated")
-	fmt.Fprintln(os.Stdout, "  ✓ Sync ref initialized")
-	fmt.Fprintln(os.Stdout, "  ✓ workspace_lease set")
-	fmt.Fprintf(os.Stdout, "Switched to workspace '%s'\n", targetName)
+	out := workspaceActionOutput{
+		Status:       "ok",
+		Action:       "checkout",
+		Workspace:    wsID,
+		WorkspaceRef: ref,
+		WorkspaceSHA: strings.TrimSpace(sha),
+		SyncRef:      syncRef,
+		Message:      fmt.Sprintf("Switched to workspace '%s'", targetName),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderWorkspaceCheckout(out)
 	return 0
 }
 
 func runWorkspaceRename(args []string) int {
-	fs := flag.NewFlagSet("ws rename", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("ws rename")
 	_ = fs.Parse(args)
 	newName := strings.TrimSpace(fs.Arg(0))
 	if newName == "" {
-		fmt.Fprintln(os.Stderr, "new workspace name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_missing_name", "new workspace name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "new workspace name required")
+		}
 		return 1
 	}
 	current := config.WorkspaceID()
@@ -397,20 +658,36 @@ func runWorkspaceRename(args []string) int {
 		newID = user + "/" + newName
 	}
 	if err := runGitConfig("jul.workspace", newID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to rename workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_rename_failed", fmt.Sprintf("failed to rename workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to rename workspace: %v\n", err)
+		}
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "Workspace renamed to %s\n", newID)
+	out := workspaceActionOutput{
+		Status:    "ok",
+		Action:    "rename",
+		Workspace: newID,
+		Message:   fmt.Sprintf("Workspace renamed to %s", newID),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderWorkspaceAction(out)
 	return 0
 }
 
 func runWorkspaceDelete(args []string) int {
-	fs := flag.NewFlagSet("ws delete", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("ws delete")
 	_ = fs.Parse(args)
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "workspace name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_missing_name", "workspace name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "workspace name required")
+		}
 		return 1
 	}
 	current := config.WorkspaceID()
@@ -421,15 +698,65 @@ func runWorkspaceDelete(args []string) int {
 		target = user + "/" + name
 	}
 	if target == current {
-		fmt.Fprintln(os.Stderr, "cannot delete current workspace")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_delete_current", "cannot delete current workspace", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "cannot delete current workspace")
+		}
 		return 1
 	}
 	if err := deleteWorkspaceLocal(target); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "workspace_delete_failed", fmt.Sprintf("failed to delete workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to delete workspace: %v\n", err)
+		}
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "Deleted workspace %s\n", target)
+	out := workspaceActionOutput{
+		Status:    "ok",
+		Action:    "delete",
+		Workspace: target,
+		Message:   fmt.Sprintf("Deleted workspace %s", target),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderWorkspaceAction(out)
 	return 0
+}
+
+func renderWorkspaceAction(out workspaceActionOutput) {
+	if out.Message != "" {
+		fmt.Fprintln(os.Stdout, out.Message)
+	}
+	if out.DraftSHA != "" {
+		fmt.Fprintf(os.Stdout, "Draft %s started.\n", out.DraftSHA)
+	}
+}
+
+func renderWorkspaceList(out workspaceListOutput) {
+	if len(out.Workspaces) == 0 {
+		fmt.Fprintln(os.Stdout, "No workspaces.")
+		return
+	}
+	for _, ws := range out.Workspaces {
+		fmt.Fprintf(os.Stdout, "%s %s %s\n", ws.WorkspaceID, ws.Repo, ws.Branch)
+	}
+}
+
+func renderWorkspaceCheckout(out workspaceActionOutput) {
+	if out.WorkspaceSHA != "" {
+		fmt.Fprintf(os.Stdout, "  ✓ Workspace ref: %s\n", out.WorkspaceSHA)
+	}
+	fmt.Fprintln(os.Stdout, "  ✓ Working tree updated")
+	if out.SyncRef != "" {
+		fmt.Fprintln(os.Stdout, "  ✓ Sync ref initialized")
+	}
+	fmt.Fprintln(os.Stdout, "  ✓ workspace_lease set")
+	if out.Message != "" {
+		fmt.Fprintln(os.Stdout, out.Message)
+	}
 }
 
 func resolveWorkspaceID(name, userOverride string) (string, string, string, error) {

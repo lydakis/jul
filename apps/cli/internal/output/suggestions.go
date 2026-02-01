@@ -9,11 +9,11 @@ import (
 )
 
 type SuggestionsView struct {
-	ChangeID          string
-	Status            string
-	CheckpointSHA     string
-	CheckpointMessage string
-	Suggestions       []client.Suggestion
+	ChangeID          string              `json:"change_id,omitempty"`
+	Status            string              `json:"status,omitempty"`
+	CheckpointSHA     string              `json:"checkpoint_sha,omitempty"`
+	CheckpointMessage string              `json:"checkpoint_message,omitempty"`
+	Suggestions       []client.Suggestion `json:"suggestions"`
 }
 
 func RenderSuggestions(w io.Writer, view SuggestionsView, opts Options) {

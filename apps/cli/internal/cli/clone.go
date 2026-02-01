@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,15 +8,24 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/hooks"
+	"github.com/lydakis/jul/cli/internal/output"
 )
+
+type cloneOutput struct {
+	Status         string `json:"status"`
+	RepoURL        string `json:"repo_url"`
+	RepoRoot       string `json:"repo_root"`
+	RemoteName     string `json:"remote_name,omitempty"`
+	WorkspaceID    string `json:"workspace_id,omitempty"`
+	HooksInstalled bool   `json:"hooks_installed,omitempty"`
+}
 
 func newCloneCommand() Command {
 	return Command{
 		Name:    "clone",
 		Summary: "Clone a Jul repository and configure remotes",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("clone", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("clone")
 			server := fs.String("server", "", "Jul server base URL")
 			remote := fs.String("remote", "jul", "Remote name to configure")
 			workspace := fs.String("workspace", "", "Workspace id (user/name)")
@@ -26,7 +34,11 @@ func newCloneCommand() Command {
 
 			repoArg := strings.TrimSpace(fs.Arg(0))
 			if repoArg == "" {
-				fmt.Fprintln(os.Stderr, "repo name or URL required")
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "clone_missing_repo", "repo name or URL required", nil)
+				} else {
+					fmt.Fprintln(os.Stderr, "repo name or URL required")
+				}
 				return 1
 			}
 			targetDir := strings.TrimSpace(fs.Arg(1))
@@ -36,7 +48,11 @@ func newCloneCommand() Command {
 			repoURL := repoArg
 			if !looksLikeURL(repoArg) {
 				if baseURL == "" {
-					fmt.Fprintln(os.Stderr, "missing --server for non-URL repo name")
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "clone_missing_server", "missing --server for non-URL repo name", nil)
+					} else {
+						fmt.Fprintln(os.Stderr, "missing --server for non-URL repo name")
+					}
 					return 1
 				}
 				repoURL = buildRemoteURL(baseURL, repoArg)
@@ -53,13 +69,21 @@ func newCloneCommand() Command {
 				cloneArgs = append(cloneArgs, targetDir)
 			}
 			if err := runGit(".", cloneArgs...); err != nil {
-				fmt.Fprintf(os.Stderr, "git clone failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "clone_failed", fmt.Sprintf("git clone failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "git clone failed: %v\n", err)
+				}
 				return 1
 			}
 
 			repoRoot, err := resolveCloneRoot(repoURL, targetDir)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to locate repo root: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "clone_resolve_root_failed", fmt.Sprintf("failed to locate repo root: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to locate repo root: %v\n", err)
+				}
 				return 1
 			}
 
@@ -69,7 +93,11 @@ func newCloneCommand() Command {
 			}
 			if wsID != "" {
 				if err := runGit(repoRoot, "config", "jul.workspace", wsID); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to set jul.workspace: %v\n", err)
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "clone_set_workspace_failed", fmt.Sprintf("failed to set jul.workspace: %v", err), nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to set jul.workspace: %v\n", err)
+					}
 					return 1
 				}
 			}
@@ -77,7 +105,11 @@ func newCloneCommand() Command {
 			repoName := repoNameFromURL(repoURL)
 			if repoName != "" {
 				if err := runGit(repoRoot, "config", "jul.reponame", repoName); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to set jul.reponame: %v\n", err)
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "clone_set_reponame_failed", fmt.Sprintf("failed to set jul.reponame: %v", err), nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to set jul.reponame: %v\n", err)
+					}
 					return 1
 				}
 			}
@@ -95,7 +127,11 @@ func newCloneCommand() Command {
 				}
 				for _, refspec := range refspecs {
 					if err := runGit(repoRoot, "config", "--add", fmt.Sprintf("remote.%s.fetch", remoteName), refspec); err != nil {
-						fmt.Fprintf(os.Stderr, "failed to add refspec: %v\n", err)
+						if *jsonOut {
+							_ = output.EncodeError(os.Stdout, "clone_set_refspec_failed", fmt.Sprintf("failed to add refspec: %v", err), nil)
+						} else {
+							fmt.Fprintf(os.Stderr, "failed to add refspec: %v\n", err)
+						}
 						return 1
 					}
 				}
@@ -103,14 +139,42 @@ func newCloneCommand() Command {
 
 			if !*noHooks {
 				if _, err := hooks.InstallPostCommit(repoRoot, "jul"); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to install hook: %v\n", err)
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "clone_install_hook_failed", fmt.Sprintf("failed to install hook: %v", err), nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to install hook: %v\n", err)
+					}
 					return 1
 				}
 			}
 
-			fmt.Fprintf(os.Stdout, "Cloned %s\n", repoURL)
+			out := cloneOutput{
+				Status:         "ok",
+				RepoURL:        repoURL,
+				RepoRoot:       repoRoot,
+				RemoteName:     strings.TrimSpace(*remote),
+				WorkspaceID:    wsID,
+				HooksInstalled: !*noHooks,
+			}
+			if *jsonOut {
+				return writeJSON(out)
+			}
+			renderCloneOutput(out)
 			return 0
 		},
+	}
+}
+
+func renderCloneOutput(out cloneOutput) {
+	fmt.Fprintf(os.Stdout, "Cloned %s\n", out.RepoURL)
+	if out.RepoRoot != "" {
+		fmt.Fprintf(os.Stdout, "Repo root: %s\n", out.RepoRoot)
+	}
+	if out.RemoteName != "" {
+		fmt.Fprintf(os.Stdout, "Remote: %s\n", out.RemoteName)
+	}
+	if out.WorkspaceID != "" {
+		fmt.Fprintf(os.Stdout, "Workspace: %s\n", out.WorkspaceID)
 	}
 }
 

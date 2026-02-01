@@ -154,6 +154,10 @@ func agentConfigPath() string {
 	return filepath.Join(home, ".config", "jul", "agents.toml")
 }
 
+func AgentConfigPath() string {
+	return agentConfigPath()
+}
+
 func ensureDefaultProvider(cfg *AgentConfig) {
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]AgentProvider{}

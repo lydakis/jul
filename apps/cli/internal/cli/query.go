@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -19,8 +17,7 @@ func newQueryCommand() Command {
 		Name:    "query",
 		Summary: "Query commits by criteria",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("query", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("query")
 			tests := fs.String("tests", "", "Filter by attestation status (pass|fail)")
 			compiles := fs.String("compiles", "", "Filter by compile status (true|false)")
 			coverageMin := fs.Float64("coverage-min", -1, "Minimum coverage percentage")
@@ -30,7 +27,6 @@ func newQueryCommand() Command {
 			since := fs.String("since", "", "Only commits after RFC3339 time")
 			until := fs.String("until", "", "Only commits before RFC3339 time")
 			limit := fs.Int("limit", 20, "Max results")
-			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
 			var compilesFilter *bool
@@ -43,7 +39,11 @@ func newQueryCommand() Command {
 					value := false
 					compilesFilter = &value
 				default:
-					fmt.Fprintln(os.Stderr, "compiles must be true or false")
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "query_invalid_compiles", "compiles must be true or false", nil)
+					} else {
+						fmt.Fprintln(os.Stderr, "compiles must be true or false")
+					}
 					return 1
 				}
 			}
@@ -62,7 +62,11 @@ func newQueryCommand() Command {
 			if strings.TrimSpace(*since) != "" {
 				parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*since))
 				if err != nil {
-					fmt.Fprintln(os.Stderr, "since must be RFC3339")
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "query_invalid_since", "since must be RFC3339", nil)
+					} else {
+						fmt.Fprintln(os.Stderr, "since must be RFC3339")
+					}
 					return 1
 				}
 				sinceFilter = &parsed
@@ -72,7 +76,11 @@ func newQueryCommand() Command {
 			if strings.TrimSpace(*until) != "" {
 				parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*until))
 				if err != nil {
-					fmt.Fprintln(os.Stderr, "until must be RFC3339")
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "query_invalid_until", "until must be RFC3339", nil)
+					} else {
+						fmt.Fprintln(os.Stderr, "until must be RFC3339")
+					}
 					return 1
 				}
 				untilFilter = &parsed
@@ -90,18 +98,16 @@ func newQueryCommand() Command {
 				Limit:       *limit,
 			})
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "query failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "query_failed", fmt.Sprintf("query failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "query failed: %v\n", err)
+				}
 				return 1
 			}
 
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(results); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(results)
 			}
 
 			output.RenderQuery(os.Stdout, results, output.DefaultOptions())

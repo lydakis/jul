@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/notes"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 type keepRefRecord struct {
@@ -24,31 +24,53 @@ type keepRefRecord struct {
 	CheckpointSHA string
 }
 
+type pruneOutput struct {
+	Status             string `json:"status"`
+	PrunedRefs         int    `json:"pruned_refs"`
+	NotesRemoved       int    `json:"notes_removed"`
+	SuggestionsRemoved int    `json:"suggestions_removed"`
+	Message            string `json:"message,omitempty"`
+}
+
 func newPruneCommand() Command {
 	return Command{
 		Name:    "prune",
 		Summary: "Remove expired keep-refs and related metadata",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("prune", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("prune")
 			_ = fs.Parse(args)
 
 			days := config.RetentionCheckpointKeepDays()
 			if days < 0 {
-				fmt.Fprintln(os.Stdout, "Retention disabled; nothing to prune.")
+				out := pruneOutput{
+					Status:  "ok",
+					Message: "Retention disabled; nothing to prune.",
+				}
+				if *jsonOut {
+					return writeJSON(out)
+				}
+				renderPruneOutput(out)
 				return 0
 			}
 			cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 
 			keepRefs, err := listAllKeepRefs()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "prune failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "prune_failed", fmt.Sprintf("prune failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "prune failed: %v\n", err)
+				}
 				return 1
 			}
 
 			suggestions, err := metadata.ListSuggestions("", "", 0)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "prune failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "prune_failed", fmt.Sprintf("prune failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "prune failed: %v\n", err)
+				}
 				return 1
 			}
 			suggestionsByBase := map[string][]client.Suggestion{}
@@ -69,7 +91,11 @@ func newPruneCommand() Command {
 				}
 
 				if err := deleteRef(ref.Ref); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to delete %s: %v\n", ref.Ref, err)
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "prune_delete_failed", fmt.Sprintf("failed to delete %s: %v", ref.Ref, err), nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to delete %s: %v\n", ref.Ref, err)
+					}
 					return 1
 				}
 				pruned++
@@ -91,9 +117,25 @@ func newPruneCommand() Command {
 				}
 			}
 
-			fmt.Fprintf(os.Stdout, "Pruned %d keep-ref(s), removed %d note(s), %d suggestion(s).\n", pruned, notesRemoved, suggestionsRemoved)
+			out := pruneOutput{
+				Status:             "ok",
+				PrunedRefs:         pruned,
+				NotesRemoved:       notesRemoved,
+				SuggestionsRemoved: suggestionsRemoved,
+				Message:            fmt.Sprintf("Pruned %d keep-ref(s), removed %d note(s), %d suggestion(s).", pruned, notesRemoved, suggestionsRemoved),
+			}
+			if *jsonOut {
+				return writeJSON(out)
+			}
+			renderPruneOutput(out)
 			return 0
 		},
+	}
+}
+
+func renderPruneOutput(out pruneOutput) {
+	if out.Message != "" {
+		fmt.Fprintln(os.Stdout, out.Message)
 	}
 }
 

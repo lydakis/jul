@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -17,17 +15,19 @@ func newLogCommand() Command {
 		Name:    "log",
 		Summary: "Show checkpoint history",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("log", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("log")
 			limit := fs.Int("limit", 20, "Max checkpoints to show")
 			changeID := fs.String("change-id", "", "Filter by Change-Id")
 			showTraces := fs.Bool("traces", false, "Include trace history")
-			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
 			entries, err := listCheckpoints()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to list checkpoints: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "log_failed", fmt.Sprintf("failed to list checkpoints: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to list checkpoints: %v\n", err)
+				}
 				return 1
 			}
 
@@ -61,13 +61,7 @@ func newLogCommand() Command {
 			}
 
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(filtered); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(filtered)
 			}
 
 			output.RenderLog(os.Stdout, filtered, output.DefaultOptions())

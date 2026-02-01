@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -17,35 +15,35 @@ func newDiffCommand() Command {
 		Name:    "diff",
 		Summary: "Show diff between checkpoints or draft",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("diff", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("diff")
 			stat := fs.Bool("stat", false, "Show diffstat only")
 			nameOnly := fs.Bool("name-only", false, "Show filenames only")
-			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
 			pos := fs.Args()
 			from, to, rootDiff, err := resolveDiffTargets(pos)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "diff failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "diff_failed", fmt.Sprintf("diff failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "diff failed: %v\n", err)
+				}
 				return 1
 			}
 
 			diffOut, err := runDiff(from, to, *stat, *nameOnly, rootDiff)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "diff failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "diff_failed", fmt.Sprintf("diff failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "diff failed: %v\n", err)
+				}
 				return 1
 			}
 
 			if *jsonOut {
 				payload := output.DiffResult{From: from, To: to, Diff: diffOut}
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(payload); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(payload)
 			}
 
 			output.RenderDiff(os.Stdout, output.DiffResult{From: from, To: to, Diff: diffOut})

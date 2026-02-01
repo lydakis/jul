@@ -2,9 +2,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,9 +22,7 @@ func newMergeCommand() Command {
 		Name:    "merge",
 		Summary: "Resolve diverged workspace conflicts",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("merge", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
-			jsonOut := fs.Bool("json", false, "Output JSON")
+			fs, jsonOut := newFlagSet("merge")
 			autoApply := fs.Bool("apply", false, "Apply merge resolution without prompting")
 			_ = fs.Parse(args)
 
@@ -34,27 +30,31 @@ func newMergeCommand() Command {
 			if err != nil {
 				var conflictErr MergeConflictError
 				if errors.As(err, &conflictErr) {
-					output.RenderMerge(os.Stdout, res.Merge)
 					if strings.TrimSpace(conflictErr.Reason) != "" {
-						fmt.Fprintln(os.Stdout, conflictErr.Reason)
+						res.Merge.Reason = strings.TrimSpace(conflictErr.Reason)
 					}
 					if strings.TrimSpace(conflictErr.Worktree) != "" {
-						fmt.Fprintf(os.Stdout, "Resolve conflicts in %s and rerun 'jul merge'.\n", conflictErr.Worktree)
+						res.Merge.Worktree = strings.TrimSpace(conflictErr.Worktree)
+					}
+					if *jsonOut {
+						if code := writeJSON(res); code != 0 {
+							return code
+						}
+					} else {
+						output.RenderMerge(os.Stdout, res.Merge)
 					}
 					return 1
 				}
-				fmt.Fprintf(os.Stderr, "merge failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "merge_failed", fmt.Sprintf("merge failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "merge failed: %v\n", err)
+				}
 				return 1
 			}
 
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(res); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(res)
 			}
 
 			output.RenderMerge(os.Stdout, res.Merge)

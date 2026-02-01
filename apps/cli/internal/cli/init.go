@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,11 +9,24 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
-	"github.com/lydakis/jul/cli/internal/identity"
 	"github.com/lydakis/jul/cli/internal/hooks"
+	"github.com/lydakis/jul/cli/internal/identity"
+	"github.com/lydakis/jul/cli/internal/output"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
+
+type initOutput struct {
+	Status     string   `json:"status"`
+	RepoName   string   `json:"repo_name"`
+	RepoRoot   string   `json:"repo_root"`
+	Workspace  string   `json:"workspace"`
+	DeviceID   string   `json:"device_id"`
+	RemoteName string   `json:"remote_name,omitempty"`
+	RemoteURL  string   `json:"remote_url,omitempty"`
+	LocalOnly  bool     `json:"local_only"`
+	Warnings   []string `json:"warnings,omitempty"`
+}
 
 func newInitCommand() Command {
 	return Command{
@@ -27,8 +39,7 @@ func newInitCommand() Command {
 }
 
 func runInit(args []string) int {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("init")
 	server := fs.String("server", "", "Git remote base URL (optional)")
 	workspace := fs.String("workspace", "", "Workspace name (e.g. @)")
 	remote := fs.String("remote", "", "Remote name to configure")
@@ -36,54 +47,91 @@ func runInit(args []string) int {
 	noHooks := fs.Bool("no-hooks", false, "Skip hook installation")
 	args = normalizeInitArgs(args)
 	_ = fs.Parse(args)
+	warnings := []string{}
+	out := initOutput{Status: "ok"}
 
 	repoName := strings.TrimSpace(fs.Arg(0))
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		if err := runGit(".", "init"); err != nil {
-			fmt.Fprintf(os.Stderr, "git init failed: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "init_git_failed", fmt.Sprintf("git init failed: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "git init failed: %v\n", err)
+			}
 			return 1
 		}
 		repoRoot, err = gitutil.RepoTopLevel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to locate repo after init: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "init_repo_root_failed", fmt.Sprintf("failed to locate repo after init: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to locate repo after init: %v\n", err)
+			}
 			return 1
 		}
 	}
+	out.RepoRoot = repoRoot
 
 	if repoName == "" {
 		repoName = filepath.Base(repoRoot)
 	}
 	if repoName == "" {
-		fmt.Fprintln(os.Stderr, "repo name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "init_missing_repo", "repo name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "repo name required")
+		}
 		return 1
 	}
+	out.RepoName = repoName
 
 	if err := ensureJulDir(repoRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize .jul directory: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "init_jul_dir_failed", fmt.Sprintf("failed to initialize .jul directory: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to initialize .jul directory: %v\n", err)
+		}
 		return 1
 	}
 	deviceID, err := config.DeviceID()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create device id: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "init_device_id_failed", fmt.Sprintf("failed to create device id: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to create device id: %v\n", err)
+		}
 		return 1
 	}
+	out.DeviceID = deviceID
 
 	if wsName := strings.TrimSpace(*workspace); wsName != "" {
 		if err := config.SetRepoConfigValue("workspace", "name", wsName); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to set workspace name: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "init_workspace_failed", fmt.Sprintf("failed to set workspace name: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to set workspace name: %v\n", err)
+			}
 			return 1
 		}
 	}
 	if err := runGit(repoRoot, "config", "jul.reponame", repoName); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set jul.reponame: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "init_reponame_failed", fmt.Sprintf("failed to set jul.reponame: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to set jul.reponame: %v\n", err)
+		}
 		return 1
 	}
 
 	remoteName := strings.TrimSpace(*remote)
 	if remoteName != "" {
 		if err := config.SetRepoConfigValue("remote", "name", remoteName); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to set remote name: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "init_remote_name_failed", fmt.Sprintf("failed to set remote name: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to set remote name: %v\n", err)
+			}
 			return 1
 		}
 	}
@@ -95,7 +143,11 @@ func runInit(args []string) int {
 		}
 		remoteURL := buildRemoteURL(*server, repoName)
 		if err := configureRemoteURL(repoRoot, remoteName, remoteURL); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to configure remote: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "init_configure_remote_failed", fmt.Sprintf("failed to configure remote: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to configure remote: %v\n", err)
+			}
 			return 1
 		}
 	}
@@ -106,10 +158,15 @@ func runInit(args []string) int {
 	if err == nil {
 		remoteName = selected.Name
 		if err := ensureJulRefspecs(repoRoot, selected.Name); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to configure remote refspecs: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "init_refspec_failed", fmt.Sprintf("failed to configure remote refspecs: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to configure remote refspecs: %v\n", err)
+			}
 			return 1
 		}
-		fmt.Fprintf(os.Stdout, "Using remote '%s' (%s)\n", selected.Name, selected.URL)
+		out.RemoteName = selected.Name
+		out.RemoteURL = selected.URL
 	} else if err == remotesel.ErrMultipleRemote {
 		remotes, _ := gitutil.ListRemotes()
 		names := []string{}
@@ -117,47 +174,64 @@ func runInit(args []string) int {
 			names = append(names, rem.Name)
 		}
 		if len(names) > 0 {
-			fmt.Fprintf(os.Stdout, "Multiple remotes found: %s\n", strings.Join(names, ", "))
+			warnings = append(warnings, fmt.Sprintf("Multiple remotes found: %s", strings.Join(names, ", ")))
 		} else {
-			fmt.Fprintln(os.Stdout, "Multiple remotes found.")
+			warnings = append(warnings, "Multiple remotes found.")
 		}
-		fmt.Fprintln(os.Stdout, "Run 'jul remote set <name>' to choose one.")
+		warnings = append(warnings, "Run 'jul remote set <name>' to choose one.")
 		localOnly = true
 	} else if err == remotesel.ErrNoRemote || err == remotesel.ErrRemoteMissing {
-		fmt.Fprintln(os.Stdout, "No remote configured. Working locally.")
+		warnings = append(warnings, "No remote configured. Working locally.")
 		localOnly = true
 	} else if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve remote: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "init_remote_resolve_failed", fmt.Sprintf("failed to resolve remote: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to resolve remote: %v\n", err)
+		}
 		return 1
 	}
 
 	if _, err := identity.ResolveUserNamespace(remoteName); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve user namespace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "init_user_namespace_failed", fmt.Sprintf("failed to resolve user namespace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to resolve user namespace: %v\n", err)
+		}
 		return 1
 	}
 
 	if !*noHooks {
 		if _, err := hooks.InstallPostCommit(repoRoot, "jul"); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to install hook: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "init_hook_failed", fmt.Sprintf("failed to install hook: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to install hook: %v\n", err)
+			}
 			return 1
 		}
 	}
 
 	if _, err := ensureWorkspaceReady(repoRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize workspace: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "init_workspace_ready_failed", fmt.Sprintf("failed to initialize workspace: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to initialize workspace: %v\n", err)
+		}
 		return 1
 	}
 
-	fmt.Fprintf(os.Stdout, "Device ID: %s\n", deviceID)
 	_, workspaceName := workspaceParts()
 	if workspaceName == "" {
 		workspaceName = "@"
 	}
-	if localOnly {
-		fmt.Fprintf(os.Stdout, "Workspace '%s' ready (local only)\n", workspaceName)
-		return 0
+	out.Workspace = workspaceName
+	out.LocalOnly = localOnly
+	out.Warnings = warnings
+	if *jsonOut {
+		return writeJSON(out)
 	}
-	fmt.Fprintf(os.Stdout, "Workspace '%s' ready\n", workspaceName)
+	renderInitOutput(out)
 	return 0
 }
 
@@ -282,6 +356,27 @@ func ensureWorkspaceReady(repoRoot string) (string, error) {
 		}
 	}
 	return draftSHA, nil
+}
+
+func renderInitOutput(out initOutput) {
+	if len(out.Warnings) > 0 {
+		for _, warning := range out.Warnings {
+			fmt.Fprintln(os.Stdout, warning)
+		}
+	}
+	if out.RemoteName != "" && out.RemoteURL != "" {
+		fmt.Fprintf(os.Stdout, "Using remote '%s' (%s)\n", out.RemoteName, out.RemoteURL)
+	}
+	if out.DeviceID != "" {
+		fmt.Fprintf(os.Stdout, "Device ID: %s\n", out.DeviceID)
+	}
+	if out.Workspace != "" {
+		if out.LocalOnly {
+			fmt.Fprintf(os.Stdout, "Workspace '%s' ready (local only)\n", out.Workspace)
+		} else {
+			fmt.Fprintf(os.Stdout, "Workspace '%s' ready\n", out.Workspace)
+		}
+	}
 }
 
 func normalizeInitArgs(args []string) []string {

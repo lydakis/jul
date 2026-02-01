@@ -72,6 +72,43 @@ func RenderCIResult(out io.Writer, result ci.Result, opts Options) {
 	fmt.Fprintln(out, "One or more checks failed.")
 }
 
+func RenderCIJSON(out io.Writer, payload CIJSON, opts Options) {
+	details := payload.CI
+	fmt.Fprintln(out, "Running CI...")
+	for _, check := range details.Results {
+		icon := statusIconColored(check.Status, opts)
+		if icon == "" {
+			if strings.ToLower(check.Status) == "pass" {
+				icon = statusIcon("pass", opts)
+			} else {
+				icon = statusIcon("fail", opts)
+			}
+		}
+		label := check.Name
+		if check.Value != 0 {
+			label = fmt.Sprintf("%s %g", check.Name, check.Value)
+		}
+		if check.DurationMs > 0 {
+			fmt.Fprintf(out, "  %s%s (%dms)\n", icon, label, check.DurationMs)
+		} else {
+			fmt.Fprintf(out, "  %s%s\n", icon, label)
+		}
+		if strings.ToLower(check.Status) != "pass" && check.Output != "" {
+			for _, line := range strings.Split(check.Output, "\n") {
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				fmt.Fprintf(out, "    %s\n", line)
+			}
+		}
+	}
+	if details.Status == "pass" {
+		fmt.Fprintln(out, "All checks passed.")
+		return
+	}
+	fmt.Fprintln(out, "One or more checks failed.")
+}
+
 func RenderCIStatus(out io.Writer, payload CIStatusJSON, opts Options) {
 	status := payload.CI
 	fmt.Fprintln(out, "CI Status:")

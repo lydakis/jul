@@ -1,31 +1,53 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/output"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 )
+
+type remoteOutput struct {
+	Status     string   `json:"status"`
+	Action     string   `json:"action,omitempty"`
+	RemoteName string   `json:"remote_name,omitempty"`
+	RemoteURL  string   `json:"remote_url,omitempty"`
+	Remotes    []string `json:"remotes,omitempty"`
+	Message    string   `json:"message,omitempty"`
+}
 
 func newRemoteCommand() Command {
 	return Command{
 		Name:    "remote",
 		Summary: "Manage Jul remote selection",
 		Run: func(args []string) int {
+			jsonOut, args := stripJSONFlag(args)
 			if len(args) == 0 {
-				return runRemoteShow()
+				if jsonOut {
+					args = ensureJSONFlag(args)
+				}
+				return runRemoteShow(args)
 			}
-			switch args[0] {
+			sub := args[0]
+			subArgs := args[1:]
+			if jsonOut {
+				subArgs = ensureJSONFlag(subArgs)
+			}
+			switch sub {
 			case "set":
-				return runRemoteSet(args[1:])
+				return runRemoteSet(subArgs)
 			case "show":
-				return runRemoteShow()
+				return runRemoteShow(subArgs)
 			default:
-				fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", args[0])
+				if jsonOut {
+					_ = output.EncodeError(os.Stdout, "remote_unknown_subcommand", fmt.Sprintf("unknown subcommand %q", sub), nil)
+					return 2
+				}
+				fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", sub)
 				return 2
 			}
 		},
@@ -33,39 +55,73 @@ func newRemoteCommand() Command {
 }
 
 func runRemoteSet(args []string) int {
-	fs := flag.NewFlagSet("remote set", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("remote set")
 	_ = fs.Parse(args)
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "remote name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "remote_missing_name", "remote name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "remote name required")
+		}
 		return 2
 	}
 	if !gitutil.RemoteExists(name) {
-		fmt.Fprintf(os.Stderr, "remote %q not found; add it with git first\n", name)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "remote_not_found", fmt.Sprintf("remote %q not found; add it with git first", name), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "remote %q not found; add it with git first\n", name)
+		}
 		return 1
 	}
 	if err := config.SetRepoConfigValue("remote", "name", name); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to write repo config: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "remote_config_failed", fmt.Sprintf("failed to write repo config: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to write repo config: %v\n", err)
+		}
 		return 1
 	}
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err == nil {
 		if err := ensureJulRefspecs(repoRoot, name); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to configure remote refspecs: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "remote_refspec_failed", fmt.Sprintf("failed to configure remote refspecs: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to configure remote refspecs: %v\n", err)
+			}
 			return 1
 		}
 	}
-	fmt.Fprintf(os.Stdout, "Now using remote %q for sync.\n", name)
+	out := remoteOutput{
+		Status:     "ok",
+		Action:     "set",
+		RemoteName: name,
+		Message:    fmt.Sprintf("Now using remote %q for sync.", name),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderRemoteOutput(out)
 	return 0
 }
 
-func runRemoteShow() int {
+func runRemoteShow(args []string) int {
+	fs, jsonOut := newFlagSet("remote show")
+	_ = fs.Parse(args)
 	remote, err := remotesel.Resolve()
 	if err != nil {
 		switch err {
 		case remotesel.ErrNoRemote:
-			fmt.Fprintln(os.Stdout, "No git remotes configured.")
+			out := remoteOutput{
+				Status:  "no_remote",
+				Action:  "show",
+				Message: "No git remotes configured.",
+			}
+			if *jsonOut {
+				return writeJSON(out)
+			}
+			renderRemoteOutput(out)
 			return 0
 		case remotesel.ErrMultipleRemote:
 			remotes, _ := gitutil.ListRemotes()
@@ -73,16 +129,51 @@ func runRemoteShow() int {
 			for _, rem := range remotes {
 				names = append(names, rem.Name)
 			}
-			if len(names) > 0 {
-				fmt.Fprintf(os.Stdout, "Multiple remotes found: %s\n", strings.Join(names, ", "))
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "remote_multiple", "multiple remotes found; run 'jul remote set <name>'", nil)
+			} else {
+				if len(names) > 0 {
+					fmt.Fprintf(os.Stdout, "Multiple remotes found: %s\n", strings.Join(names, ", "))
+				}
+				fmt.Fprintln(os.Stdout, "Run 'jul remote set <name>' to choose one.")
 			}
-			fmt.Fprintln(os.Stdout, "Run 'jul remote set <name>' to choose one.")
 			return 1
 		default:
-			fmt.Fprintf(os.Stderr, "failed to resolve remote: %v\n", err)
+			if *jsonOut {
+				_ = output.EncodeError(os.Stdout, "remote_resolve_failed", fmt.Sprintf("failed to resolve remote: %v", err), nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to resolve remote: %v\n", err)
+			}
 			return 1
 		}
 	}
-	fmt.Fprintf(os.Stdout, "%s (%s)\n", remote.Name, remote.URL)
+	out := remoteOutput{
+		Status:     "ok",
+		Action:     "show",
+		RemoteName: remote.Name,
+		RemoteURL:  remote.URL,
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderRemoteOutput(out)
 	return 0
+}
+
+func renderRemoteOutput(out remoteOutput) {
+	if out.Message != "" {
+		fmt.Fprintln(os.Stdout, out.Message)
+		return
+	}
+	if out.RemoteName != "" && out.RemoteURL != "" {
+		fmt.Fprintf(os.Stdout, "%s (%s)\n", out.RemoteName, out.RemoteURL)
+		return
+	}
+	if out.RemoteName != "" {
+		fmt.Fprintf(os.Stdout, "%s\n", out.RemoteName)
+		return
+	}
+	if out.Status == "no_remote" {
+		fmt.Fprintln(os.Stdout, "No git remotes configured.")
+	}
 }

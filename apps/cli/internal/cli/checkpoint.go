@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -20,9 +18,7 @@ func newCheckpointCommand() Command {
 		Name:    "checkpoint",
 		Summary: "Record a checkpoint for the current commit",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("checkpoint", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
-			jsonOut := fs.Bool("json", false, "Output JSON")
+			fs, jsonOut := newFlagSet("checkpoint")
 			message := fs.String("m", "", "Checkpoint message")
 			prompt := fs.String("prompt", "", "Attach prompt metadata via trace")
 			adopt := fs.Bool("adopt", false, "Adopt HEAD commit as checkpoint")
@@ -56,7 +52,11 @@ func newCheckpointCommand() Command {
 					Force:           true,
 					UpdateCanonical: true,
 				}); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to record trace: %v\n", err)
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "checkpoint_trace_failed", fmt.Sprintf("failed to record trace: %v", err), nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to record trace: %v\n", err)
+					}
 					return 1
 				}
 			}
@@ -72,7 +72,11 @@ func newCheckpointCommand() Command {
 				res, err = syncer.Checkpoint(*message)
 			}
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "checkpoint failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "checkpoint_failed", fmt.Sprintf("checkpoint failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "checkpoint failed: %v\n", err)
+				}
 				return 1
 			}
 
@@ -96,11 +100,8 @@ func newCheckpointCommand() Command {
 			}
 
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(res); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
+				if code := writeJSON(res); code != 0 {
+					return code
 				}
 				if ciExit != 0 {
 					return ciExit

@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"sort"
@@ -60,9 +58,7 @@ func newSyncCommand() Command {
 		Name:    "sync",
 		Summary: "Sync draft locally and optionally to remote",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
-			jsonOut := fs.Bool("json", false, "Output JSON")
+			fs, jsonOut := newFlagSet("sync")
 			allowSecrets := fs.Bool("allow-secrets", false, "Allow draft push even if secrets are detected")
 			daemon := fs.Bool("daemon", false, "Run sync continuously in the foreground")
 			_ = fs.Parse(args)
@@ -73,16 +69,19 @@ func newSyncCommand() Command {
 
 			res, err := syncer.SyncWithOptions(syncer.SyncOptions{AllowSecrets: *allowSecrets})
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "sync_failed", err.Error(), []output.NextAction{
+						{Action: "retry", Command: "jul sync --json"},
+					})
+				} else {
+					fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
+				}
 				return 1
 			}
 
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(res); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
+				if code := writeJSON(res); code != 0 {
+					return code
 				}
 				ciExit := maybeRunDraftCI(res, true)
 				if ciExit != 0 {
@@ -106,15 +105,13 @@ func newStatusCommand() Command {
 		Name:    "status",
 		Summary: "Show sync and attestation status",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("status", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
-			jsonOut := fs.Bool("json", false, "Output JSON")
+			fs, jsonOut := newFlagSet("status")
 			porcelain := fs.Bool("porcelain", false, "Output git status porcelain")
 			_ = fs.Parse(args)
 
 			if *porcelain {
 				if *jsonOut {
-					fmt.Fprintln(os.Stderr, "cannot combine --json with --porcelain")
+					_ = output.EncodeError(os.Stdout, "status_incompatible_flags", "cannot combine --json with --porcelain", nil)
 					return 1
 				}
 				out, err := gitutil.Git("status", "--porcelain")
@@ -130,18 +127,16 @@ func newStatusCommand() Command {
 
 			status, err := buildLocalStatus()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to read status: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "status_failed", fmt.Sprintf("failed to read status: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to read status: %v\n", err)
+				}
 				return 1
 			}
 
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(status); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(status)
 			}
 
 			output.RenderStatus(os.Stdout, status, output.DefaultOptions())
@@ -155,25 +150,21 @@ func newReflogCommand() Command {
 		Name:    "reflog",
 		Summary: "Show recent workspace history",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("reflog", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("reflog")
 			limit := fs.Int("limit", 20, "Max entries to show")
-			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
 			entries, err := localReflogEntries(*limit)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to fetch reflog: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "reflog_failed", fmt.Sprintf("failed to fetch reflog: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to fetch reflog: %v\n", err)
+				}
 				return 1
 			}
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(entries); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(entries)
 			}
 			output.RenderReflog(os.Stdout, entries)
 			return 0
@@ -181,20 +172,31 @@ func newReflogCommand() Command {
 	}
 }
 
+type promoteOutput struct {
+	Status      string `json:"status"`
+	Branch      string `json:"branch"`
+	CommitSHA   string `json:"commit_sha"`
+	ForceTarget bool   `json:"force_target,omitempty"`
+	NoPolicy    bool   `json:"no_policy,omitempty"`
+}
+
 func newPromoteCommand() Command {
 	return Command{
 		Name:    "promote",
 		Summary: "Promote a workspace to a branch",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("promote", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("promote")
 			toBranch := fs.String("to", "", "Target branch")
 			noPolicy := fs.Bool("no-policy", false, "Skip promote policy checks")
 			forceTarget := fs.Bool("force-target", false, "Dangerous: allow non-fast-forward update of target branch")
 			_ = fs.Parse(args)
 
 			if *toBranch == "" {
-				fmt.Fprintln(os.Stderr, "missing --to <branch>")
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "promote_missing_target", "missing --to <branch>", nil)
+				} else {
+					fmt.Fprintln(os.Stderr, "missing --to <branch>")
+				}
 				return 1
 			}
 
@@ -203,7 +205,11 @@ func newPromoteCommand() Command {
 			if shaArg != "" {
 				resolved, err := gitutil.Git("rev-parse", shaArg)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "failed to resolve commit: %v\n", err)
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "promote_resolve_failed", fmt.Sprintf("failed to resolve commit: %v", err), nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to resolve commit: %v\n", err)
+					}
 					return 1
 				}
 				targetSHA = strings.TrimSpace(resolved)
@@ -212,33 +218,58 @@ func newPromoteCommand() Command {
 			} else {
 				current, err := gitutil.CurrentCommit()
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, "promote_git_state_failed", fmt.Sprintf("failed to read git state: %v", err), nil)
+					} else {
+						fmt.Fprintf(os.Stderr, "failed to read git state: %v\n", err)
+					}
 					return 1
 				}
 				targetSHA = current.SHA
 			}
 			if targetSHA == "" {
-				fmt.Fprintln(os.Stderr, "failed to resolve commit to promote")
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "promote_missing_commit", "failed to resolve commit to promote", nil)
+				} else {
+					fmt.Fprintln(os.Stderr, "failed to resolve commit to promote")
+				}
 				return 1
 			}
 			if err := promoteWithStack(*toBranch, targetSHA, *forceTarget, *noPolicy); err != nil {
-				fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "promote_failed", err.Error(), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "promote failed: %v\n", err)
+				}
 				return 1
 			}
 
-			if *forceTarget {
-				fmt.Fprintln(os.Stdout, "promote completed (force-target)")
-				return 0
+			out := promoteOutput{
+				Status:      "ok",
+				Branch:      *toBranch,
+				CommitSHA:   targetSHA,
+				ForceTarget: *forceTarget,
+				NoPolicy:    *noPolicy,
 			}
-
-			if *noPolicy {
-				fmt.Fprintln(os.Stdout, "promote completed (no-policy)")
-				return 0
+			if *jsonOut {
+				return writeJSON(out)
 			}
-			fmt.Fprintln(os.Stdout, "promote completed")
+			renderPromoteOutput(out)
 			return 0
 		},
 	}
+}
+
+func renderPromoteOutput(out promoteOutput) {
+	if out.ForceTarget {
+		fmt.Fprintln(os.Stdout, "promote completed (force-target)")
+		return
+	}
+	if out.NoPolicy {
+		fmt.Fprintln(os.Stdout, "promote completed (no-policy)")
+		return
+	}
+	fmt.Fprintln(os.Stdout, "promote completed")
 }
 
 func promoteLocal(branch, sha string, forceTarget bool, noPolicy bool) error {
@@ -651,24 +682,20 @@ func newChangesCommand() Command {
 		Name:    "changes",
 		Summary: "List changes",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("changes", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
-			jsonOut := fs.Bool("json", false, "Output JSON")
+			fs, jsonOut := newFlagSet("changes")
 			_ = fs.Parse(args)
 
 			changes, err := localChanges()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to fetch changes: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "changes_failed", fmt.Sprintf("failed to fetch changes: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to fetch changes: %v\n", err)
+				}
 				return 1
 			}
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(changes); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(changes)
 			}
 			output.RenderChanges(os.Stdout, changes, output.DefaultOptions())
 			return 0
@@ -741,50 +768,27 @@ func newHooksCommand() Command {
 		Summary: "Manage git hooks",
 		Run: func(args []string) int {
 			if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
+				if hasJSONFlag(args) {
+					_ = output.EncodeError(os.Stdout, "hooks_missing_subcommand", "missing hooks subcommand", nil)
+					return 1
+				}
 				printHooksUsage()
 				return 0
 			}
 
 			sub := strings.ToLower(args[0])
-			repoRoot, err := gitutil.RepoTopLevel()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to locate git repo: %v\n", err)
-				return 1
-			}
-
 			switch sub {
 			case "install":
-				cliCmd := os.Getenv("JUL_HOOK_CMD")
-				if cliCmd == "" {
-					cliCmd = "jul"
-				}
-				path, err := hooks.InstallPostCommit(repoRoot, cliCmd)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
-					return 1
-				}
-				fmt.Fprintf(os.Stdout, "installed post-commit hook: %s\n", path)
-				return 0
+				return runHooksInstall(args[1:])
 			case "uninstall":
-				if err := hooks.UninstallPostCommit(repoRoot); err != nil {
-					fmt.Fprintf(os.Stderr, "uninstall failed: %v\n", err)
-					return 1
-				}
-				fmt.Fprintln(os.Stdout, "removed post-commit hook")
-				return 0
+				return runHooksUninstall(args[1:])
 			case "status":
-				installed, path, err := hooks.StatusPostCommit(repoRoot)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "status failed: %v\n", err)
+				return runHooksStatus(args[1:])
+			default:
+				if hasJSONFlag(args) {
+					_ = output.EncodeError(os.Stdout, "hooks_unknown_subcommand", fmt.Sprintf("unknown subcommand %q", sub), nil)
 					return 1
 				}
-				if installed {
-					fmt.Fprintf(os.Stdout, "post-commit hook installed: %s\n", path)
-					return 0
-				}
-				fmt.Fprintf(os.Stdout, "post-commit hook not installed (%s)\n", path)
-				return 1
-			default:
 				printHooksUsage()
 				return 1
 			}
@@ -796,14 +800,166 @@ func printHooksUsage() {
 	fmt.Fprintln(os.Stdout, "Usage: jul hooks <install|uninstall|status>")
 }
 
+type hooksOutput struct {
+	Status    string `json:"status"`
+	Action    string `json:"action,omitempty"`
+	Installed bool   `json:"installed,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+func runHooksInstall(args []string) int {
+	fs, jsonOut := newFlagSet("hooks install")
+	_ = fs.Parse(args)
+
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "hooks_repo_failed", fmt.Sprintf("failed to locate git repo: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to locate git repo: %v\n", err)
+		}
+		return 1
+	}
+
+	cliCmd := os.Getenv("JUL_HOOK_CMD")
+	if cliCmd == "" {
+		cliCmd = "jul"
+	}
+	path, err := hooks.InstallPostCommit(repoRoot, cliCmd)
+	if err != nil {
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "hooks_install_failed", fmt.Sprintf("install failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		}
+		return 1
+	}
+	out := hooksOutput{
+		Status:  "ok",
+		Action:  "install",
+		Path:    path,
+		Message: fmt.Sprintf("installed post-commit hook: %s", path),
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderHooksOutput(out)
+	return 0
+}
+
+func runHooksUninstall(args []string) int {
+	fs, jsonOut := newFlagSet("hooks uninstall")
+	_ = fs.Parse(args)
+
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "hooks_repo_failed", fmt.Sprintf("failed to locate git repo: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to locate git repo: %v\n", err)
+		}
+		return 1
+	}
+
+	if err := hooks.UninstallPostCommit(repoRoot); err != nil {
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "hooks_uninstall_failed", fmt.Sprintf("uninstall failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "uninstall failed: %v\n", err)
+		}
+		return 1
+	}
+	out := hooksOutput{
+		Status:  "ok",
+		Action:  "uninstall",
+		Message: "removed post-commit hook",
+	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderHooksOutput(out)
+	return 0
+}
+
+func runHooksStatus(args []string) int {
+	fs, jsonOut := newFlagSet("hooks status")
+	_ = fs.Parse(args)
+
+	repoRoot, err := gitutil.RepoTopLevel()
+	if err != nil {
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "hooks_repo_failed", fmt.Sprintf("failed to locate git repo: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to locate git repo: %v\n", err)
+		}
+		return 1
+	}
+
+	installed, path, err := hooks.StatusPostCommit(repoRoot)
+	if err != nil {
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "hooks_status_failed", fmt.Sprintf("status failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "status failed: %v\n", err)
+		}
+		return 1
+	}
+	out := hooksOutput{
+		Status:    "ok",
+		Action:    "status",
+		Installed: installed,
+		Path:      path,
+	}
+	if installed {
+		out.Message = fmt.Sprintf("post-commit hook installed: %s", path)
+	} else {
+		out.Message = fmt.Sprintf("post-commit hook not installed (%s)", path)
+	}
+	if *jsonOut {
+		if code := writeJSON(out); code != 0 {
+			return code
+		}
+		if installed {
+			return 0
+		}
+		return 1
+	}
+	renderHooksOutput(out)
+	if installed {
+		return 0
+	}
+	return 1
+}
+
+func renderHooksOutput(out hooksOutput) {
+	if out.Message != "" {
+		fmt.Fprintln(os.Stdout, out.Message)
+	}
+}
+
+type versionOutput struct {
+	Version string `json:"version"`
+}
+
 func newVersionCommand(version string) Command {
 	return Command{
 		Name:    "version",
 		Summary: "Show CLI version",
 		Run: func(args []string) int {
-			_ = args
-			fmt.Fprintln(os.Stdout, version)
+			fs, jsonOut := newFlagSet("version")
+			_ = fs.Parse(args)
+
+			out := versionOutput{Version: version}
+			if *jsonOut {
+				return writeJSON(out)
+			}
+			renderVersionOutput(out)
 			return 0
 		},
 	}
+}
+
+func renderVersionOutput(out versionOutput) {
+	fmt.Fprintln(os.Stdout, out.Version)
 }

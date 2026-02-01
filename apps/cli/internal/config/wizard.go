@@ -107,3 +107,7 @@ func userConfigPath() (string, error) {
 	}
 	return filepath.Join(home, ".config", "jul", "config.toml"), nil
 }
+
+func UserConfigPath() (string, error) {
+	return userConfigPath()
+}

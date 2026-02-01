@@ -2,9 +2,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -22,18 +20,31 @@ func newDraftCommand() Command {
 		Name:    "draft",
 		Summary: "Manage per-device drafts",
 		Run: func(args []string) int {
+			jsonOut, args := stripJSONFlag(args)
 			if len(args) == 0 {
+				if jsonOut {
+					args = ensureJSONFlag(args)
+				}
 				return runDraftList(args)
 			}
-			switch args[0] {
+			sub := args[0]
+			subArgs := args[1:]
+			if jsonOut {
+				subArgs = ensureJSONFlag(subArgs)
+			}
+			switch sub {
 			case "list":
-				return runDraftList(args[1:])
+				return runDraftList(subArgs)
 			case "show":
-				return runDraftShow(args[1:])
+				return runDraftShow(subArgs)
 			case "adopt":
-				return runDraftAdopt(args[1:])
+				return runDraftAdopt(subArgs)
 			default:
-				fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", args[0])
+				if jsonOut {
+					_ = output.EncodeError(os.Stdout, "draft_unknown_subcommand", fmt.Sprintf("unknown subcommand %q", sub), nil)
+					return 2
+				}
+				fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", sub)
 				return 2
 			}
 		},
@@ -41,10 +52,8 @@ func newDraftCommand() Command {
 }
 
 func runDraftList(args []string) int {
-	fs := flag.NewFlagSet("draft list", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("draft list")
 	remote := fs.Bool("remote", false, "List drafts from other devices")
-	jsonOut := fs.Bool("json", false, "Output JSON")
 	_ = fs.Parse(args)
 
 	var drafts []output.DraftInfo
@@ -55,18 +64,16 @@ func runDraftList(args []string) int {
 		drafts, err = listLocalDrafts()
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "draft list failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "draft_list_failed", fmt.Sprintf("draft list failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "draft list failed: %v\n", err)
+		}
 		return 1
 	}
 
 	if *jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(output.DraftList{Drafts: drafts}); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-			return 1
-		}
-		return 0
+		return writeJSON(output.DraftList{Drafts: drafts})
 	}
 
 	output.RenderDraftList(os.Stdout, drafts, output.DefaultOptions())
@@ -74,46 +81,48 @@ func runDraftList(args []string) int {
 }
 
 func runDraftShow(args []string) int {
-	fs := flag.NewFlagSet("draft show", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("draft show")
 	remote := fs.Bool("remote", false, "Show remote draft")
-	jsonOut := fs.Bool("json", false, "Output JSON")
 	_ = fs.Parse(args)
 	device := strings.TrimSpace(fs.Arg(0))
 	if device == "" {
-		fmt.Fprintln(os.Stderr, "device required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "draft_missing_device", "device required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "device required")
+		}
 		return 2
 	}
 
 	info, err := draftInfoForDevice(device, *remote)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "draft show failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "draft_show_failed", fmt.Sprintf("draft show failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "draft show failed: %v\n", err)
+		}
 		return 1
 	}
 
 	if *jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(output.DraftShow{Draft: info}); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-			return 1
-		}
-		return 0
+		return writeJSON(output.DraftShow{Draft: info})
 	}
 	output.RenderDraftShow(os.Stdout, info, output.DefaultOptions())
 	return 0
 }
 
 func runDraftAdopt(args []string) int {
-	fs := flag.NewFlagSet("draft adopt", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("draft adopt")
 	onto := fs.String("onto", "", "Adopt onto a specific checkpoint")
 	replace := fs.Bool("replace", false, "Discard local draft and take remote as-is")
-	jsonOut := fs.Bool("json", false, "Output JSON")
 	_ = fs.Parse(args)
 	device := strings.TrimSpace(fs.Arg(0))
 	if device == "" {
-		fmt.Fprintln(os.Stderr, "device required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "draft_missing_device", "device required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "device required")
+		}
 		return 2
 	}
 
@@ -125,26 +134,32 @@ func runDraftAdopt(args []string) int {
 	if err != nil {
 		var conflict MergeConflictError
 		if errors.As(err, &conflict) {
-			if strings.TrimSpace(conflict.Reason) != "" {
-				fmt.Fprintln(os.Stderr, conflict.Reason)
-			}
-			if strings.TrimSpace(conflict.Worktree) != "" {
-				fmt.Fprintf(os.Stderr, "Resolve conflicts in %s and rerun 'jul draft adopt %s'.\n", conflict.Worktree, device)
+			if *jsonOut {
+				message := conflict.Error()
+				if strings.TrimSpace(conflict.Reason) != "" {
+					message = strings.TrimSpace(conflict.Reason)
+				}
+				_ = output.EncodeError(os.Stdout, "draft_conflict", message, nil)
+			} else {
+				if strings.TrimSpace(conflict.Reason) != "" {
+					fmt.Fprintln(os.Stderr, conflict.Reason)
+				}
+				if strings.TrimSpace(conflict.Worktree) != "" {
+					fmt.Fprintf(os.Stderr, "Resolve conflicts in %s and rerun 'jul draft adopt %s'.\n", conflict.Worktree, device)
+				}
 			}
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "draft adopt failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "draft_adopt_failed", fmt.Sprintf("draft adopt failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "draft adopt failed: %v\n", err)
+		}
 		return 1
 	}
 
 	if *jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(res); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-			return 1
-		}
-		return 0
+		return writeJSON(res)
 	}
 
 	fmt.Fprintf(os.Stdout, "Adopting draft from %s...\n", res.Device)

@@ -15,6 +15,8 @@ type MergeSummary struct {
 	SuggestionID string   `json:"suggestion_id,omitempty"`
 	Applied      bool     `json:"applied,omitempty"`
 	Conflicts    []string `json:"conflicts,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
+	Worktree     string   `json:"worktree,omitempty"`
 }
 
 func RenderMerge(w io.Writer, summary MergeSummary) {
@@ -47,6 +49,12 @@ func RenderMerge(w io.Writer, summary MergeSummary) {
 			for _, file := range summary.Conflicts {
 				fmt.Fprintf(w, "  - %s\n", file)
 			}
+		}
+		if summary.Reason != "" {
+			fmt.Fprintln(w, summary.Reason)
+		}
+		if summary.Worktree != "" {
+			fmt.Fprintf(w, "Resolve conflicts in %s and rerun 'jul merge'.\n", summary.Worktree)
 		}
 	}
 }

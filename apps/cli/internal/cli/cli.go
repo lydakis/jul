@@ -7,6 +7,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
@@ -22,16 +23,21 @@ type App struct {
 }
 
 func (a *App) Run(args []string) int {
+	jsonOut, args := stripJSONFlag(args)
 	if len(args) == 0 {
-		return a.usage("missing command")
+		return a.usageWithJSON("missing command", jsonOut)
 	}
 
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		return a.usage("")
+		return a.usageWithJSON("", jsonOut)
 	}
 
 	for _, cmd := range a.Commands {
 		if cmd.Name == args[0] {
+			cmdArgs := args[1:]
+			if jsonOut {
+				cmdArgs = ensureJSONFlag(cmdArgs)
+			}
 			if shouldAutoSync(cmd.Name) && config.SyncMode() == "on-command" {
 				if os.Getenv("JUL_NO_SYNC") == "" {
 					if _, err := gitutil.RepoTopLevel(); err == nil {
@@ -41,14 +47,51 @@ func (a *App) Run(args []string) int {
 					}
 				}
 			}
-			return cmd.Run(args[1:])
+			return cmd.Run(cmdArgs)
 		}
 	}
 
-	return a.usage(fmt.Sprintf("unknown command: %s", args[0]))
+	return a.usageWithJSON(fmt.Sprintf("unknown command: %s", args[0]), jsonOut)
 }
 
 func (a *App) usage(problem string) int {
+	return a.usageWithJSON(problem, false)
+}
+
+type usageOutput struct {
+	Version  string          `json:"version"`
+	Usage    string          `json:"usage"`
+	Commands []commandOutput `json:"commands,omitempty"`
+}
+
+type commandOutput struct {
+	Name    string `json:"name"`
+	Summary string `json:"summary"`
+}
+
+func (a *App) usageWithJSON(problem string, jsonOut bool) int {
+	if jsonOut {
+		if problem != "" {
+			_ = output.EncodeError(os.Stdout, "usage_error", problem, []output.NextAction{
+				{Action: "help", Command: "jul help --json"},
+			})
+			return 1
+		}
+		commands := make([]commandOutput, 0, len(a.Commands))
+		for _, cmd := range a.Commands {
+			commands = append(commands, commandOutput{Name: cmd.Name, Summary: cmd.Summary})
+		}
+		out := usageOutput{
+			Version:  a.Version,
+			Usage:    "jul <command> [options]",
+			Commands: commands,
+		}
+		if err := output.EncodeJSON(os.Stdout, out); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if problem != "" {
 		fmt.Fprintf(os.Stderr, "error: %s\n\n", problem)
 	}

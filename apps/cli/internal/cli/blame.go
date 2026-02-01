@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 type blameLine struct {
@@ -22,54 +21,98 @@ type blameLine struct {
 	Summary   string
 }
 
+type blameOutput struct {
+	File  string            `json:"file"`
+	Lines []blameLineOutput `json:"lines"`
+}
+
+type blameLineOutput struct {
+	Line              int    `json:"line"`
+	Content           string `json:"content"`
+	CheckpointSHA     string `json:"checkpoint_sha"`
+	CheckpointChange  string `json:"checkpoint_change_id"`
+	TraceSHA          string `json:"trace_sha,omitempty"`
+	Agent             string `json:"agent,omitempty"`
+	PromptHash        string `json:"prompt_hash,omitempty"`
+	PromptSummary     string `json:"prompt_summary,omitempty"`
+	PromptFull        string `json:"prompt,omitempty"`
+	SessionID         string `json:"session_id,omitempty"`
+	Turn              int    `json:"turn,omitempty"`
+	TraceSummaryLocal bool   `json:"trace_summary_local,omitempty"`
+}
+
 func newBlameCommand() Command {
 	return Command{
 		Name:    "blame",
 		Summary: "Show line-by-line provenance",
 		Run: func(args []string) int {
 			args = normalizeFlagArgs(args)
-			fs := flag.NewFlagSet("blame", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
+			fs, jsonOut := newFlagSet("blame")
 			showPrompts := fs.Bool("prompts", false, "Show prompts/summaries for trace lines")
 			localOnly := fs.Bool("local", false, "Include local prompt text")
 			verbose := fs.Bool("verbose", false, "Show full context per line")
 			noTrace := fs.Bool("no-trace", false, "Disable trace attribution")
-			jsonOut := fs.Bool("json", false, "Output JSON")
 			_ = fs.Parse(args)
 
 			target := strings.TrimSpace(fs.Arg(0))
 			if target == "" {
-				fmt.Fprintln(os.Stderr, "file path required")
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "blame_missing_path", "file path required", nil)
+				} else {
+					fmt.Fprintln(os.Stderr, "file path required")
+				}
 				return 1
 			}
 			path, start, end, err := parseFileRange(target)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "invalid file range: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "blame_invalid_range", fmt.Sprintf("invalid file range: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "invalid file range: %v\n", err)
+				}
 				return 1
 			}
 
 			repoRoot, err := gitutil.RepoTopLevel()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to locate repo: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "blame_repo_failed", fmt.Sprintf("failed to locate repo: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to locate repo: %v\n", err)
+				}
 				return 1
 			}
 			absPath := filepath.Join(repoRoot, path)
 			if _, err := os.Stat(absPath); err != nil {
-				fmt.Fprintf(os.Stderr, "file not found: %s\n", path)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "blame_missing_file", fmt.Sprintf("file not found: %s", path), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "file not found: %s\n", path)
+				}
 				return 1
 			}
 
 			checkpoint, _ := latestCheckpoint()
 			baseSHA := "HEAD"
 			changeID := ""
+			commitFallback := false
 			if checkpoint != nil {
 				baseSHA = checkpoint.SHA
 				changeID = checkpoint.ChangeID
+			} else {
+				commitFallback = true
+				if resolved, err := gitutil.ResolveRef(baseSHA); err == nil {
+					baseSHA = strings.TrimSpace(resolved)
+				}
 			}
 
 			mainLines, err := blameFile(repoRoot, baseSHA, path, start, end)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "blame failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "blame_failed", fmt.Sprintf("blame failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "blame failed: %v\n", err)
+				}
 				return 1
 			}
 			traceLines := map[int]blameLine{}
@@ -101,18 +144,12 @@ func newBlameCommand() Command {
 				}
 			}
 
+			out := buildBlameOutput(path, changeID, baseSHA, mainLines, traceLines, *showPrompts || *verbose, *localOnly, commitFallback)
 			if *jsonOut {
-				out := buildBlameJSON(path, changeID, baseSHA, mainLines, traceLines, *showPrompts || *verbose, *localOnly)
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(out); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(out)
 			}
 
-			renderBlameText(changeID, mainLines, traceLines, *showPrompts || *verbose, *localOnly, *verbose)
+			renderBlameText(out, *showPrompts || *verbose, *verbose)
 			return 0
 		},
 	}
@@ -134,82 +171,76 @@ func normalizeFlagArgs(args []string) []string {
 	return append(flags, positional...)
 }
 
-func renderBlameText(changeID string, mainLines []blameLine, traceLines map[int]blameLine, showPrompts, localOnly, verbose bool) {
-	cache := map[string]*metadata.TraceNote{}
-	for _, line := range mainLines {
-		trace := traceLines[line.Line]
-		traceSHA := strings.TrimSpace(trace.CommitSHA)
+func renderBlameText(out blameOutput, showPrompts, verbose bool) {
+	for _, line := range out.Lines {
+		changeID := strings.TrimSpace(line.CheckpointChange)
 		if changeID == "" {
-			changeID = gitutil.FallbackChangeID(line.CommitSHA)
+			changeID = gitutil.FallbackChangeID(line.CheckpointSHA)
 		}
 		label := changeID
-		if traceSHA != "" {
-			label = fmt.Sprintf("%s (sha:%s)", changeID, shortSHA(traceSHA))
+		if strings.TrimSpace(line.TraceSHA) != "" {
+			label = fmt.Sprintf("%s (sha:%s)", changeID, shortSHA(line.TraceSHA))
 		}
 		fmt.Fprintf(os.Stdout, "%4d │ %-60s %s\n", line.Line, line.Content, label)
 		if !showPrompts && !verbose {
 			continue
 		}
-		if traceSHA == "" {
+		if strings.TrimSpace(line.TraceSHA) == "" {
 			if verbose {
 				fmt.Fprintf(os.Stdout, "     │ No trace metadata\n")
 			}
 			continue
 		}
-		note := cache[traceSHA]
-		if note == nil {
-			note, _ = metadata.GetTrace(traceSHA)
-			cache[traceSHA] = note
-		}
-		prompt, summary := tracePromptDetails(traceSHA, note, localOnly)
 		if verbose {
-			if note != nil && note.Agent != "" {
-				fmt.Fprintf(os.Stdout, "     │ Agent: %s\n", note.Agent)
+			if line.Agent != "" {
+				fmt.Fprintf(os.Stdout, "     │ Agent: %s\n", line.Agent)
 			}
-			if note != nil && note.SessionID != "" {
-				fmt.Fprintf(os.Stdout, "     │ Session: %s\n", note.SessionID)
+			if line.SessionID != "" {
+				fmt.Fprintf(os.Stdout, "     │ Session: %s\n", line.SessionID)
 			}
-			if summary != "" {
-				fmt.Fprintf(os.Stdout, "     │ Summary: %s\n", summary)
+			if line.PromptSummary != "" {
+				fmt.Fprintf(os.Stdout, "     │ Summary: %s\n", line.PromptSummary)
 			}
-			if prompt != "" {
-				fmt.Fprintf(os.Stdout, "     │ Prompt: %s\n", prompt)
+			if line.PromptFull != "" {
+				fmt.Fprintf(os.Stdout, "     │ Prompt: %s\n", line.PromptFull)
 			}
 		} else if showPrompts {
-			if summary != "" {
-				fmt.Fprintf(os.Stdout, "     │ Summary: %s\n", summary)
-			} else if note != nil && note.PromptHash != "" {
-				fmt.Fprintf(os.Stdout, "     │ Prompt: %s\n", note.PromptHash)
+			if line.PromptSummary != "" {
+				fmt.Fprintf(os.Stdout, "     │ Summary: %s\n", line.PromptSummary)
+			} else if line.PromptHash != "" {
+				fmt.Fprintf(os.Stdout, "     │ Prompt: %s\n", line.PromptHash)
 			}
 		}
 	}
 }
 
-func buildBlameJSON(path, changeID, baseSHA string, mainLines []blameLine, traceLines map[int]blameLine, includePrompts, localOnly bool) map[string]any {
-	type lineJSON struct {
-		Line              int    `json:"line"`
-		Content           string `json:"content"`
-		CheckpointSHA     string `json:"checkpoint_sha"`
-		CheckpointChange  string `json:"checkpoint_change_id"`
-		TraceSHA          string `json:"trace_sha,omitempty"`
-		Agent             string `json:"agent,omitempty"`
-		PromptHash        string `json:"prompt_hash,omitempty"`
-		PromptSummary     string `json:"prompt_summary,omitempty"`
-		PromptFull        string `json:"prompt,omitempty"`
-		SessionID         string `json:"session_id,omitempty"`
-		Turn              int    `json:"turn,omitempty"`
-		TraceSummaryLocal bool   `json:"trace_summary_local,omitempty"`
-	}
-	lines := make([]lineJSON, 0, len(mainLines))
+func buildBlameOutput(path, changeID, baseSHA string, mainLines []blameLine, traceLines map[int]blameLine, includePrompts, localOnly, commitFallback bool) blameOutput {
+	lines := make([]blameLineOutput, 0, len(mainLines))
 	cache := map[string]*metadata.TraceNote{}
+	changeCache := map[string]string{}
 	for _, line := range mainLines {
 		trace := traceLines[line.Line]
 		traceSHA := strings.TrimSpace(trace.CommitSHA)
-		entry := lineJSON{
+		checkpointSHA := baseSHA
+		checkpointChange := changeID
+		if commitFallback {
+			if strings.TrimSpace(line.CommitSHA) != "" {
+				checkpointSHA = strings.TrimSpace(line.CommitSHA)
+			}
+			if strings.TrimSpace(checkpointChange) == "" && strings.TrimSpace(checkpointSHA) != "" {
+				if cached, ok := changeCache[checkpointSHA]; ok {
+					checkpointChange = cached
+				} else {
+					checkpointChange = changeIDForCommit(checkpointSHA)
+					changeCache[checkpointSHA] = checkpointChange
+				}
+			}
+		}
+		entry := blameLineOutput{
 			Line:             line.Line,
 			Content:          line.Content,
-			CheckpointSHA:    baseSHA,
-			CheckpointChange: changeID,
+			CheckpointSHA:    checkpointSHA,
+			CheckpointChange: checkpointChange,
 			TraceSHA:         traceSHA,
 		}
 		if traceSHA != "" {
@@ -233,9 +264,9 @@ func buildBlameJSON(path, changeID, baseSHA string, mainLines []blameLine, trace
 		}
 		lines = append(lines, entry)
 	}
-	return map[string]any{
-		"file":  path,
-		"lines": lines,
+	return blameOutput{
+		File:  path,
+		Lines: lines,
 	}
 }
 

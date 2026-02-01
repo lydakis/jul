@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +8,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 func newSubmitCommand() Command {
@@ -23,35 +22,39 @@ func newSubmitCommand() Command {
 }
 
 func runSubmit(args []string) int {
-	fs := flag.NewFlagSet("submit", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
-	jsonOut := fs.Bool("json", false, "Output JSON")
-	_ = fs.Parse(args)
+fs, jsonOut := newFlagSet("submit")
+_ = fs.Parse(args)
 
 	state, err := submitReview()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "submit failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "submit_failed", fmt.Sprintf("submit failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "submit failed: %v\n", err)
+		}
 		return 1
 	}
 
 	if *jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(state); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-			return 1
-		}
-		return 0
+		return writeJSON(state)
 	}
 
-	_, workspace := workspaceParts()
-	if workspace == "" {
-		workspace = "@"
-	}
-	fmt.Fprintf(os.Stdout, "CR updated for workspace '%s'\n", workspace)
-	fmt.Fprintf(os.Stdout, "  Change-Id: %s\n", state.ChangeID)
-	fmt.Fprintf(os.Stdout, "  Checkpoint: %s\n", state.LatestCheckpoint)
+	renderSubmitOutput(state)
 	return 0
+}
+
+func renderSubmitOutput(state metadata.ChangeRequestState) {
+	if strings.TrimSpace(state.WorkspaceID) != "" {
+		fmt.Fprintf(os.Stdout, "CR updated for workspace '%s'\n", state.WorkspaceID)
+	} else {
+		fmt.Fprintln(os.Stdout, "CR updated.")
+	}
+	if state.ChangeID != "" {
+		fmt.Fprintf(os.Stdout, "  Change-Id: %s\n", state.ChangeID)
+	}
+	if state.LatestCheckpoint != "" {
+		fmt.Fprintf(os.Stdout, "  Checkpoint: %s\n", state.LatestCheckpoint)
+	}
 }
 
 func submitReview() (metadata.ChangeRequestState, error) {

@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -17,31 +15,31 @@ func newShowCommand() Command {
 		Name:    "show",
 		Summary: "Show details of a checkpoint or suggestion",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("show", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
-			jsonOut := fs.Bool("json", false, "Output JSON")
+			fs, jsonOut := newFlagSet("show")
 			_ = fs.Parse(args)
 
 			id := strings.TrimSpace(fs.Arg(0))
 			if id == "" {
-				fmt.Fprintln(os.Stderr, "id required")
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "show_missing_id", "id required", nil)
+				} else {
+					fmt.Fprintln(os.Stderr, "id required")
+				}
 				return 1
 			}
 
 			payload, err := buildShowPayload(id)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "show failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "show_failed", fmt.Sprintf("show failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "show failed: %v\n", err)
+				}
 				return 1
 			}
 
 			if *jsonOut {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(payload); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(payload)
 			}
 
 			output.RenderShow(os.Stdout, payload)

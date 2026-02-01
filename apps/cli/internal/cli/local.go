@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 type localManifest struct {
@@ -29,25 +29,58 @@ type localState struct {
 	Untracked int
 }
 
+type localSaveOutput struct {
+	Status string        `json:"status"`
+	State  localManifest `json:"state"`
+}
+
+type localRestoreOutput struct {
+	Status string `json:"status"`
+	Name   string `json:"name"`
+}
+
+type localListOutput struct {
+	States []localManifest `json:"states"`
+}
+
+type localDeleteOutput struct {
+	Status string `json:"status"`
+	Name   string `json:"name"`
+}
+
 func newLocalCommand() Command {
 	return Command{
 		Name:    "local",
 		Summary: "Manage local workspace snapshots",
 		Run: func(args []string) int {
+			jsonOut, args := stripJSONFlag(args)
 			if len(args) == 0 {
+				if jsonOut {
+					_ = output.EncodeError(os.Stdout, "local_missing_subcommand", "missing local subcommand", nil)
+					return 1
+				}
 				printLocalUsage()
 				return 1
 			}
-			switch args[0] {
+			sub := args[0]
+			subArgs := args[1:]
+			if jsonOut {
+				subArgs = ensureJSONFlag(subArgs)
+			}
+			switch sub {
 			case "save":
-				return runLocalSave(args[1:])
+				return runLocalSave(subArgs)
 			case "restore":
-				return runLocalRestore(args[1:])
+				return runLocalRestore(subArgs)
 			case "list":
-				return runLocalList(args[1:])
+				return runLocalList(subArgs)
 			case "delete":
-				return runLocalDelete(args[1:])
+				return runLocalDelete(subArgs)
 			default:
+				if jsonOut {
+					_ = output.EncodeError(os.Stdout, "local_unknown_subcommand", fmt.Sprintf("unknown subcommand %q", sub), nil)
+					return 1
+				}
 				printLocalUsage()
 				return 1
 			}
@@ -56,76 +89,145 @@ func newLocalCommand() Command {
 }
 
 func runLocalSave(args []string) int {
-	fs := flag.NewFlagSet("local save", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("local save")
 	_ = fs.Parse(args)
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "local_missing_name", "name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "name required")
+		}
 		return 1
 	}
 	state, err := localSave(name)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "save failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "local_save_failed", fmt.Sprintf("save failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "save failed: %v\n", err)
+		}
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "Saved local state '%s'\n", state.Name)
-	fmt.Fprintf(os.Stdout, "  %d modified files\n", state.Modified)
-	fmt.Fprintf(os.Stdout, "  %d untracked files\n", state.Untracked)
+	out := localSaveOutput{Status: "ok", State: manifestFromState(state)}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderLocalSave(out)
 	return 0
 }
 
 func runLocalRestore(args []string) int {
-	fs := flag.NewFlagSet("local restore", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("local restore")
 	_ = fs.Parse(args)
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "local_missing_name", "name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "name required")
+		}
 		return 1
 	}
 	if err := localRestore(name); err != nil {
-		fmt.Fprintf(os.Stderr, "restore failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "local_restore_failed", fmt.Sprintf("restore failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "restore failed: %v\n", err)
+		}
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "Restored local state '%s'\n", name)
+	out := localRestoreOutput{Status: "ok", Name: name}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderLocalRestore(out)
 	return 0
 }
 
 func runLocalList(args []string) int {
-	fs := flag.NewFlagSet("local list", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("local list")
 	_ = fs.Parse(args)
 	states, err := localList()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "list failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "local_list_failed", fmt.Sprintf("list failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "list failed: %v\n", err)
+		}
 		return 1
 	}
-	if len(states) == 0 {
-		fmt.Fprintln(os.Stdout, "No local states.")
-		return 0
-	}
+	out := localListOutput{States: make([]localManifest, 0, len(states))}
 	for _, state := range states {
-		fmt.Fprintf(os.Stdout, "  %s (%d files, %s)\n", state.Name, state.Modified+state.Untracked, humanTime(state.SavedAt))
+		out.States = append(out.States, manifestFromState(state))
 	}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderLocalList(out)
 	return 0
 }
 
 func runLocalDelete(args []string) int {
-	fs := flag.NewFlagSet("local delete", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
+	fs, jsonOut := newFlagSet("local delete")
 	_ = fs.Parse(args)
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "name required")
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "local_missing_name", "name required", nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "name required")
+		}
 		return 1
 	}
 	if err := localDelete(name); err != nil {
-		fmt.Fprintf(os.Stderr, "delete failed: %v\n", err)
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "local_delete_failed", fmt.Sprintf("delete failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "delete failed: %v\n", err)
+		}
 		return 1
 	}
-	fmt.Fprintln(os.Stdout, "Deleted.")
+	out := localDeleteOutput{Status: "ok", Name: name}
+	if *jsonOut {
+		return writeJSON(out)
+	}
+	renderLocalDelete(out)
 	return 0
+}
+
+func manifestFromState(state localState) localManifest {
+	return localManifest{
+		Name:      state.Name,
+		SavedAt:   state.SavedAt,
+		Modified:  state.Modified,
+		Untracked: state.Untracked,
+	}
+}
+
+func renderLocalSave(out localSaveOutput) {
+	fmt.Fprintf(os.Stdout, "Saved local state '%s'\n", out.State.Name)
+	fmt.Fprintf(os.Stdout, "  %d modified files\n", out.State.Modified)
+	fmt.Fprintf(os.Stdout, "  %d untracked files\n", out.State.Untracked)
+}
+
+func renderLocalRestore(out localRestoreOutput) {
+	fmt.Fprintf(os.Stdout, "Restored local state '%s'\n", out.Name)
+}
+
+func renderLocalList(out localListOutput) {
+	if len(out.States) == 0 {
+		fmt.Fprintln(os.Stdout, "No local states.")
+		return
+	}
+	for _, state := range out.States {
+		total := state.Modified + state.Untracked
+		fmt.Fprintf(os.Stdout, "  %s (%d files, %s)\n", state.Name, total, humanTime(state.SavedAt))
+	}
+}
+
+func renderLocalDelete(out localDeleteOutput) {
+	fmt.Fprintf(os.Stdout, "Deleted local state '%s'\n", out.Name)
 }
 
 func localSave(name string) (localState, error) {

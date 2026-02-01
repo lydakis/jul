@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,14 +23,16 @@ func newReviewCommand() Command {
 		Name:    "review",
 		Summary: "Run the internal review agent",
 		Run: func(args []string) int {
-			fs := flag.NewFlagSet("review", flag.ContinueOnError)
-			fs.SetOutput(os.Stdout)
-			jsonOut := fs.Bool("json", false, "Output JSON")
+			fs, jsonOut := newFlagSet("review")
 			_ = fs.Parse(args)
 
 			created, summary, err := runReview()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "review failed: %v\n", err)
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "review_failed", fmt.Sprintf("review failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "review failed: %v\n", err)
+				}
 				return 1
 			}
 
@@ -43,13 +44,7 @@ func newReviewCommand() Command {
 				if len(created) > 0 {
 					out.NextActions = buildSuggestionActions(created)
 				}
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(out); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to encode json: %v\n", err)
-					return 1
-				}
-				return 0
+				return writeJSON(out)
 			}
 
 			output.RenderReview(os.Stdout, summary)
