@@ -108,8 +108,20 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		}
 	}
 
+	resumeFromWorktree := false
 	if strings.TrimSpace(oursSHA) == strings.TrimSpace(theirsSHA) {
-		return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
+		if mergeHead := mergeHeadForOurs(repoRoot, oursSHA); mergeHead != "" {
+			theirsSHA = mergeHead
+			resumeFromWorktree = true
+		} else if worktreeDirtyForRepo(repoRoot) {
+			// Preserve manual edits in the agent worktree even if refs now match.
+			resumeFromWorktree = true
+		} else {
+			return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
+		}
+	} else if mergeHead := mergeHeadForOurs(repoRoot, oursSHA); mergeHead != "" {
+		theirsSHA = mergeHead
+		resumeFromWorktree = true
 	}
 
 	mergeBase, err := gitutil.MergeBase(oursSHA, theirsSHA)
@@ -117,11 +129,13 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		return output.MergeOutput{}, fmt.Errorf("failed to resolve merge base")
 	}
 
-	if draftParentMismatch(oursSHA, mergeBase) {
-		return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
-	}
-	if draftParentMismatch(theirsSHA, mergeBase) {
-		return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
+	if !resumeFromWorktree {
+		if draftParentMismatch(oursSHA, mergeBase) {
+			return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
+		}
+		if draftParentMismatch(theirsSHA, mergeBase) {
+			return output.MergeOutput{}, fmt.Errorf("checkpoint base diverged; run 'jul ws checkout @' to reset")
+		}
 	}
 
 	worktree, err := agent.EnsureWorktree(repoRoot, oursSHA, agent.WorktreeOptions{AllowMergeInProgress: true})
@@ -137,6 +151,15 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		if strings.TrimSpace(mergeHead) == strings.TrimSpace(theirsSHA) && strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA) {
 			resumeMerge = true
 		}
+	}
+	if !resumeMerge && dirtyWorktree {
+		headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
+		if strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA) {
+			resumeMerge = true
+		}
+	}
+	if !resumeMerge && resumeFromWorktree {
+		resumeMerge = true
 	}
 	if !resumeMerge {
 		dirtyWorktree = false
@@ -289,6 +312,31 @@ func changeIDFromCommit(sha string) string {
 		return generated
 	}
 	return ""
+}
+
+func mergeHeadForOurs(repoRoot, oursSHA string) string {
+	worktree := filepath.Join(repoRoot, ".jul", "agent-workspace", "worktree")
+	if _, err := os.Stat(worktree); err != nil {
+		return ""
+	}
+	if !agent.MergeInProgress(worktree) {
+		return ""
+	}
+	headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
+	if strings.TrimSpace(headSHA) == "" || strings.TrimSpace(headSHA) != strings.TrimSpace(oursSHA) {
+		return ""
+	}
+	mergeHead, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	return strings.TrimSpace(mergeHead)
+}
+
+func worktreeDirtyForRepo(repoRoot string) bool {
+	worktree := filepath.Join(repoRoot, ".jul", "agent-workspace", "worktree")
+	if _, err := os.Stat(worktree); err != nil {
+		return false
+	}
+	dirty, _ := worktreeDirty(worktree)
+	return dirty
 }
 
 func mergeConflictFiles(worktree string) []string {

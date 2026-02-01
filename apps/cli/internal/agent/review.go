@@ -433,6 +433,46 @@ func parseReviewResponse(data []byte) (ReviewResponse, error) {
 	if found {
 		return last, nil
 	}
+	if text, ok, err := extractOpenCodeText(clean); ok {
+		if err != nil {
+			return ReviewResponse{}, err
+		}
+		textBytes := bytes.TrimSpace([]byte(text))
+		if len(textBytes) == 0 {
+			return ReviewResponse{}, fmt.Errorf("invalid agent response: empty text output")
+		}
+		if err := json.Unmarshal(textBytes, &resp); err == nil && resp.Version != 0 {
+			return resp, nil
+		}
+		for _, line := range bytes.Split(textBytes, []byte("\n")) {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			var candidate ReviewResponse
+			if err := json.Unmarshal(line, &candidate); err == nil && candidate.Version != 0 {
+				last = candidate
+				found = true
+				continue
+			}
+			extracted := extractJSON(line)
+			if err := json.Unmarshal(extracted, &candidate); err == nil && candidate.Version != 0 {
+				last = candidate
+				found = true
+			}
+		}
+		if found {
+			return last, nil
+		}
+		extracted := extractJSON(textBytes)
+		if err := json.Unmarshal(extracted, &resp); err != nil {
+			return ReviewResponse{}, fmt.Errorf("invalid agent response: %w", err)
+		}
+		if resp.Version == 0 {
+			return ReviewResponse{}, fmt.Errorf("invalid agent response: missing version")
+		}
+		return resp, nil
+	}
 	extracted := extractJSON(clean)
 	if err := json.Unmarshal(extracted, &resp); err != nil {
 		return ReviewResponse{}, fmt.Errorf("invalid agent response: %w", err)
@@ -466,6 +506,57 @@ func extractJSON(data []byte) []byte {
 		}
 	}
 	return trimmed[start:]
+}
+
+type openCodeEvent struct {
+	Type string `json:"type"`
+	Part struct {
+		Text string `json:"text"`
+	} `json:"part"`
+	Error *struct {
+		Name string `json:"name"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	} `json:"error"`
+}
+
+func extractOpenCodeText(data []byte) (string, bool, error) {
+	var text strings.Builder
+	var sawEvent bool
+	var errMsg string
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var event openCodeEvent
+		if err := json.Unmarshal(line, &event); err != nil || strings.TrimSpace(event.Type) == "" {
+			continue
+		}
+		sawEvent = true
+		if event.Type == "text" {
+			if chunk := event.Part.Text; chunk != "" {
+				text.WriteString(chunk)
+			}
+		}
+		if event.Type == "error" && errMsg == "" && event.Error != nil {
+			msg := strings.TrimSpace(event.Error.Data.Message)
+			if msg == "" {
+				msg = strings.TrimSpace(event.Error.Name)
+			}
+			if msg != "" {
+				errMsg = msg
+			}
+		}
+	}
+	if !sawEvent {
+		return "", false, nil
+	}
+	if text.Len() == 0 && errMsg != "" {
+		return "", true, fmt.Errorf("agent error: %s", errMsg)
+	}
+	return text.String(), true, nil
 }
 
 func buildReviewPrompt(action, attachmentPath string) string {
