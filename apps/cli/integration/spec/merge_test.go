@@ -26,7 +26,7 @@ func TestIT_MERGE_001(t *testing.T) {
 
 	runCmd(t, repo, device.Env, julPath, "init", "demo")
 
-	oursRef, workspaceRef, checkpointSHA := setupMergeConflict(t, repo, device, julPath)
+	oursRef, _, checkpointSHA := setupMergeConflict(t, repo, device, julPath)
 
 	agentPath := filepath.Join(t.TempDir(), "agent.sh")
 	agentScript := `#!/bin/sh
@@ -54,7 +54,9 @@ printf '{"version":1,"status":"completed","suggestions":[]}'
 		t.Fatalf("expected resolved/applied merge, got %+v", res.Merge)
 	}
 
-	resolved := runCmd(t, repo, nil, "git", "show", workspaceRef+":conflict.txt")
+	deviceID := readDeviceID(t, device.Home)
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	resolved := runCmd(t, repo, nil, "git", "show", syncRef+":conflict.txt")
 	if !strings.Contains(resolved, "resolved") {
 		t.Fatalf("expected resolved content, got %s", resolved)
 	}
@@ -72,7 +74,7 @@ func TestIT_MERGE_007(t *testing.T) {
 
 	runCmd(t, repo, device.Env, julPath, "init", "demo")
 
-	_, workspaceRef, _ := setupMergeConflict(t, repo, device, julPath)
+	setupMergeConflict(t, repo, device, julPath)
 
 	agentPath := filepath.Join(t.TempDir(), "agent.sh")
 	agentScript := `#!/bin/sh
@@ -117,6 +119,13 @@ printf '{"version":1,"status":"completed","suggestions":[]}'
 	if err := os.WriteFile(filepath.Join(worktree, "conflict.txt"), []byte("manual resolution\n"), 0o644); err != nil {
 		t.Fatalf("failed to write manual resolution: %v", err)
 	}
+	manualContents, err := os.ReadFile(filepath.Join(worktree, "conflict.txt"))
+	if err != nil {
+		t.Fatalf("failed to read manual resolution: %v", err)
+	}
+	if !strings.Contains(string(manualContents), "manual resolution") {
+		t.Fatalf("expected manual resolution in worktree, got %s", string(manualContents))
+	}
 
 	mergeOut := runCmd(t, repo, envAgent, julPath, "merge", "--apply", "--json")
 	var res mergeOutput
@@ -127,7 +136,9 @@ printf '{"version":1,"status":"completed","suggestions":[]}'
 		t.Fatalf("expected resolved/applied merge, got %+v", res.Merge)
 	}
 
-	resolved := runCmd(t, repo, nil, "git", "show", workspaceRef+":conflict.txt")
+	deviceID := readDeviceID(t, device.Home)
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	resolved := runCmd(t, repo, nil, "git", "show", syncRef+":conflict.txt")
 	if !strings.Contains(resolved, "manual resolution") {
 		t.Fatalf("expected manual resolution to land, got %s", resolved)
 	}

@@ -104,3 +104,23 @@ func TestInitWithMissingRemoteContinuesLocal(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureJulIgnoredAddsExclude(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git", "info"), 0o755); err != nil {
+		t.Fatalf("failed to create git info dir: %v", err)
+	}
+
+	if err := ensureJulIgnored(repo); err != nil {
+		t.Fatalf("ensureJulIgnored failed: %v", err)
+	}
+
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	data, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("failed to read exclude file: %v", err)
+	}
+	if !strings.Contains(string(data), ".jul/") {
+		t.Fatalf("expected .jul/ in exclude file, got %q", string(data))
+	}
+}

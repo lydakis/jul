@@ -94,6 +94,14 @@ func runInit(args []string) int {
 		}
 		return 1
 	}
+	if err := ensureJulIgnored(repoRoot); err != nil {
+		if *jsonOut {
+			_ = output.EncodeError(os.Stdout, "init_jul_ignore_failed", fmt.Sprintf("failed to ignore .jul directory: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to ignore .jul directory: %v\n", err)
+		}
+		return 1
+	}
 	deviceID, err := config.DeviceID()
 	if err != nil {
 		if *jsonOut {
@@ -269,6 +277,47 @@ func configureRemoteURL(repoRoot, remoteName, remoteURL string) error {
 
 func ensureJulDir(repoRoot string) error {
 	return os.MkdirAll(filepath.Join(repoRoot, ".jul"), 0o755)
+}
+
+func ensureJulIgnored(repoRoot string) error {
+	if strings.TrimSpace(repoRoot) == "" {
+		return nil
+	}
+	pattern := ".jul/"
+	excludePath := filepath.Join(repoRoot, ".git", "info", "exclude")
+	if err := ensureIgnoreEntry(excludePath, pattern); err == nil {
+		return nil
+	}
+	gitignorePath := filepath.Join(repoRoot, ".gitignore")
+	if err := ensureIgnoreEntry(gitignorePath, pattern); err == nil {
+		return nil
+	}
+	return fmt.Errorf("failed to update git ignore rules")
+}
+
+func ensureIgnoreEntry(path, pattern string) error {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(pattern) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(path, []byte(pattern+"\n"), 0o644)
+	}
+	content := string(data)
+	if strings.Contains(content, pattern) {
+		return nil
+	}
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += pattern + "\n"
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func ensureWorkspaceReady(repoRoot string) (string, error) {

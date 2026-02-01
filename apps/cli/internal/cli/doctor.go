@@ -131,18 +131,27 @@ func renderDoctorOutput(out doctorOutput) {
 func probeSyncCapabilities(remoteName, headSHA, ref, noteRef string) (bool, bool, error) {
 	checkpointOK := false
 	draftOK := false
+	noteWritten := false
+
+	cleanup := func() {
+		if noteWritten {
+			_, _ = gitutil.Git("notes", "--ref", noteRef, "remove", headSHA)
+		}
+		_, _ = gitutil.Git("push", remoteName, ":"+ref)
+		_, _ = gitutil.Git("push", remoteName, ":"+noteRef)
+	}
 
 	if err := pushRef(remoteName, headSHA, ref, false); err != nil {
-		return false, false, err
+		return false, false, nil
 	}
 	if _, err := gitutil.Git("notes", "--ref", noteRef, "add", "-f", "-m", "jul doctor", headSHA); err != nil {
-		_, _ = gitutil.Git("push", remoteName, ":"+ref)
-		return false, false, err
+		cleanup()
+		return false, false, nil
 	}
+	noteWritten = true
 	if _, err := gitutil.Git("push", remoteName, noteRef+":"+noteRef); err != nil {
-		_, _ = gitutil.Git("notes", "--ref", noteRef, "remove", headSHA)
-		_, _ = gitutil.Git("push", remoteName, ":"+ref)
-		return false, false, err
+		cleanup()
+		return false, false, nil
 	}
 	checkpointOK = true
 
@@ -156,8 +165,6 @@ func probeSyncCapabilities(remoteName, headSHA, ref, noteRef string) (bool, bool
 		}
 	}
 
-	_, _ = gitutil.Git("notes", "--ref", noteRef, "remove", headSHA)
-	_, _ = gitutil.Git("push", remoteName, ":"+ref)
-	_, _ = gitutil.Git("push", remoteName, ":"+noteRef)
+	cleanup()
 	return checkpointOK, draftOK, nil
 }

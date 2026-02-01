@@ -30,6 +30,9 @@ func EnsureWorktree(repoRoot, baseSHA string, opts WorktreeOptions) (string, err
 			}
 			return "", ErrMergeInProgress
 		}
+		if opts.AllowMergeInProgress && worktreeDirty(worktree) {
+			return worktree, nil
+		}
 		if err := resetWorktree(worktree, baseSHA); err == nil {
 			return worktree, nil
 		}
@@ -69,6 +72,15 @@ func resetWorktree(worktree, baseSHA string) error {
 		return err
 	}
 	return nil
+}
+
+func worktreeDirty(worktree string) bool {
+	cmd := exec.Command("git", "-C", worktree, "status", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
 }
 
 func runGit(dir string, args ...string) error {

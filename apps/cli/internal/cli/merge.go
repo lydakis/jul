@@ -127,6 +127,7 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 		return output.MergeOutput{}, err
 	}
 	mergeInProgress := agent.MergeInProgress(worktree)
+	dirtyWorktree, _ := worktreeDirty(worktree)
 	if mergeInProgress {
 		mergeHead, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD")
 		headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
@@ -134,7 +135,7 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 			mergeInProgress = false
 		}
 	}
-	if !mergeInProgress {
+	if !mergeInProgress && !dirtyWorktree {
 		_ = gitDir(worktree, nil, "merge", "--abort")
 		if err := gitDir(worktree, nil, "reset", "--hard", oursSHA); err != nil {
 			return output.MergeOutput{}, err
@@ -151,7 +152,7 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 	}
 
 	conflicts := mergeConflictFiles(worktree)
-	if mergeInProgress && len(conflicts) > 0 {
+	if mergeInProgress && len(conflicts) > 0 && !dirtyWorktree {
 		out := output.MergeOutput{Merge: output.MergeSummary{Status: "conflicts", Conflicts: conflicts}}
 		return out, MergeConflictError{Worktree: worktree, Conflicts: conflicts}
 	}
@@ -162,7 +163,7 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 		baseTarget = strings.TrimSpace(theirsSHA)
 	}
 	changeID := changeIDFromCommit(mergeBase)
-	if len(conflicts) > 0 {
+	if len(conflicts) > 0 && !dirtyWorktree {
 		diff, _ := gitOutputDir(worktree, "diff")
 		files := mergeConflictDetails(worktree, conflicts)
 		req := agent.ReviewRequest{

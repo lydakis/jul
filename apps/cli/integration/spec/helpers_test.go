@@ -78,6 +78,7 @@ func findRepoRoot(t *testing.T) string {
 
 func runCmd(t *testing.T, dir string, env map[string]string, name string, args ...string) string {
 	t.Helper()
+	logCmd(t, dir, name, args)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	cmd.Env = mergeEnv(env)
@@ -90,15 +91,20 @@ func runCmd(t *testing.T, dir string, env map[string]string, name string, args .
 
 func runCmdAllowFailure(t *testing.T, dir string, env map[string]string, name string, args ...string) (string, error) {
 	t.Helper()
+	logCmd(t, dir, name, args)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	cmd.Env = mergeEnv(env)
 	output, err := cmd.CombinedOutput()
+	if err != nil && shouldLogCmd() {
+		t.Logf("output: %s", string(output))
+	}
 	return string(output), err
 }
 
 func runCmdInput(t *testing.T, dir string, env map[string]string, input string, name string, args ...string) (string, error) {
 	t.Helper()
+	logCmd(t, dir, name, args)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	cmd.Env = mergeEnv(env)
@@ -116,6 +122,19 @@ func mergeEnv(extra map[string]string) []string {
 		env = append(env, key+"="+value)
 	}
 	return env
+}
+
+func logCmd(t *testing.T, dir, name string, args []string) {
+	t.Helper()
+	if !shouldLogCmd() {
+		return
+	}
+	t.Logf("run: (dir=%s) %s %s", dir, name, strings.Join(args, " "))
+}
+
+func shouldLogCmd() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("JUL_IT_VERBOSE")))
+	return value == "1" || value == "true" || value == "yes"
 }
 
 func writeFile(t *testing.T, dir, name, content string) {
@@ -138,6 +157,9 @@ func readFile(t *testing.T, dir, name string) string {
 
 func initRepo(t *testing.T, repo string, withCommit bool) {
 	t.Helper()
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("failed to create repo dir: %v", err)
+	}
 	runCmd(t, repo, nil, "git", "init")
 	runCmd(t, repo, nil, "git", "config", "user.name", "Test User")
 	runCmd(t, repo, nil, "git", "config", "user.email", "test@example.com")

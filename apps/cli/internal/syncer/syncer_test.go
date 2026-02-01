@@ -232,6 +232,212 @@ func TestSyncMarksBaseAdvancedWhenDirty(t *testing.T) {
 	}
 }
 
+func TestCheckpointUsesRemoteWorkspaceTip(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	repoDir := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "branch", "-M", "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteDir := filepath.Join(tmp, "remote.git")
+	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(remoteDir, "git", "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "remote", "add", "origin", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	if _, err := Checkpoint("feat: test"); err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+
+	out, err := gitOut(repoDir, "git", "ls-remote", "origin", "refs/jul/workspaces/tester/@")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Fatalf("expected remote workspace ref to be created")
+	}
+}
+
+func TestHasSubmodules(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	mainRepo := filepath.Join(tmp, "main")
+	subRepo := filepath.Join(tmp, "sub")
+
+	if err := os.MkdirAll(mainRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(subRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(subRepo, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(subRepo, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(subRepo, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subRepo, "sub.txt"), []byte("sub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(subRepo, "git", "add", "sub.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(subRepo, "git", "commit", "-m", "sub"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(mainRepo, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(mainRepo, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(mainRepo, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	has, err := hasSubmodules(mainRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if has {
+		t.Fatalf("expected no submodules before adding")
+	}
+
+	if err := run(mainRepo, "git", "-c", "protocol.file.allow=always", "submodule", "add", subRepo, "submod"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(mainRepo, "git", "commit", "-m", "add submodule"); err != nil {
+		t.Fatal(err)
+	}
+
+	has, err = hasSubmodules(mainRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has {
+		t.Fatalf("expected submodules to be detected")
+	}
+}
+
+func TestPushKeepRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	repoDir := filepath.Join(tmp, "repo")
+	remoteDir := filepath.Join(tmp, "remote.git")
+
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(remoteDir, "git", "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "remote", "add", "origin", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+
+	sha, err := gitOut(repoDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := "refs/jul/keep/tester/@/Itest/" + sha
+	if err := run(repoDir, "git", "update-ref", ref, sha); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	if err := pushKeepRefs("origin", "tester", "@"); err != nil {
+		t.Fatalf("push keep refs failed: %v", err)
+	}
+	out, err := gitOut(repoDir, "git", "ls-remote", "origin", ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Fatalf("expected keep ref to be pushed to remote")
+	}
+}
+
 func TestCheckpointCreatesChangeAndAnchorRefs(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

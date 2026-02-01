@@ -65,11 +65,12 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		TraceSyncRef: traceSyncRef,
 	}
 	allowCanonical := opts.UpdateCanonical
+	allowRemote := config.CheckpointSyncEnabled()
 
 	remote, rerr := remotesel.Resolve()
 	remoteTip := ""
 	remoteMissing := false
-	if rerr == nil && allowCanonical {
+	if rerr == nil && allowCanonical && allowRemote {
 		res.RemoteName = remote.Name
 		if err := fetchRef(remote.Name, traceRef); err != nil {
 			if isMissingRemoteRef(err) {
@@ -225,7 +226,7 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		_ = metadata.WriteTrace(mergeNote)
 	}
 
-	if rerr == nil {
+	if rerr == nil && allowRemote {
 		if err := pushRef(remote.Name, traceSHA, traceSyncRef, true); err != nil {
 			return res, err
 		}

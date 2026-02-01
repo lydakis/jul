@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/identity"
+	"github.com/lydakis/jul/cli/internal/notes"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/restack"
 	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
@@ -28,6 +29,7 @@ type Result struct {
 	Diverged         bool
 	AutoMerged       bool
 	RemoteProblem    string
+	Warnings         []string
 }
 
 type CheckpointResult struct {
@@ -61,6 +63,9 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 	}
 
 	res := Result{}
+	if has, err := hasSubmodules(repoRoot); err == nil && has {
+		res.Warnings = append(res.Warnings, "submodules detected; jul does not manage submodule state")
+	}
 	workspaceTip := ""
 	remote, rerr := remotesel.Resolve()
 	if rerr == nil {
@@ -207,7 +212,9 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 		}
 		baseRef := strings.TrimSpace(cfg.BaseRef)
 		if !ok || baseRef == "" {
-			res.RemoteProblem = "base advanced; run 'jul ws restack' to update"
+			if res.RemoteProblem == "" {
+				res.RemoteProblem = "base advanced; run 'jul ws restack' to update"
+			}
 		} else {
 			restackRes, err := restack.Run(restack.Options{
 				RepoRoot:  repoRoot,
@@ -218,19 +225,26 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 				BaseSHA:   strings.TrimSpace(cfg.BaseSHA),
 			})
 			if err != nil {
-				res.Diverged = true
-				res.RemoteProblem = "restack conflict; run 'jul merge' to resolve"
-				return res, nil
-			}
-			res.DraftSHA = restackRes.NewDraftSHA
-			res.WorkspaceUpdated = true
-			res.BaseAdvanced = false
-			workspaceTip = restackRes.NewParentSHA
-			parentSHA = restackRes.NewParentSHA
-			existingDraft = restackRes.NewDraftSHA
-			if restackRes.NewDraftSHA != "" {
-				if tree, err := gitutil.TreeOf(restackRes.NewDraftSHA); err == nil {
-					treeSHA = strings.TrimSpace(tree)
+				var conflictErr restack.ConflictError
+				if errors.As(err, &conflictErr) {
+					res.Diverged = true
+					res.RemoteProblem = "restack conflict; run 'jul merge' to resolve"
+					return res, nil
+				}
+				if res.RemoteProblem == "" {
+					res.RemoteProblem = "base advanced; run 'jul ws restack' to update"
+				}
+			} else {
+				res.DraftSHA = restackRes.NewDraftSHA
+				res.WorkspaceUpdated = true
+				res.BaseAdvanced = false
+				workspaceTip = restackRes.NewParentSHA
+				parentSHA = restackRes.NewParentSHA
+				existingDraft = restackRes.NewDraftSHA
+				if restackRes.NewDraftSHA != "" {
+					if tree, err := gitutil.TreeOf(restackRes.NewDraftSHA); err == nil {
+						treeSHA = strings.TrimSpace(tree)
+					}
 				}
 			}
 		}
@@ -248,18 +262,32 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 	}
 
 	if rerr == nil {
-		allowSecrets := opts.AllowSecrets || config.AllowDraftSecrets()
-		ok, reason, err := DraftPushAllowed(repoRoot, parentSHA, res.DraftSHA, allowSecrets)
-		if err != nil {
-			return res, err
-		}
-		if ok {
-			if err := pushRef(remote.Name, res.DraftSHA, syncRef, true); err != nil {
+		if config.DraftSyncEnabled() {
+			allowSecrets := opts.AllowSecrets || config.AllowDraftSecrets()
+			ok, reason, err := DraftPushAllowed(repoRoot, parentSHA, res.DraftSHA, allowSecrets)
+			if err != nil {
 				return res, err
 			}
-			res.RemotePushed = true
-		} else if strings.TrimSpace(reason) != "" {
-			res.RemoteProblem = reason
+			if ok {
+				if err := pushRef(remote.Name, res.DraftSHA, syncRef, true); err != nil {
+					res.RemoteProblem = err.Error()
+				} else {
+					res.RemotePushed = true
+				}
+			} else if strings.TrimSpace(reason) != "" {
+				res.RemoteProblem = reason
+			}
+		} else {
+			res.Warnings = append(res.Warnings, "draft sync disabled")
+		}
+
+		if config.CheckpointSyncEnabled() {
+			if err := pushKeepRefs(remote.Name, user, workspace); err != nil {
+				return res, err
+			}
+			if err := pushJulNotes(remote.Name); err != nil {
+				return res, err
+			}
 		}
 	}
 
@@ -399,11 +427,8 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	}
 
 	if syncRes.RemoteName != "" {
-		workspaceRemote := ""
-		_ = fetchRef(syncRes.RemoteName, workspaceRef)
-		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
-			workspaceRemote = sha
-		}
+		checkpointSync := config.CheckpointSyncEnabled()
+		workspaceRemote, _ := remoteRefTip(syncRes.RemoteName, workspaceRef)
 		allowSecrets := config.AllowDraftSecrets()
 		ok, reason, err := DraftPushAllowed(repoRoot, checkpointSHA, newDraftSHA, allowSecrets)
 		if err != nil {
@@ -417,30 +442,38 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		} else if strings.TrimSpace(reason) != "" {
 			res.RemoteProblem = reason
 		}
-		if res.WorkspaceUpdated {
+		if res.WorkspaceUpdated && checkpointSync {
 			if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err
 			}
 		}
-		if err := pushRef(syncRes.RemoteName, checkpointSHA, keepRef, true); err != nil {
-			return res, err
-		}
-		changeRemote, _ := remoteRefTip(syncRes.RemoteName, changeRef)
-		if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, changeRef, changeRemote); err != nil {
-			return res, err
-		}
-		localAnchor, _ := gitutil.ResolveRef(anchorRef)
-		localAnchor = strings.TrimSpace(localAnchor)
-		if localAnchor == "" {
-			return res, fmt.Errorf("anchor ref missing for change %s", changeID)
-		}
-		anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
-		if strings.TrimSpace(anchorRemote) == "" {
-			if err := pushRef(syncRes.RemoteName, localAnchor, anchorRef, false); err != nil {
+		if checkpointSync {
+			if err := pushKeepRefs(syncRes.RemoteName, user, workspace); err != nil {
 				return res, err
 			}
-		} else if strings.TrimSpace(anchorRemote) != localAnchor {
-			return res, fmt.Errorf("anchor ref mismatch for change %s", changeID)
+			if err := pushJulNotes(syncRes.RemoteName); err != nil {
+				return res, err
+			}
+			if err := pushRef(syncRes.RemoteName, checkpointSHA, keepRef, true); err != nil {
+				return res, err
+			}
+			changeRemote, _ := remoteRefTip(syncRes.RemoteName, changeRef)
+			if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, changeRef, changeRemote); err != nil {
+				return res, err
+			}
+			localAnchor, _ := gitutil.ResolveRef(anchorRef)
+			localAnchor = strings.TrimSpace(localAnchor)
+			if localAnchor == "" {
+				return res, fmt.Errorf("anchor ref missing for change %s", changeID)
+			}
+			anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
+			if strings.TrimSpace(anchorRemote) == "" {
+				if err := pushRef(syncRes.RemoteName, localAnchor, anchorRef, false); err != nil {
+					return res, err
+				}
+			} else if strings.TrimSpace(anchorRemote) != localAnchor {
+				return res, fmt.Errorf("anchor ref mismatch for change %s", changeID)
+			}
 		}
 	}
 
@@ -550,11 +583,8 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 	}
 
 	if syncRes.RemoteName != "" {
-		workspaceRemote := ""
-		_ = fetchRef(syncRes.RemoteName, workspaceRef)
-		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
-			workspaceRemote = sha
-		}
+		checkpointSync := config.CheckpointSyncEnabled()
+		workspaceRemote, _ := remoteRefTip(syncRes.RemoteName, workspaceRef)
 		allowSecrets := config.AllowDraftSecrets()
 		ok, reason, err := DraftPushAllowed(repoRoot, headSHA, newDraftSHA, allowSecrets)
 		if err != nil {
@@ -568,30 +598,38 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		} else if strings.TrimSpace(reason) != "" {
 			res.RemoteProblem = reason
 		}
-		if res.WorkspaceUpdated {
+		if res.WorkspaceUpdated && checkpointSync {
 			if err := pushWorkspace(syncRes.RemoteName, headSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err
 			}
 		}
-		if err := pushRef(syncRes.RemoteName, headSHA, keepRef, true); err != nil {
-			return res, err
-		}
-		changeRemote, _ := remoteRefTip(syncRes.RemoteName, changeRef)
-		if err := pushWorkspace(syncRes.RemoteName, headSHA, changeRef, changeRemote); err != nil {
-			return res, err
-		}
-		localAnchor, _ := gitutil.ResolveRef(anchorRef)
-		localAnchor = strings.TrimSpace(localAnchor)
-		if localAnchor == "" {
-			return res, fmt.Errorf("anchor ref missing for change %s", changeID)
-		}
-		anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
-		if strings.TrimSpace(anchorRemote) == "" {
-			if err := pushRef(syncRes.RemoteName, localAnchor, anchorRef, false); err != nil {
+		if checkpointSync {
+			if err := pushKeepRefs(syncRes.RemoteName, user, workspace); err != nil {
 				return res, err
 			}
-		} else if strings.TrimSpace(anchorRemote) != localAnchor {
-			return res, fmt.Errorf("anchor ref mismatch for change %s", changeID)
+			if err := pushJulNotes(syncRes.RemoteName); err != nil {
+				return res, err
+			}
+			if err := pushRef(syncRes.RemoteName, headSHA, keepRef, true); err != nil {
+				return res, err
+			}
+			changeRemote, _ := remoteRefTip(syncRes.RemoteName, changeRef)
+			if err := pushWorkspace(syncRes.RemoteName, headSHA, changeRef, changeRemote); err != nil {
+				return res, err
+			}
+			localAnchor, _ := gitutil.ResolveRef(anchorRef)
+			localAnchor = strings.TrimSpace(localAnchor)
+			if localAnchor == "" {
+				return res, fmt.Errorf("anchor ref missing for change %s", changeID)
+			}
+			anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
+			if strings.TrimSpace(anchorRemote) == "" {
+				if err := pushRef(syncRes.RemoteName, localAnchor, anchorRef, false); err != nil {
+					return res, err
+				}
+			} else if strings.TrimSpace(anchorRemote) != localAnchor {
+				return res, fmt.Errorf("anchor ref mismatch for change %s", changeID)
+			}
 		}
 	}
 
@@ -613,6 +651,79 @@ func workspaceParts() (string, string) {
 		user = "user"
 	}
 	return user, id
+}
+
+func pushKeepRefs(remoteName, user, workspace string) error {
+	if strings.TrimSpace(remoteName) == "" {
+		return nil
+	}
+	prefix := fmt.Sprintf("refs/jul/keep/%s/%s", user, workspace)
+	refs, err := listRefs(prefix)
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		sha, err := gitutil.ResolveRef(ref)
+		if err != nil {
+			continue
+		}
+		if err := pushRef(remoteName, strings.TrimSpace(sha), ref, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pushJulNotes(remoteName string) error {
+	if strings.TrimSpace(remoteName) == "" {
+		return nil
+	}
+	refs := []string{
+		notes.RefTraces,
+		notes.RefAttestationsTrace,
+		notes.RefAttestationsCheckpoint,
+		notes.RefSuggestions,
+		notes.RefAgentReview,
+		notes.RefCRState,
+		notes.RefCRComments,
+		notes.RefMeta,
+		notes.RefRepoMeta,
+	}
+	for _, ref := range refs {
+		if !gitutil.RefExists(ref) {
+			continue
+		}
+		if err := syncNotesRef(remoteName, ref); err != nil {
+			return err
+		}
+		if _, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", ref, ref)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func listRefs(prefix string) ([]string, error) {
+	if strings.TrimSpace(prefix) == "" {
+		return nil, nil
+	}
+	out, err := gitutil.Git("for-each-ref", "--format=%(refname)", prefix)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Fields(strings.TrimSpace(out))
+	return lines, nil
+}
+
+func hasSubmodules(repoRoot string) (bool, error) {
+	if strings.TrimSpace(repoRoot) == "" {
+		return false, nil
+	}
+	out, err := gitutil.Git("-C", repoRoot, "submodule", "status")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
 }
 
 func resolveDraftBase(workspaceRef, syncRef string) (string, string) {

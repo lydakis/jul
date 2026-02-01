@@ -88,6 +88,56 @@ func TestEnsureWorktreeMergeState(t *testing.T) {
 	}
 }
 
+func TestEnsureWorktreePreservesDirtyStateWhenAllowed(t *testing.T) {
+	repo := t.TempDir()
+	if err := runGit(repo, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := runGit(repo, "config", "user.email", "test@example.com"); err != nil {
+		t.Fatalf("config email: %v", err)
+	}
+	if err := runGit(repo, "config", "user.name", "Test"); err != nil {
+		t.Fatalf("config name: %v", err)
+	}
+
+	filePath := filepath.Join(repo, "file.txt")
+	if err := os.WriteFile(filePath, []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	if err := runGit(repo, "add", "file.txt"); err != nil {
+		t.Fatalf("add base: %v", err)
+	}
+	if err := runGit(repo, "commit", "-m", "base"); err != nil {
+		t.Fatalf("commit base: %v", err)
+	}
+	baseSHA, err := gitOutput(repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base sha: %v", err)
+	}
+
+	worktree, err := EnsureWorktree(repo, baseSHA, WorktreeOptions{})
+	if err != nil {
+		t.Fatalf("ensure worktree: %v", err)
+	}
+
+	dirtyPath := filepath.Join(worktree, "file.txt")
+	if err := os.WriteFile(dirtyPath, []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty: %v", err)
+	}
+
+	worktree2, err := EnsureWorktree(repo, baseSHA, WorktreeOptions{AllowMergeInProgress: true})
+	if err != nil {
+		t.Fatalf("ensure worktree preserve: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(worktree2, "file.txt"))
+	if err != nil {
+		t.Fatalf("read dirty: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "dirty" {
+		t.Fatalf("expected dirty state to remain, got %q", strings.TrimSpace(string(data)))
+	}
+}
+
 func gitOutput(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir

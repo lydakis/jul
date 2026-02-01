@@ -150,6 +150,17 @@ func DraftSyncEnabled() bool {
 	return true
 }
 
+func CheckpointSyncEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(configValue("remote.checkpoint_sync")))
+	switch value {
+	case "disabled", "false", "0", "off", "no":
+		return false
+	case "enabled", "true", "1", "on", "yes":
+		return true
+	}
+	return true
+}
+
 func SyncAutoRestack() bool {
 	if cfg := configValue("sync.autorestack"); cfg != "" {
 		if val, err := strconv.ParseBool(cfg); err == nil {

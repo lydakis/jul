@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,6 +24,26 @@ func runSyncDaemon(opts syncer.SyncOptions) int {
 		fmt.Fprintf(os.Stderr, "failed to locate repo root: %v\n", err)
 		return 1
 	}
+
+	pidPath := filepath.Join(repoRoot, ".jul", "sync-daemon.pid")
+	if err := os.MkdirAll(filepath.Dir(pidPath), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to prepare daemon state: %v\n", err)
+		return 1
+	}
+	if pid, ok := readDaemonPID(pidPath); ok {
+		if daemonRunning(pid) {
+			fmt.Fprintln(os.Stdout, "Sync daemon already running.")
+			return 0
+		}
+		_ = os.Remove(pidPath)
+	}
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to record daemon pid: %v\n", err)
+		return 1
+	}
+	defer func() {
+		_ = os.Remove(pidPath)
+	}()
 
 	debounce := time.Duration(config.SyncDebounceSeconds()) * time.Second
 	minInterval := time.Duration(config.SyncMinIntervalSeconds()) * time.Second
@@ -103,6 +124,9 @@ func runSyncDaemon(opts syncer.SyncOptions) int {
 				return 0
 			}
 			if shouldIgnorePath(event.Name) {
+				if isJulPath(event.Name) {
+					_ = ensureJulDir(repoRoot)
+				}
 				continue
 			}
 			if event.Op&fsnotify.Create != 0 {
@@ -121,6 +145,26 @@ func runSyncDaemon(opts syncer.SyncOptions) int {
 			fmt.Fprintf(os.Stderr, "watcher error: %v\n", err)
 		}
 	}
+}
+
+func readDaemonPID(path string) (int, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+func daemonRunning(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 
 func watchRepo(watcher *fsnotify.Watcher, root string) error {
@@ -143,6 +187,17 @@ func shouldIgnorePath(path string) bool {
 	parts := strings.Split(cleaned, string(os.PathSeparator))
 	for _, part := range parts {
 		if part == ".git" || part == ".jul" {
+			return true
+		}
+	}
+	return false
+}
+
+func isJulPath(path string) bool {
+	cleaned := filepath.Clean(path)
+	parts := strings.Split(cleaned, string(os.PathSeparator))
+	for _, part := range parts {
+		if part == ".jul" {
 			return true
 		}
 	}

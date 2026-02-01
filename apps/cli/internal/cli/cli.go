@@ -125,8 +125,13 @@ func shouldAutoSync(command string) bool {
 }
 
 var autoSyncSkip = map[string]bool{
-	"clone":   true,
-	"init":    true,
-	"sync":    true,
-	"version": true,
+	"accept":      true,
+	"clone":       true,
+	"doctor":      true,
+	"init":        true,
+	"merge":       true,
+	"reject":      true,
+	"suggestions": true,
+	"sync":        true,
+	"version":     true,
 }
