@@ -1,13 +1,16 @@
 package metadata
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/client"
+	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 )
 
@@ -35,6 +38,84 @@ func TestAttestationRoundTrip(t *testing.T) {
 		}
 		if got.Status != created.Status {
 			t.Fatalf("expected status %s, got %s", created.Status, got.Status)
+		}
+	})
+}
+
+func TestAttestationOutputSyncDefaultStrips(t *testing.T) {
+	repo := initRepo(t)
+	commit := commitFile(t, repo, "README.md", "hello\n", "test commit")
+
+	withRepo(t, repo, func() {
+		result := ci.Result{
+			Status: "fail",
+			Commands: []ci.CommandResult{
+				{Command: "echo secret", Status: "fail", OutputExcerpt: "token: supersecret"},
+			},
+		}
+		signals, _ := json.Marshal(result)
+		att := client.Attestation{
+			CommitSHA:   commit,
+			ChangeID:    gitutil.FallbackChangeID(commit),
+			Type:        "ci",
+			Status:      "fail",
+			SignalsJSON: string(signals),
+		}
+		if _, err := WriteAttestation(att); err != nil {
+			t.Fatalf("WriteAttestation failed: %v", err)
+		}
+		got, err := GetAttestation(commit)
+		if err != nil {
+			t.Fatalf("GetAttestation failed: %v", err)
+		}
+		var decoded ci.Result
+		if err := json.Unmarshal([]byte(got.SignalsJSON), &decoded); err != nil {
+			t.Fatalf("decode failed: %v", err)
+		}
+		if decoded.Commands[0].OutputExcerpt != "" {
+			t.Fatalf("expected output excerpt stripped by default")
+		}
+	})
+}
+
+func TestAttestationOutputSyncScrubsWhenEnabled(t *testing.T) {
+	repo := initRepo(t)
+	commit := commitFile(t, repo, "README.md", "hello\n", "test commit")
+
+	withRepo(t, repo, func() {
+		if err := config.SetRepoConfigValue("ci", "sync_output", "true"); err != nil {
+			t.Fatalf("set config failed: %v", err)
+		}
+		result := ci.Result{
+			Status: "fail",
+			Commands: []ci.CommandResult{
+				{Command: "echo secret", Status: "fail", OutputExcerpt: "token: supersecret"},
+			},
+		}
+		signals, _ := json.Marshal(result)
+		att := client.Attestation{
+			CommitSHA:   commit,
+			ChangeID:    gitutil.FallbackChangeID(commit),
+			Type:        "ci",
+			Status:      "fail",
+			SignalsJSON: string(signals),
+		}
+		if _, err := WriteAttestation(att); err != nil {
+			t.Fatalf("WriteAttestation failed: %v", err)
+		}
+		got, err := GetAttestation(commit)
+		if err != nil {
+			t.Fatalf("GetAttestation failed: %v", err)
+		}
+		var decoded ci.Result
+		if err := json.Unmarshal([]byte(got.SignalsJSON), &decoded); err != nil {
+			t.Fatalf("decode failed: %v", err)
+		}
+		if decoded.Commands[0].OutputExcerpt == "" {
+			t.Fatalf("expected output excerpt to be retained when enabled")
+		}
+		if strings.Contains(decoded.Commands[0].OutputExcerpt, "supersecret") {
+			t.Fatalf("expected secret to be scrubbed")
 		}
 	})
 }

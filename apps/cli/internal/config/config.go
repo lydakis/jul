@@ -171,6 +171,10 @@ func CIDraftBlocking() bool {
 	return configBool("ci.draft_ci_blocking", false)
 }
 
+func CISyncOutput() bool {
+	return configBool("ci.sync_output", false)
+}
+
 func ReviewEnabled() bool {
 	return configBool("review.enabled", true)
 }
