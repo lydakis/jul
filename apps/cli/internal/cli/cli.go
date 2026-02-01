@@ -24,6 +24,14 @@ type App struct {
 
 func (a *App) Run(args []string) int {
 	jsonOut, args := stripJSONFlag(args)
+	watch, watchSet, args := stripWatchFlag(args)
+	if watchSet {
+		if watch {
+			_ = os.Setenv("JUL_WATCH", "1")
+		} else {
+			_ = os.Setenv("JUL_WATCH", "0")
+		}
+	}
 	if len(args) == 0 {
 		return a.usageWithJSON("missing command", jsonOut)
 	}

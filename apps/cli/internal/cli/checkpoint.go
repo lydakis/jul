@@ -92,7 +92,8 @@ func newCheckpointCommand() Command {
 			}
 
 			if config.ReviewEnabled() && config.ReviewRunOnCheckpoint() && !skipReview {
-				if _, _, err := runReview(); err != nil {
+				stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
+				if _, _, err := runReviewWithStream(stream); err != nil {
 					if !errors.Is(err, agent.ErrAgentNotConfigured) && !errors.Is(err, agent.ErrBundledMissing) {
 						fmt.Fprintf(os.Stderr, "review failed: %v\n", err)
 					}

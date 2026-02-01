@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -26,7 +27,8 @@ func newReviewCommand() Command {
 			fs, jsonOut := newFlagSet("review")
 			_ = fs.Parse(args)
 
-			created, summary, err := runReview()
+			stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
+			created, summary, err := runReviewWithStream(stream)
 			if err != nil {
 				if *jsonOut {
 					_ = output.EncodeError(os.Stdout, "review_failed", fmt.Sprintf("review failed: %v", err), nil)
@@ -53,7 +55,7 @@ func newReviewCommand() Command {
 	}
 }
 
-func runReview() ([]client.Suggestion, output.ReviewSummary, error) {
+func runReviewWithStream(stream io.Writer) ([]client.Suggestion, output.ReviewSummary, error) {
 	baseSHA, changeID, err := reviewBase()
 	if err != nil {
 		return nil, output.ReviewSummary{}, err
@@ -93,7 +95,7 @@ func runReview() ([]client.Suggestion, output.ReviewSummary, error) {
 		return nil, output.ReviewSummary{}, err
 	}
 
-	resp, err := agent.RunReview(context.Background(), provider, req)
+	resp, err := agent.RunReviewWithStream(context.Background(), provider, req, stream)
 	if err != nil {
 		return nil, output.ReviewSummary{}, err
 	}

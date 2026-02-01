@@ -1,19 +1,26 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const maxAgentStdinBytes = 512 * 1024
 
 func RunReview(ctx context.Context, provider Provider, req ReviewRequest) (ReviewResponse, error) {
+	return RunReviewWithStream(ctx, provider, req, nil)
+}
+
+func RunReviewWithStream(ctx context.Context, provider Provider, req ReviewRequest, stream io.Writer) (ReviewResponse, error) {
 	if provider.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, provider.Timeout)
@@ -21,11 +28,11 @@ func RunReview(ctx context.Context, provider Provider, req ReviewRequest) (Revie
 	}
 
 	if provider.Bundled {
-		return runBundledOpenCode(ctx, provider, req)
+		return runBundledOpenCode(ctx, provider, req, stream)
 	}
 	headless := provider.HeadlessFor("review")
 	if headless != "" || strings.EqualFold(provider.Mode, "prompt") {
-		return runPromptAgent(ctx, provider, req, headless)
+		return runPromptAgent(ctx, provider, req, headless, stream)
 	}
 
 	payload, err := json.Marshal(req)
@@ -42,13 +49,13 @@ func RunReview(ctx context.Context, provider Provider, req ReviewRequest) (Revie
 
 	switch mode {
 	case "file":
-		return runJSONAgentFile(ctx, provider, req, payload)
+		return runJSONAgentFile(ctx, provider, req, payload, stream)
 	default:
-		return runJSONAgentStdin(ctx, provider, payload, req.WorkspacePath)
+		return runJSONAgentStdin(ctx, provider, payload, req.WorkspacePath, stream)
 	}
 }
 
-func runJSONAgentStdin(ctx context.Context, provider Provider, payload []byte, workdir string) (ReviewResponse, error) {
+func runJSONAgentStdin(ctx context.Context, provider Provider, payload []byte, workdir string, stream io.Writer) (ReviewResponse, error) {
 	cmdPath, cmdArgs, err := splitCommand(provider.Command)
 	if err != nil {
 		return ReviewResponse{}, err
@@ -61,14 +68,14 @@ func runJSONAgentStdin(ctx context.Context, provider Provider, payload []byte, w
 		"JUL_AGENT_WORKSPACE="+workdir,
 	)
 	cmd.Stdin = bytes.NewReader(payload)
-	output, err := cmd.CombinedOutput()
+	output, err := runCommandWithStream(cmd, stream)
 	if err != nil {
 		return ReviewResponse{}, fmt.Errorf("agent failed: %w (%s)", err, strings.TrimSpace(string(output)))
 	}
 	return parseReviewResponse(output)
 }
 
-func runJSONAgentFile(ctx context.Context, provider Provider, req ReviewRequest, payload []byte) (ReviewResponse, error) {
+func runJSONAgentFile(ctx context.Context, provider Provider, req ReviewRequest, payload []byte, stream io.Writer) (ReviewResponse, error) {
 	dir := filepath.Dir(req.WorkspacePath)
 	if dir == "" {
 		dir = "."
@@ -103,7 +110,7 @@ func runJSONAgentFile(ctx context.Context, provider Provider, req ReviewRequest,
 		"JUL_AGENT_INPUT="+input.Name(),
 		"JUL_AGENT_OUTPUT="+outputFile.Name(),
 	)
-	output, err := cmd.CombinedOutput()
+	output, err := runCommandWithStream(cmd, stream)
 	if err != nil {
 		return ReviewResponse{}, fmt.Errorf("agent failed: %w (%s)", err, strings.TrimSpace(string(output)))
 	}
@@ -114,7 +121,7 @@ func runJSONAgentFile(ctx context.Context, provider Provider, req ReviewRequest,
 	return parseReviewResponse(data)
 }
 
-func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewRequest) (ReviewResponse, error) {
+func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewRequest, stream io.Writer) (ReviewResponse, error) {
 	attachment := buildReviewAttachment(req)
 	tempFile, err := writeReviewAttachment(req.WorkspacePath, attachment)
 	if err != nil {
@@ -132,14 +139,14 @@ func runBundledOpenCode(ctx context.Context, provider Provider, req ReviewReques
 		"JUL_AGENT_ACTION="+req.Action,
 		"JUL_AGENT_WORKSPACE="+req.WorkspacePath,
 	)
-	output, err := cmd.CombinedOutput()
+	output, err := runCommandWithStream(cmd, stream)
 	if err != nil {
 		return ReviewResponse{}, fmt.Errorf("opencode failed: %w (%s)", err, strings.TrimSpace(string(output)))
 	}
 	return parseReviewResponse(output)
 }
 
-func runPromptAgent(ctx context.Context, provider Provider, req ReviewRequest, headless string) (ReviewResponse, error) {
+func runPromptAgent(ctx context.Context, provider Provider, req ReviewRequest, headless string, stream io.Writer) (ReviewResponse, error) {
 	attachment := buildReviewAttachment(req)
 	tempFile, err := writeReviewAttachment(req.WorkspacePath, attachment)
 	if err != nil {
@@ -169,11 +176,142 @@ func runPromptAgent(ctx context.Context, provider Provider, req ReviewRequest, h
 		"JUL_AGENT_INPUT="+tempFile,
 		"JUL_AGENT_PROMPT="+prompt,
 	)
-	output, err := cmd.CombinedOutput()
+	output, err := runCommandWithStream(cmd, stream)
 	if err != nil {
 		return ReviewResponse{}, fmt.Errorf("agent failed: %w (%s)", err, strings.TrimSpace(string(output)))
 	}
 	return parseReviewResponse(output)
+}
+
+type streamSink struct {
+	w  io.Writer
+	mu sync.Mutex
+}
+
+func (s *streamSink) Println(msg string) {
+	if s == nil || s.w == nil || strings.TrimSpace(msg) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Fprintln(s.w, msg)
+}
+
+func runCommandWithStream(cmd *exec.Cmd, stream io.Writer) ([]byte, error) {
+	if stream == nil {
+		return cmd.CombinedOutput()
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	sink := &streamSink{w: stream}
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		streamAgentOutput(stdout, &stdoutBuf, sink, true)
+	}()
+	go func() {
+		defer wg.Done()
+		streamAgentOutput(stderr, &stderrBuf, sink, false)
+	}()
+	err = cmd.Wait()
+	wg.Wait()
+	output := append(stdoutBuf.Bytes(), stderrBuf.Bytes()...)
+	return output, err
+}
+
+func streamAgentOutput(r io.Reader, buf *bytes.Buffer, sink *streamSink, parseJSON bool) {
+	reader := bufio.NewReader(r)
+	var lineBuf bytes.Buffer
+	flush := func() {
+		if lineBuf.Len() == 0 {
+			return
+		}
+		line := lineBuf.String()
+		lineBuf.Reset()
+		if sink != nil {
+			if msg := formatAgentStreamLine(line, parseJSON); msg != "" {
+				sink.Println("agent: " + msg)
+			}
+		}
+	}
+
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(chunk) > 0 {
+			buf.Write(chunk)
+			lineBuf.Write(chunk)
+			if chunk[len(chunk)-1] == '\n' {
+				flush()
+			}
+		}
+		if err != nil {
+			if err == bufio.ErrBufferFull {
+				continue
+			}
+			if err == io.EOF {
+				flush()
+				return
+			}
+			flush()
+			return
+		}
+	}
+}
+
+func formatAgentStreamLine(line string, parseJSON bool) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return ""
+	}
+	if parseJSON && strings.HasPrefix(trimmed, "{") {
+		if msg := summarizeAgentJSON([]byte(trimmed)); msg != "" {
+			return msg
+		}
+	}
+	return trimmed
+}
+
+func summarizeAgentJSON(data []byte) string {
+	var resp ReviewResponse
+	if err := json.Unmarshal(data, &resp); err == nil && resp.Version != 0 {
+		status := strings.TrimSpace(resp.Status)
+		if status == "" {
+			status = "completed"
+		}
+		return fmt.Sprintf("completed (%s)", status)
+	}
+	var event map[string]any
+	if err := json.Unmarshal(data, &event); err != nil {
+		return ""
+	}
+	if value, ok := event["event"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if value, ok := event["type"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if value, ok := event["status"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if value, ok := event["message"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if value, ok := event["name"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return ""
 }
 
 func splitCommand(command string) (string, []string, error) {
@@ -273,9 +411,34 @@ func parseReviewResponse(data []byte) (ReviewResponse, error) {
 	if err := json.Unmarshal(clean, &resp); err == nil && resp.Version != 0 {
 		return resp, nil
 	}
+	var last ReviewResponse
+	found := false
+	for _, line := range bytes.Split(clean, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var candidate ReviewResponse
+		if err := json.Unmarshal(line, &candidate); err == nil && candidate.Version != 0 {
+			last = candidate
+			found = true
+			continue
+		}
+		extracted := extractJSON(line)
+		if err := json.Unmarshal(extracted, &candidate); err == nil && candidate.Version != 0 {
+			last = candidate
+			found = true
+		}
+	}
+	if found {
+		return last, nil
+	}
 	extracted := extractJSON(clean)
 	if err := json.Unmarshal(extracted, &resp); err != nil {
 		return ReviewResponse{}, fmt.Errorf("invalid agent response: %w", err)
+	}
+	if resp.Version == 0 {
+		return ReviewResponse{}, fmt.Errorf("invalid agent response: missing version")
 	}
 	return resp, nil
 }

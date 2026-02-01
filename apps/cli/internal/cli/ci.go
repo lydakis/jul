@@ -79,6 +79,9 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	coverageBranch := fs.Float64("coverage-branch", -1, "Coverage branch percentage (optional)")
 	watch := fs.Bool("watch", false, "Stream output")
 	_ = fs.Parse(args)
+	if !*watch && watchEnabled() {
+		*watch = true
+	}
 
 	cmds := []string(commands)
 	writeErr := func(code, msg string) int {

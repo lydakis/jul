@@ -96,7 +96,7 @@ func TestDraftAdoptMerge(t *testing.T) {
 		t.Fatalf("push remote ref failed: %v", err)
 	}
 
-	res, err := adoptDraft(draftAdoptOptions{Device: remoteDevice})
+	res, err := adoptDraft(draftAdoptOptions{Device: remoteDevice}, nil)
 	if err != nil {
 		t.Fatalf("adopt draft failed: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestDraftAdoptBaseMismatch(t *testing.T) {
 		t.Fatalf("push remote ref failed: %v", err)
 	}
 
-	if _, err := adoptDraft(draftAdoptOptions{Device: remoteDevice}); err == nil {
+	if _, err := adoptDraft(draftAdoptOptions{Device: remoteDevice}, nil); err == nil {
 		t.Fatalf("expected base mismatch error")
 	}
 }

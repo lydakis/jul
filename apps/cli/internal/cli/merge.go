@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,7 +27,8 @@ func newMergeCommand() Command {
 			autoApply := fs.Bool("apply", false, "Apply merge resolution without prompting")
 			_ = fs.Parse(args)
 
-			res, err := runMerge(*autoApply)
+			stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
+			res, err := runMerge(*autoApply, stream)
 			if err != nil {
 				var conflictErr MergeConflictError
 				if errors.As(err, &conflictErr) {
@@ -63,7 +65,7 @@ func newMergeCommand() Command {
 	}
 }
 
-func runMerge(autoApply bool) (output.MergeOutput, error) {
+func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return output.MergeOutput{}, err
@@ -192,7 +194,7 @@ func runMerge(autoApply bool) (output.MergeOutput, error) {
 			}
 			return output.MergeOutput{}, err
 		}
-		if _, err := agent.RunReview(context.Background(), provider, req); err != nil {
+		if _, err := agent.RunReviewWithStream(context.Background(), provider, req, stream); err != nil {
 			return output.MergeOutput{}, err
 		}
 	}

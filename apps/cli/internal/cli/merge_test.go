@@ -75,7 +75,7 @@ func TestRunMergeResetsStaleWorktreeOnRefMismatch(t *testing.T) {
 	}
 
 	var conflictErr MergeConflictError
-	if _, err := runMerge(false); err == nil || !errors.As(err, &conflictErr) {
+	if _, err := runMerge(false, nil); err == nil || !errors.As(err, &conflictErr) {
 		t.Fatalf("expected merge conflict, got %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestRunMergeResetsStaleWorktreeOnRefMismatch(t *testing.T) {
 		t.Fatalf("update workspace ref failed: %v", err)
 	}
 
-	if _, err := runMerge(false); err == nil || !errors.As(err, &conflictErr) {
+	if _, err := runMerge(false, nil); err == nil || !errors.As(err, &conflictErr) {
 		t.Fatalf("expected merge conflict after ref mismatch, got %v", err)
 	}
 

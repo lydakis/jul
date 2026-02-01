@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -130,7 +131,7 @@ func runDraftAdopt(args []string) int {
 		Device:  device,
 		Onto:    strings.TrimSpace(*onto),
 		Replace: *replace,
-	})
+	}, watchStream(*jsonOut, os.Stdout, os.Stderr))
 	if err != nil {
 		var conflict MergeConflictError
 		if errors.As(err, &conflict) {
@@ -189,7 +190,7 @@ type draftAdoptResult struct {
 	FilesMerged int    `json:"files_merged,omitempty"`
 }
 
-func adoptDraft(opts draftAdoptOptions) (draftAdoptResult, error) {
+func adoptDraft(opts draftAdoptOptions, stream io.Writer) (draftAdoptResult, error) {
 	device := strings.TrimSpace(opts.Device)
 	if device == "" {
 		return draftAdoptResult{}, fmt.Errorf("device required")
@@ -275,7 +276,7 @@ func adoptDraft(opts draftAdoptOptions) (draftAdoptResult, error) {
 	if opts.Replace {
 		newDraft = theirs
 	} else {
-		newDraft, err = mergeDrafts(repoRoot, baseSHA, ours, theirs, changeID)
+		newDraft, err = mergeDrafts(repoRoot, baseSHA, ours, theirs, changeID, stream)
 		if err != nil {
 			return draftAdoptResult{}, err
 		}
@@ -520,7 +521,7 @@ func rebaseDraftOnto(repoRoot, baseSHA, draftSHA, changeID string) (string, erro
 	return gitutil.CreateDraftCommitFromTree(treeSHA, baseSHA, changeID)
 }
 
-func mergeDrafts(repoRoot, baseSHA, oursSHA, theirsSHA, changeID string) (string, error) {
+func mergeDrafts(repoRoot, baseSHA, oursSHA, theirsSHA, changeID string, stream io.Writer) (string, error) {
 	worktree, err := agent.EnsureWorktree(repoRoot, oursSHA, agent.WorktreeOptions{})
 	if err != nil {
 		return "", err
@@ -563,7 +564,7 @@ func mergeDrafts(repoRoot, baseSHA, oursSHA, theirsSHA, changeID string) (string
 				Conflicts:  conflicts,
 			},
 		}
-		if _, err := agent.RunReview(context.Background(), provider, req); err != nil {
+		if _, err := agent.RunReviewWithStream(context.Background(), provider, req, stream); err != nil {
 			return "", err
 		}
 	}

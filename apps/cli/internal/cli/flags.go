@@ -43,6 +43,37 @@ func stripJSONFlag(args []string) (bool, []string) {
 	return jsonOut, filtered
 }
 
+func stripWatchFlag(args []string) (bool, bool, []string) {
+	if len(args) == 0 {
+		return false, false, args
+	}
+	filtered := make([]string, 0, len(args))
+	watch := false
+	set := false
+	for _, arg := range args {
+		if arg == "--watch" {
+			watch = true
+			set = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--watch=") {
+			value := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(arg, "--watch=")))
+			switch value {
+			case "", "1", "true", "yes", "on":
+				watch = true
+			case "0", "false", "no", "off":
+				watch = false
+			default:
+				watch = true
+			}
+			set = true
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return watch, set, filtered
+}
+
 func ensureJSONFlag(args []string) []string {
 	if hasJSONFlag(args) {
 		return args
