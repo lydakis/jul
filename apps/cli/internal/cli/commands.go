@@ -62,9 +62,10 @@ func newSyncCommand() Command {
 			fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 			fs.SetOutput(os.Stdout)
 			jsonOut := fs.Bool("json", false, "Output JSON")
+			allowSecrets := fs.Bool("allow-secrets", false, "Allow draft push even if secrets are detected")
 			_ = fs.Parse(args)
 
-			res, err := syncer.Sync()
+			res, err := syncer.SyncWithOptions(syncer.SyncOptions{AllowSecrets: *allowSecrets})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
 				return 1
@@ -363,23 +364,23 @@ func resolvePromoteStack(repoRoot, user, workspace string) ([]stackWorkspace, st
 		if err != nil {
 			return nil, "", err
 		}
-	if strings.HasPrefix(baseRef, "refs/jul/workspaces/") {
-		parentUser, parentWorkspace, ok := parseWorkspaceRef(baseRef)
-		if !ok {
-			return nil, "", fmt.Errorf("invalid workspace ref %s", baseRef)
+		if strings.HasPrefix(baseRef, "refs/jul/workspaces/") {
+			parentUser, parentWorkspace, ok := parseWorkspaceRef(baseRef)
+			if !ok {
+				return nil, "", fmt.Errorf("invalid workspace ref %s", baseRef)
+			}
+			current = stackWorkspace{User: parentUser, Name: parentWorkspace}
+			continue
 		}
-		current = stackWorkspace{User: parentUser, Name: parentWorkspace}
-		continue
-	}
-	if strings.HasPrefix(baseRef, "refs/jul/changes/") {
-		changeID := strings.TrimPrefix(baseRef, "refs/jul/changes/")
-		parentUser, parentWorkspace, ok := findWorkspaceForChange(changeID)
-		if !ok {
-			return nil, "", fmt.Errorf("could not resolve parent workspace for change %s", changeID)
+		if strings.HasPrefix(baseRef, "refs/jul/changes/") {
+			changeID := strings.TrimPrefix(baseRef, "refs/jul/changes/")
+			parentUser, parentWorkspace, ok := findWorkspaceForChange(changeID)
+			if !ok {
+				return nil, "", fmt.Errorf("could not resolve parent workspace for change %s", changeID)
+			}
+			current = stackWorkspace{User: parentUser, Name: parentWorkspace}
+			continue
 		}
-		current = stackWorkspace{User: parentUser, Name: parentWorkspace}
-		continue
-	}
 		if strings.HasPrefix(baseRef, "refs/heads/") {
 			return stack, strings.TrimPrefix(baseRef, "refs/heads/"), nil
 		}

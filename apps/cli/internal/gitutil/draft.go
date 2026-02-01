@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/lydakis/jul/cli/internal/syncignore"
 )
 
 func CreateDraftCommit(parentSHA, changeID string) (string, error) {
@@ -73,10 +75,13 @@ func writeTempExcludes(repoRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := file.WriteString(".jul/\n"); err != nil {
-		_ = file.Close()
-		_ = os.Remove(file.Name())
-		return "", err
+	patterns := syncignore.Load(repoRoot)
+	for _, pattern := range patterns {
+		if _, err := file.WriteString(pattern + "\n"); err != nil {
+			_ = file.Close()
+			_ = os.Remove(file.Name())
+			return "", err
+		}
 	}
 	if err := file.Close(); err != nil {
 		_ = os.Remove(file.Name())

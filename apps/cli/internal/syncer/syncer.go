@@ -46,7 +46,15 @@ type CheckpointResult struct {
 	RemoteProblem    string
 }
 
+type SyncOptions struct {
+	AllowSecrets bool
+}
+
 func Sync() (Result, error) {
+	return SyncWithOptions(SyncOptions{})
+}
+
+func SyncWithOptions(opts SyncOptions) (Result, error) {
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return Result{}, err
@@ -240,10 +248,19 @@ func Sync() (Result, error) {
 	}
 
 	if rerr == nil {
-		if err := pushRef(remote.Name, res.DraftSHA, syncRef, true); err != nil {
+		allowSecrets := opts.AllowSecrets || config.AllowDraftSecrets()
+		ok, reason, err := DraftPushAllowed(repoRoot, parentSHA, res.DraftSHA, allowSecrets)
+		if err != nil {
 			return res, err
 		}
-		res.RemotePushed = true
+		if ok {
+			if err := pushRef(remote.Name, res.DraftSHA, syncRef, true); err != nil {
+				return res, err
+			}
+			res.RemotePushed = true
+		} else if strings.TrimSpace(reason) != "" {
+			res.RemoteProblem = reason
+		}
 	}
 
 	return finalizeSync(res, !res.Diverged)
@@ -387,10 +404,19 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
 			workspaceRemote = sha
 		}
-		if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+		allowSecrets := config.AllowDraftSecrets()
+		ok, reason, err := DraftPushAllowed(repoRoot, checkpointSHA, newDraftSHA, allowSecrets)
+		if err != nil {
 			return res, err
 		}
-		res.RemotePushed = true
+		if ok {
+			if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+				return res, err
+			}
+			res.RemotePushed = true
+		} else if strings.TrimSpace(reason) != "" {
+			res.RemoteProblem = reason
+		}
 		if res.WorkspaceUpdated {
 			if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err
@@ -529,10 +555,19 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
 			workspaceRemote = sha
 		}
-		if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+		allowSecrets := config.AllowDraftSecrets()
+		ok, reason, err := DraftPushAllowed(repoRoot, headSHA, newDraftSHA, allowSecrets)
+		if err != nil {
 			return res, err
 		}
-		res.RemotePushed = true
+		if ok {
+			if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+				return res, err
+			}
+			res.RemotePushed = true
+		} else if strings.TrimSpace(reason) != "" {
+			res.RemoteProblem = reason
+		}
 		if res.WorkspaceUpdated {
 			if err := pushWorkspace(syncRes.RemoteName, headSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err

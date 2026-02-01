@@ -210,6 +210,10 @@ func TraceChecks() []string {
 	return configList("ci.trace_checks", []string{"lint", "typecheck"})
 }
 
+func AllowDraftSecrets() bool {
+	return configBool("sync.allow_secrets", false)
+}
+
 func CheckpointAdoptOnCommit() bool {
 	return configBool("checkpoint.adopt_on_commit", false)
 }
