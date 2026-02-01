@@ -31,6 +31,10 @@ go test ./integration -run Smoke
 # Remote-only smoke tests
 cd apps/server
 go test ./integration -run Smoke
+
+# Spec-driven integration tests (opt-in)
+cd apps/cli
+go test -tags jul_integ_spec ./integration/...
 ```
 
 ## Notes

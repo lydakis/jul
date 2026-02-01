@@ -1,6 +1,6 @@
 # Jul Integration Test Specification
 
-**Document Version:** 0.2  
+**Document Version:** 0.3  
 **Last Updated:** 2026-02-01  
 **Based On:** _줄 Jul: AI-First Git Workflow_ (Design Spec v0.3)
 
@@ -1220,6 +1220,56 @@ These scenarios specifically validate “Git + Jul” mixed workflows and ensure
 **Covers:** Hook management.  
 **Steps:** Install hooks twice; uninstall; reinstall.  
 **Assertions:** Hooks do not duplicate; adoption logic remains correct; no corruption.
+
+
+### IT-GITMIX-014 — Manual `git switch` / Detached `HEAD` Mid-Session Is Detected and Recoverable
+
+**Covers:** `HEAD` model enforcement; prevention of cross-branch corruption; recovery guidance.  
+**Setup:** Jul initialized; active workspace exists; at least one checkpoint already created.  
+**Steps:**
+1. Verify `git symbolic-ref HEAD` points to `refs/heads/jul/<ws>`.
+2. Run `jul sync` (ensure a current draft exists).
+3. Simulate IDE/user branch switch:
+   - `git switch -c tmp-branch` **or**
+   - `git checkout --detach`
+4. Make a small edit to a tracked file.
+5. Run `jul status`.
+6. Attempt `jul sync`.
+7. Attempt `jul checkpoint`.
+8. Recover with `jul ws checkout <ws>` (or `jul ws checkout @` for default).
+**Assertions:**
+- `jul status` warns that `HEAD` is not on the workspace head (`refs/heads/jul/<ws>`) and provides a clear remediation (e.g., `jul ws checkout <ws>`).
+- `jul sync` and `jul checkpoint` MUST NOT silently corrupt Jul state. Acceptable behavior is either:
+  - **Refuse** with a clear error and next actions, **or**
+  - Proceed in a “safe mode” that does not update canonical Jul refs/notes and does not modify non-Jul branches.
+- `refs/jul/workspaces/<user>/<ws>` is unchanged by the out-of-band branch switch unless the user explicitly returns to the workspace and performs a Jul operation that updates it.
+- After recovery (`jul ws checkout`), `HEAD` is restored to `refs/heads/jul/<ws>`, and the workspace lease/base invariants hold.
+**Variants:**
+- Detached `HEAD` created by IDE “checkout commit” flows.
+- Switch to `main` and create a Git commit; verify Jul offers adopt vs discard paths and does not treat the commit as a checkpoint automatically.
+
+### IT-GITMIX-015 — `git pull` / `git merge` Advances the Tracked Target Branch While a Workspace Exists
+
+**Covers:** Upstream drift observation; publish-remote truth; restack/promote safety under mixed Git usage.  
+**Setup:** Publish remote configured; workspace tracks `main` (track ref = `refs/heads/main`); at least one checkpoint exists on the workspace.  
+**Steps:**
+1. Ensure the workspace has a checkpoint C1 and a current draft.
+2. Advance the target branch outside Jul (simulate common muscle-memory operations):
+   - `git switch main && git pull` (fast-forward) **or**
+   - From a second clone, push a new commit to the publish remote `main`.
+3. Return to the workspace via `jul ws checkout <ws>` (re-establish Jul’s `HEAD` model).
+4. Run `jul sync`, then `jul status`.
+5. Run `jul ws restack` (or `jul promote --to main`) to incorporate the new target tip.
+**Assertions:**
+- `jul sync` does not silently rewrite the workspace base/draft base due to target branch movement; it only snapshots and reports drift as appropriate.
+- `jul status` surfaces that the tracked target advanced using the last known `track_tip` model; after a successful restack/promote, `track_tip` updates to the fetched remote tip used for the operation.
+- `jul ws restack` / `jul promote` fetch the **publish remote** and use that target tip as the source of truth (not a potentially diverged local `main`).
+- If the target branch was rewritten (force-push), Jul warns loudly and requires explicit confirmation before proceeding (no silent landing).
+- If conflicts occur during restack/promote, Jul routes into the conflict flow (`jul merge` suggestion + manual fallback).
+**Variants:**
+- Target advanced by fast-forward (most common).
+- Target rewritten (force-push) while the workspace exists; verify explicit confirmation gating.
+- User ran `git pull` while still on the workspace branch (creates a merge commit on the workspace branch): this should be handled equivalently to IT-GITMIX-008 (unadopted merge commit) and must not silently publish.
 
 ---
 

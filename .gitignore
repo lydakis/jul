@@ -22,3 +22,4 @@ node_modules/
 dist/
 .jul/
 apps/cli/jul
+libexec/
