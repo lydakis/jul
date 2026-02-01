@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,7 @@ func buildCLI(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("go build failed: %v\n%s", err, string(output))
 	}
+	installBundledOpenCode(t, outPath)
 	return outPath
 }
 
@@ -182,12 +184,123 @@ func newDeviceEnv(t *testing.T, name string) deviceEnv {
 	if err := os.MkdirAll(xdg, 0o755); err != nil {
 		t.Fatalf("failed to create xdg: %v", err)
 	}
+	seedOpenCodeConfig(t, xdg)
 	env := map[string]string{
 		"HOME":            home,
 		"XDG_CONFIG_HOME": xdg,
 		"JUL_WORKSPACE":   "tester/@",
 	}
 	return deviceEnv{Home: home, XDG: xdg, Env: env}
+}
+
+func installBundledOpenCode(t *testing.T, julPath string) {
+	t.Helper()
+	root := findRepoRoot(t)
+	opencodePath := findBundledOpenCode(t, root)
+	libexecDir := filepath.Join(filepath.Dir(julPath), "libexec", "jul")
+	if err := os.MkdirAll(libexecDir, 0o755); err != nil {
+		t.Fatalf("failed to create libexec dir: %v", err)
+	}
+	dst := filepath.Join(libexecDir, opencodeBinaryName())
+	if err := copyFile(opencodePath, dst); err != nil {
+		t.Fatalf("failed to copy opencode: %v", err)
+	}
+}
+
+func findBundledOpenCode(t *testing.T, root string) string {
+	t.Helper()
+	bin := opencodeBinaryName()
+	platformDir := runtime.GOOS + "_" + runtime.GOARCH
+	candidates := []string{
+		filepath.Join(root, "libexec", "jul", platformDir, bin),
+		filepath.Join(root, "libexec", "jul", bin),
+		filepath.Join(root, "build", "opencode", platformDir, bin),
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	t.Fatalf("opencode binary not found; looked for %s", strings.Join(candidates, ", "))
+	return ""
+}
+
+func opencodeBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "opencode.exe"
+	}
+	return "opencode"
+}
+
+func seedOpenCodeConfig(t *testing.T, xdg string) {
+	t.Helper()
+	hostXDG := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	if hostXDG == "" {
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			hostXDG = filepath.Join(home, ".config")
+		}
+	}
+	if hostXDG == "" {
+		return
+	}
+	src := filepath.Join(hostXDG, "opencode")
+	info, err := os.Stat(src)
+	if err != nil {
+		return
+	}
+	dst := filepath.Join(xdg, "opencode")
+	if info.IsDir() {
+		if err := copyDir(src, dst); err != nil {
+			t.Fatalf("failed to seed opencode config: %v", err)
+		}
+		return
+	}
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("failed to seed opencode config file: %v", err)
+	}
+}
+
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		info, err := os.Stat(srcPath)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyFile(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, info.Mode().Perm())
 }
 
 func readDeviceID(t *testing.T, home string) string {

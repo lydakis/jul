@@ -3,8 +3,7 @@
 package integration
 
 import (
-	"os"
-	"path/filepath"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -33,31 +32,17 @@ func TestIT_HEAD_001(t *testing.T) {
 	}
 	assertHeadRef(t, repo, "refs/heads/jul/@")
 
-	agentPath := filepath.Join(t.TempDir(), "agent.sh")
-	agentScript := `#!/bin/sh
-set -e
-cd "$JUL_AGENT_WORKSPACE"
-git config user.name "Agent"
-git config user.email "agent@example.com"
-echo "agent change" >> README.md
-git add README.md
-git commit -m "agent suggestion" >/dev/null
-sha=$(git rev-parse HEAD)
-printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason":"review","description":"agent change","confidence":0.9}]}' "$sha"
-`
-	if err := os.WriteFile(agentPath, []byte(agentScript), 0o755); err != nil {
-		t.Fatalf("write agent script failed: %v", err)
+	reviewOut := runCmd(t, repo, device.Env, julPath, "review", "--json")
+	var reviewRes struct {
+		Review struct {
+			Status string `json:"status"`
+		} `json:"review"`
 	}
-	envAgent := map[string]string{
-		"HOME":          device.Home,
-		"XDG_CONFIG_HOME": device.XDG,
-		"JUL_WORKSPACE": "tester/@",
-		"JUL_AGENT_CMD": agentPath,
+	if err := json.NewDecoder(strings.NewReader(reviewOut)).Decode(&reviewRes); err != nil {
+		t.Fatalf("failed to decode review output: %v", err)
 	}
-
-	reviewOut := runCmd(t, repo, envAgent, julPath, "review", "--json")
-	if !strings.Contains(reviewOut, "suggestions") {
-		t.Fatalf("expected review json output, got %s", reviewOut)
+	if reviewRes.Review.Status == "" {
+		t.Fatalf("expected review status, got %s", reviewOut)
 	}
 	assertHeadRef(t, repo, "refs/heads/jul/@")
 

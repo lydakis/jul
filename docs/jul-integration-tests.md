@@ -97,6 +97,11 @@ Provide helpers to:
 - Verify tree equality: `git diff --name-status <a> <b>` is empty
 - Verify working tree & index unchanged when required
 
+### 2.5 Agent Execution (No Mocks)
+
+Agent-dependent scenarios run against the bundled OpenCode binary (no stubs/mocks). Ensure OpenCode is
+configured (keys or free tier) so headless runs succeed.
+
 ---
 
 ## 3. Scenario Template
