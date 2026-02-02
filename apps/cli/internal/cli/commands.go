@@ -341,10 +341,17 @@ func newPromoteCommand() Command {
 				return 1
 			}
 
+			commitSHA := strings.TrimSpace(res.PublishedTip)
+			if commitSHA == "" && len(res.Published) > 0 {
+				commitSHA = res.Published[len(res.Published)-1]
+			}
+			if commitSHA == "" {
+				commitSHA = res.TargetSHA
+			}
 			out := promoteOutput{
 				Status:      "ok",
 				Branch:      res.Branch,
-				CommitSHA:   res.TargetSHA,
+				CommitSHA:   commitSHA,
 				Strategy:    res.Strategy,
 				Published:   res.Published,
 				BaseMarker:  res.BaseMarkerSHA,

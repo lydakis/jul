@@ -35,6 +35,7 @@ func TestIT_PROMOTE_REBASE_001(t *testing.T) {
 	var promoteRes struct {
 		Status     string `json:"status"`
 		BaseMarker string `json:"base_marker_sha"`
+		CommitSHA  string `json:"commit_sha"`
 	}
 	if err := json.NewDecoder(strings.NewReader(outPromote)).Decode(&promoteRes); err != nil {
 		t.Fatalf("decode promote output: %v", err)
@@ -46,6 +47,9 @@ func TestIT_PROMOTE_REBASE_001(t *testing.T) {
 	mainTip := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "refs/heads/main"))
 	if mainTip != cp2.CheckpointSHA {
 		t.Fatalf("expected main to advance to latest checkpoint")
+	}
+	if promoteRes.CommitSHA != mainTip {
+		t.Fatalf("expected promote commit sha %s, got %s", mainTip, promoteRes.CommitSHA)
 	}
 
 	headSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))

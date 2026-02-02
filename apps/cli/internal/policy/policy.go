@@ -108,7 +108,7 @@ func parsePolicyConfig(raw string) map[string]string {
 	section := ""
 	lines := strings.Split(raw, "\n")
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
+		trimmed := strings.TrimSpace(stripInlineComment(line))
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
@@ -130,4 +130,35 @@ func parsePolicyConfig(raw string) map[string]string {
 		config[fullKey] = value
 	}
 	return config
+}
+
+func stripInlineComment(line string) string {
+	inSingle := false
+	inDouble := false
+	escaped := false
+	for i, r := range line {
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch r {
+		case '\\':
+			if inSingle || inDouble {
+				escaped = true
+			}
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '#':
+			if !inSingle && !inDouble {
+				return line[:i]
+			}
+		}
+	}
+	return line
 }
