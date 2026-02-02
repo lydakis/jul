@@ -171,7 +171,10 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		resumeMerge = true
 	}
 	if !resumeMerge && resumeFromWorktree {
-		resumeMerge = true
+		headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
+		if strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA) {
+			resumeMerge = true
+		}
 	}
 	if !resumeMerge {
 		dirtyWorktree = false

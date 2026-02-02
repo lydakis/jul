@@ -22,8 +22,8 @@ func newSubmitCommand() Command {
 }
 
 func runSubmit(args []string) int {
-fs, jsonOut := newFlagSet("submit")
-_ = fs.Parse(args)
+	fs, jsonOut := newFlagSet("submit")
+	_ = fs.Parse(args)
 
 	state, err := submitReview()
 	if err != nil {

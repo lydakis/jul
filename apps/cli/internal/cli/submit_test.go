@@ -105,7 +105,7 @@ func TestSubmitRequiresCheckpointForCurrentChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checkpoint failed: %v", err)
 	}
-	if err := promoteLocal("main", checkpoint.CheckpointSHA, false, false); err != nil {
+	if _, err := promoteLocal(promoteOptions{Branch: "main", TargetSHA: checkpoint.CheckpointSHA}); err != nil {
 		t.Fatalf("promote failed: %v", err)
 	}
 

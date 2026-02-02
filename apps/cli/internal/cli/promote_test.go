@@ -32,7 +32,7 @@ func TestPromoteRecordsChangeMeta(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 	t.Setenv("JUL_WORKSPACE", "tester/@")
 	t.Setenv("HOME", filepath.Join(repo, "home"))
-	if err := promoteLocal("main", sha, false, false); err != nil {
+	if _, err := promoteLocal(promoteOptions{Branch: "main", TargetSHA: sha}); err != nil {
 		t.Fatalf("promote failed: %v", err)
 	}
 
@@ -85,12 +85,16 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 		t.Fatalf("failed to get device id: %v", err)
 	}
 
-	if err := promoteLocal("main", sha, false, false); err != nil {
+	if _, err := promoteLocal(promoteOptions{Branch: "main", TargetSHA: sha}); err != nil {
 		t.Fatalf("promote failed: %v", err)
 	}
 	headSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
-	if headSHA != sha {
-		t.Fatalf("expected HEAD to remain %s after promote, got %s", sha, headSHA)
+	if headSHA == sha {
+		t.Fatalf("expected HEAD to move to base marker after promote")
+	}
+	headParent := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", headSHA+"^"))
+	if headParent != sha {
+		t.Fatalf("expected base marker parent %s, got %s", sha, headParent)
 	}
 
 	user, workspace := workspaceParts()
@@ -99,8 +103,8 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to resolve workspace ref: %v", err)
 	}
-	if strings.TrimSpace(baseSHA) != sha {
-		t.Fatalf("expected workspace ref to remain on promoted sha %s, got %s", sha, baseSHA)
+	if strings.TrimSpace(baseSHA) != headSHA {
+		t.Fatalf("expected workspace ref to point at base marker %s, got %s", headSHA, baseSHA)
 	}
 
 	syncRef := "refs/jul/sync/" + user + "/" + deviceID + "/" + workspace
@@ -110,6 +114,10 @@ func TestPromoteStartsNewDraftWithNewChangeID(t *testing.T) {
 	}
 	if strings.TrimSpace(draftSHA) == "" {
 		t.Fatalf("expected new draft sha")
+	}
+	draftParent := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", draftSHA+"^"))
+	if draftParent != strings.TrimSpace(baseSHA) {
+		t.Fatalf("expected draft parent %s, got %s", strings.TrimSpace(baseSHA), draftParent)
 	}
 
 	draftMsg, err := gitutil.CommitMessage(draftSHA)
@@ -175,7 +183,7 @@ func TestPromoteAutoLandsStack(t *testing.T) {
 		t.Fatalf("expected child checkpoint sha")
 	}
 
-	if err := promoteWithStack("main", "", false, false); err != nil {
+	if _, err := promoteWithStack(promoteOptions{Branch: "main"}); err != nil {
 		t.Fatalf("stack promote failed: %v", err)
 	}
 
@@ -209,7 +217,7 @@ func TestPromotePushesFastForwardRemote(t *testing.T) {
 	t.Setenv("JUL_WORKSPACE", "tester/@")
 	t.Setenv("HOME", filepath.Join(repo, "home"))
 
-	if err := promoteLocal("main", newSHA, false, false); err != nil {
+	if _, err := promoteLocal(promoteOptions{Branch: "main", TargetSHA: newSHA}); err != nil {
 		t.Fatalf("promote failed: %v", err)
 	}
 
@@ -242,8 +250,16 @@ func TestPromoteRejectsNonFastForwardRemote(t *testing.T) {
 	t.Setenv("JUL_WORKSPACE", "tester/@")
 	t.Setenv("HOME", filepath.Join(repo, "home"))
 
-	if err := promoteLocal("main", altSHA, false, false); err == nil {
-		t.Fatalf("expected promote to fail for non-ff remote")
+	res, err := promoteLocal(promoteOptions{Branch: "main", TargetSHA: altSHA})
+	if err != nil {
+		t.Fatalf("expected promote to rebase for non-ff remote, got %v", err)
+	}
+	remoteTip := strings.TrimSpace(runGitCmd(t, repo, "ls-remote", "origin", "refs/heads/main"))
+	if !strings.HasPrefix(remoteTip, res.PublishedTip) {
+		t.Fatalf("expected remote main to be %s, got %s", res.PublishedTip, remoteTip)
+	}
+	if res.PublishedTip == altSHA {
+		t.Fatalf("expected rebase to create new published sha")
 	}
 }
 
@@ -270,7 +286,7 @@ func TestPromoteForceTargetAllowsNonFastForwardRemote(t *testing.T) {
 	t.Setenv("JUL_WORKSPACE", "tester/@")
 	t.Setenv("HOME", filepath.Join(repo, "home"))
 
-	if err := promoteLocal("main", altSHA, true, false); err != nil {
+	if _, err := promoteLocal(promoteOptions{Branch: "main", TargetSHA: altSHA, ForceTarget: true}); err != nil {
 		t.Fatalf("expected force-target promote to succeed, got %v", err)
 	}
 	remoteTip := strings.TrimSpace(runGitCmd(t, repo, "ls-remote", "origin", "refs/heads/main"))
@@ -298,7 +314,7 @@ func TestPromoteRejectsNonFastForwardLocalOnly(t *testing.T) {
 	t.Setenv("HOME", filepath.Join(repo, "home"))
 
 	runGitCmd(t, repo, "branch", "-f", "main", baseSHA)
-	if err := promoteLocal("main", altSHA, false, false); err == nil {
+	if _, err := promoteLocal(promoteOptions{Branch: "main", TargetSHA: altSHA}); err == nil {
 		t.Fatalf("expected local-only promote to fail for non-ff")
 	}
 }

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,4 +66,52 @@ func TestBlameSkipsMergeAndRestackTraces(t *testing.T) {
 	if strings.TrimSpace(attrib) != baseSHA {
 		t.Fatalf("expected blame to skip merge trace and use base %s, got %s", baseSHA, attrib)
 	}
+}
+
+func TestBlameResolvesHeadWhenNoCheckpoint(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+
+	writeFilePath(t, repo, "app.txt", "line one\n")
+	runGitCmd(t, repo, "add", "app.txt")
+	runGitCmd(t, repo, "commit", "-m", "base")
+	headSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	out := captureStdout(t, func() int {
+		return newBlameCommand().Run([]string{"--json", "app.txt"})
+	})
+	var payload blameOutput
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&payload); err != nil {
+		t.Fatalf("failed to decode blame output: %v (%s)", err, out)
+	}
+	if len(payload.Lines) == 0 {
+		t.Fatalf("expected blame lines")
+	}
+	if payload.Lines[0].CheckpointSHA != headSHA {
+		t.Fatalf("expected checkpoint sha %s, got %s", headSHA, payload.Lines[0].CheckpointSHA)
+	}
+}
+
+func captureStdout(t *testing.T, fn func() int) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe failed: %v", err)
+	}
+	os.Stdout = w
+	code := fn()
+	_ = w.Close()
+	os.Stdout = orig
+	out, _ := io.ReadAll(r)
+	if code != 0 {
+		t.Fatalf("command failed with %d (%s)", code, string(out))
+	}
+	return string(out)
 }

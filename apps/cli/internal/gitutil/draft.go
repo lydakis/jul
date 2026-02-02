@@ -31,6 +31,19 @@ func DraftMessage(changeID string) string {
 	return fmt.Sprintf("[draft] WIP\n\nChange-Id: %s\n", changeID)
 }
 
+func WorkspaceBaseMarkerMessage() string {
+	return "jul: workspace base\n\nJul-Type: workspace-base\n"
+}
+
+func CreateWorkspaceBaseMarker(treeSHA, parentSHA string) (string, error) {
+	repoRoot, err := RepoTopLevel()
+	if err != nil {
+		return "", err
+	}
+	message := WorkspaceBaseMarkerMessage()
+	return commitTree(repoRoot, treeSHA, parentSHA, message)
+}
+
 func CreateDraftCommitFromTree(treeSHA, parentSHA, changeID string) (string, error) {
 	repoRoot, err := RepoTopLevel()
 	if err != nil {

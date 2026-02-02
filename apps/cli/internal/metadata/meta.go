@@ -16,7 +16,9 @@ type PromoteEvent struct {
 	Target         string    `json:"target"`
 	Strategy       string    `json:"strategy"`
 	Timestamp      time.Time `json:"timestamp"`
-	Published      []string  `json:"published"`
+	Published      []string  `json:"published,omitempty"`
+	CheckpointSHAs []string  `json:"checkpoint_shas,omitempty"`
+	PublishedSHAs  []string  `json:"published_shas,omitempty"`
 	MergeCommitSHA *string   `json:"merge_commit_sha,omitempty"`
 	Mainline       *int      `json:"mainline,omitempty"`
 }

@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/hooks"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
+	"github.com/lydakis/jul/cli/internal/policy"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/syncer"
 	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
@@ -61,7 +64,16 @@ func newSyncCommand() Command {
 			fs, jsonOut := newFlagSet("sync")
 			allowSecrets := fs.Bool("allow-secrets", false, "Allow draft push even if secrets are detected")
 			daemon := fs.Bool("daemon", false, "Run sync continuously in the foreground")
-			_ = fs.Parse(args)
+			jsonRequested := hasJSONFlag(args)
+			if jsonRequested {
+				fs.SetOutput(io.Discard)
+			}
+			if err := fs.Parse(args); err != nil {
+				if jsonRequested {
+					_ = output.EncodeError(os.Stdout, "sync_invalid_args", err.Error(), nil)
+				}
+				return 1
+			}
 
 			if *daemon {
 				return runSyncDaemon(syncer.SyncOptions{AllowSecrets: *allowSecrets})
@@ -173,11 +185,44 @@ func newReflogCommand() Command {
 }
 
 type promoteOutput struct {
-	Status      string `json:"status"`
-	Branch      string `json:"branch"`
-	CommitSHA   string `json:"commit_sha"`
-	ForceTarget bool   `json:"force_target,omitempty"`
-	NoPolicy    bool   `json:"no_policy,omitempty"`
+	Status      string   `json:"status"`
+	Branch      string   `json:"branch"`
+	CommitSHA   string   `json:"commit_sha"`
+	Strategy    string   `json:"strategy,omitempty"`
+	Published   []string `json:"published,omitempty"`
+	BaseMarker  string   `json:"base_marker_sha,omitempty"`
+	ForceTarget bool     `json:"force_target,omitempty"`
+	NoPolicy    bool     `json:"no_policy,omitempty"`
+}
+
+type promoteOptions struct {
+	Branch         string
+	TargetSHA      string
+	Strategy       string
+	ForceTarget    bool
+	NoPolicy       bool
+	ConfirmRewrite bool
+}
+
+type promoteResult struct {
+	Branch        string
+	TargetSHA     string
+	Strategy      string
+	Published     []string
+	PublishedTip  string
+	BaseMarkerSHA string
+	ForceTarget   bool
+	NoPolicy      bool
+}
+
+type promoteError struct {
+	Code    string
+	Message string
+	Next    []output.NextAction
+}
+
+func (e promoteError) Error() string {
+	return e.Message
 }
 
 func newPromoteCommand() Command {
@@ -189,13 +234,48 @@ func newPromoteCommand() Command {
 			toBranch := fs.String("to", "", "Target branch")
 			noPolicy := fs.Bool("no-policy", false, "Skip promote policy checks")
 			forceTarget := fs.Bool("force-target", false, "Dangerous: allow non-fast-forward update of target branch")
-			_ = fs.Parse(args)
+			rebase := fs.Bool("rebase", false, "Rebase checkpoints onto target")
+			squash := fs.Bool("squash", false, "Squash checkpoints into single commit")
+			merge := fs.Bool("merge", false, "Create merge commit on target")
+			confirmRewrite := fs.Bool("confirm-rewrite", false, "Confirm publishing to rewritten target")
+			jsonRequested := hasJSONFlag(args)
+			if jsonRequested {
+				fs.SetOutput(io.Discard)
+			}
+			if err := fs.Parse(args); err != nil {
+				if jsonRequested {
+					_ = output.EncodeError(os.Stdout, "promote_invalid_args", err.Error(), nil)
+				}
+				return 1
+			}
 
 			if *toBranch == "" {
 				if *jsonOut {
 					_ = output.EncodeError(os.Stdout, "promote_missing_target", "missing --to <branch>", nil)
 				} else {
 					fmt.Fprintln(os.Stderr, "missing --to <branch>")
+				}
+				return 1
+			}
+
+			strategy := ""
+			switch {
+			case *rebase:
+				strategy = "rebase"
+			case *squash:
+				strategy = "squash"
+			case *merge:
+				strategy = "merge"
+			}
+			if (*rebase && *squash) || (*rebase && *merge) || (*squash && *merge) {
+				err := promoteError{
+					Code:    "promote_invalid_strategy",
+					Message: "choose only one of --rebase, --squash, or --merge",
+				}
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, err.Code, err.Message, nil)
+				} else {
+					fmt.Fprintln(os.Stderr, err.Message)
 				}
 				return 1
 			}
@@ -235,7 +315,24 @@ func newPromoteCommand() Command {
 				}
 				return 1
 			}
-			if err := promoteWithStack(*toBranch, targetSHA, *forceTarget, *noPolicy); err != nil {
+			res, err := promoteWithStack(promoteOptions{
+				Branch:         *toBranch,
+				TargetSHA:      targetSHA,
+				Strategy:       strategy,
+				ForceTarget:    *forceTarget,
+				NoPolicy:       *noPolicy,
+				ConfirmRewrite: *confirmRewrite,
+			})
+			if err != nil {
+				var perr promoteError
+				if errors.As(err, &perr) {
+					if *jsonOut {
+						_ = output.EncodeError(os.Stdout, perr.Code, perr.Message, perr.Next)
+					} else {
+						fmt.Fprintln(os.Stderr, perr.Message)
+					}
+					return 1
+				}
 				if *jsonOut {
 					_ = output.EncodeError(os.Stdout, "promote_failed", err.Error(), nil)
 				} else {
@@ -246,10 +343,13 @@ func newPromoteCommand() Command {
 
 			out := promoteOutput{
 				Status:      "ok",
-				Branch:      *toBranch,
-				CommitSHA:   targetSHA,
-				ForceTarget: *forceTarget,
-				NoPolicy:    *noPolicy,
+				Branch:      res.Branch,
+				CommitSHA:   res.TargetSHA,
+				Strategy:    res.Strategy,
+				Published:   res.Published,
+				BaseMarker:  res.BaseMarkerSHA,
+				ForceTarget: res.ForceTarget,
+				NoPolicy:    res.NoPolicy,
 			}
 			if *jsonOut {
 				return writeJSON(out)
@@ -261,61 +361,231 @@ func newPromoteCommand() Command {
 }
 
 func renderPromoteOutput(out promoteOutput) {
-	if out.ForceTarget {
-		fmt.Fprintln(os.Stdout, "promote completed (force-target)")
-		return
+	suffix := ""
+	switch {
+	case out.ForceTarget:
+		suffix = "force-target"
+	case out.NoPolicy:
+		suffix = "no-policy"
+	case strings.TrimSpace(out.Strategy) != "" && strings.TrimSpace(out.Strategy) != "rebase":
+		suffix = strings.TrimSpace(out.Strategy)
 	}
-	if out.NoPolicy {
-		fmt.Fprintln(os.Stdout, "promote completed (no-policy)")
+	if suffix != "" {
+		fmt.Fprintf(os.Stdout, "promote completed (%s)\n", suffix)
 		return
 	}
 	fmt.Fprintln(os.Stdout, "promote completed")
 }
 
-func promoteLocal(branch, sha string, forceTarget bool, noPolicy bool) error {
-	if strings.TrimSpace(branch) == "" {
-		return fmt.Errorf("branch required")
+func promoteLocal(opts promoteOptions) (promoteResult, error) {
+	branch := strings.TrimSpace(opts.Branch)
+	if branch == "" {
+		return promoteResult{}, fmt.Errorf("branch required")
 	}
-	if strings.TrimSpace(sha) == "" {
-		return fmt.Errorf("commit sha required")
-	}
-	ref := "refs/heads/" + strings.TrimSpace(branch)
-	_ = noPolicy
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
-		return err
+		return promoteResult{}, err
 	}
+
+	sha := strings.TrimSpace(opts.TargetSHA)
+	if sha == "" {
+		if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
+			sha = checkpoint.SHA
+		} else if current, err := gitutil.CurrentCommit(); err == nil {
+			sha = current.SHA
+		}
+	}
+	if strings.TrimSpace(sha) == "" {
+		return promoteResult{}, fmt.Errorf("commit sha required")
+	}
+
+	changeID := changeIDForCommit(sha)
+	anchorSHA, checkpoints, err := changeMetaFromCheckpoints(changeID)
+	if err != nil {
+		return promoteResult{}, err
+	}
+	if len(checkpoints) > 0 {
+		filtered := make([]metadata.ChangeCheckpoint, 0, len(checkpoints))
+		for _, cp := range checkpoints {
+			filtered = append(filtered, cp)
+			if strings.TrimSpace(cp.SHA) == strings.TrimSpace(sha) {
+				break
+			}
+		}
+		if len(filtered) > 0 && strings.TrimSpace(filtered[len(filtered)-1].SHA) == strings.TrimSpace(sha) {
+			checkpoints = filtered
+		}
+	}
+	if len(checkpoints) == 0 {
+		msg, _ := gitutil.CommitMessage(sha)
+		checkpoints = []metadata.ChangeCheckpoint{{SHA: sha, Message: firstLine(msg)}}
+		anchorSHA = sha
+	}
+	if anchorSHA == "" {
+		anchorSHA = checkpoints[0].SHA
+	}
+	checkpointSHAs := make([]string, 0, len(checkpoints))
+	for _, cp := range checkpoints {
+		checkpointSHAs = append(checkpointSHAs, strings.TrimSpace(cp.SHA))
+	}
+
+	policyCfg, policyOK, err := policy.LoadPromotePolicy(repoRoot, branch)
+	if err != nil {
+		return promoteResult{}, err
+	}
+	strategy, err := resolvePromoteStrategy(opts.Strategy, policyCfg.Strategy, policyOK)
+	if err != nil {
+		return promoteResult{}, err
+	}
+	if !opts.NoPolicy && policyOK {
+		if err := enforcePromotePolicy(policyCfg, sha, changeID); err != nil {
+			return promoteResult{}, err
+		}
+	}
+
 	remoteTip, remoteName, err := fetchPublishTip(branch)
 	if err != nil {
-		return err
+		return promoteResult{}, err
 	}
+	ref := "refs/heads/" + strings.TrimSpace(branch)
 	localTip := ""
 	if gitutil.RefExists(ref) {
 		if current, err := gitutil.ResolveRef(ref); err == nil {
 			localTip = strings.TrimSpace(current)
 		}
 	}
+
+	_, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	trackTip := ""
+	if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err == nil && ok {
+		trackTip = strings.TrimSpace(cfg.TrackTip)
+	}
+	if trackTip != "" && remoteTip != "" && !gitutil.IsAncestor(trackTip, remoteTip) {
+		if !opts.ConfirmRewrite {
+			return promoteResult{}, promoteError{
+				Code:    "promote_target_rewritten",
+				Message: fmt.Sprintf("promote blocked: target %s was rewritten; use --confirm-rewrite after restacking", branch),
+				Next: []output.NextAction{
+					{Action: "restack", Command: fmt.Sprintf("jul ws restack --onto %s", branch)},
+					{Action: "confirm", Command: fmt.Sprintf("jul promote --to %s --confirm-rewrite", branch)},
+				},
+			}
+		}
+	}
+
+	published := []string{}
+	publishedTip := ""
+	var mergeCommitSHA *string
+	var mainline *int
+
+	switch strategy {
+	case "rebase":
+		if remoteTip == "" || gitutil.IsAncestor(remoteTip, sha) || opts.ForceTarget {
+			published = append(published, checkpointSHAs...)
+			publishedTip = published[len(published)-1]
+		} else {
+			published, err = promoteRebase(repoRoot, remoteTip, checkpointSHAs)
+			if err != nil {
+				return promoteResult{}, err
+			}
+			if len(published) == 0 {
+				return promoteResult{}, fmt.Errorf("rebase produced no published commits")
+			}
+			publishedTip = published[len(published)-1]
+		}
+	case "squash":
+		baseTip := resolvePromoteBaseTip(remoteTip, localTip, checkpoints)
+		msg, _ := gitutil.CommitMessage(checkpoints[len(checkpoints)-1].SHA)
+		msg = ensureChangeID(msg, changeID)
+		publishedTip, err = promoteSquash(repoRoot, baseTip, checkpointSHAs, msg)
+		if err != nil {
+			return promoteResult{}, err
+		}
+		published = []string{publishedTip}
+	case "merge":
+		baseTip := resolvePromoteBaseTip(remoteTip, localTip, checkpoints)
+		msg, _ := gitutil.CommitMessage(checkpoints[len(checkpoints)-1].SHA)
+		msg = ensureChangeID(msg, changeID)
+		publishedTip, err = promoteMerge(repoRoot, baseTip, checkpointSHAs[len(checkpointSHAs)-1], msg)
+		if err != nil {
+			return promoteResult{}, err
+		}
+		published = []string{publishedTip}
+		mergeCommitSHA = &publishedTip
+		mainlineVal := 1
+		mainline = &mainlineVal
+	default:
+		return promoteResult{}, promoteError{
+			Code:    "promote_invalid_strategy",
+			Message: fmt.Sprintf("unsupported promote strategy %q", strategy),
+		}
+	}
+
 	guardTip := strings.TrimSpace(remoteTip)
 	if guardTip == "" {
 		guardTip = localTip
 	}
-	if guardTip != "" && !forceTarget {
-		if _, err := gitutil.Git("merge-base", "--is-ancestor", guardTip, sha); err != nil {
-			return fmt.Errorf("promote would not be fast-forward; use --force-target to override")
+	if guardTip != "" && !opts.ForceTarget {
+		if !gitutil.IsAncestor(guardTip, publishedTip) {
+			return promoteResult{}, promoteError{
+				Code:    "promote_non_fast_forward",
+				Message: "promote would not be fast-forward; use --force-target to override",
+				Next: []output.NextAction{
+					{Action: "force", Command: fmt.Sprintf("jul promote --to %s --force-target", branch)},
+				},
+			}
 		}
 	}
+
 	if remoteName != "" {
-		if err := pushPublish(remoteName, sha, branch, forceTarget); err != nil {
-			return err
+		if err := pushPublish(remoteName, publishedTip, branch, opts.ForceTarget); err != nil {
+			return promoteResult{}, err
 		}
 	}
-	if err := gitutil.UpdateRef(ref, sha); err != nil {
-		return err
+	if err := gitutil.UpdateRef(ref, publishedTip); err != nil {
+		return promoteResult{}, err
 	}
-	if err := recordPromoteMeta(branch, sha); err != nil {
-		return err
+
+	eventID, err := recordPromoteMeta(promoteMetaInput{
+		Branch:         branch,
+		Strategy:       strategy,
+		ChangeID:       changeID,
+		AnchorSHA:      anchorSHA,
+		Checkpoints:    checkpoints,
+		CheckpointSHAs: checkpointSHAs,
+		PublishedSHAs:  published,
+		MergeCommitSHA: mergeCommitSHA,
+		Mainline:       mainline,
+	})
+	if err != nil {
+		return promoteResult{}, err
 	}
-	return startNewDraftAfterPromote(repoRoot, sha, branch)
+	if err := writePromoteChangeIDNotes(changeID, eventID, strategy, checkpoints, published); err != nil {
+		return promoteResult{}, err
+	}
+
+	trackTip = strings.TrimSpace(remoteTip)
+	if trackTip == "" {
+		trackTip = publishedTip
+	}
+	baseMarkerSHA, err := startNewDraftAfterPromote(repoRoot, sha, publishedTip, branch, trackTip)
+	if err != nil {
+		return promoteResult{}, err
+	}
+
+	return promoteResult{
+		Branch:        branch,
+		TargetSHA:     sha,
+		Strategy:      strategy,
+		Published:     published,
+		PublishedTip:  publishedTip,
+		BaseMarkerSHA: baseMarkerSHA,
+		ForceTarget:   opts.ForceTarget,
+		NoPolicy:      opts.NoPolicy,
+	}, nil
 }
 
 type stackWorkspace struct {
@@ -323,59 +593,47 @@ type stackWorkspace struct {
 	Name string
 }
 
-func promoteWithStack(branch, targetSHA string, forceTarget, noPolicy bool) error {
+func promoteWithStack(opts promoteOptions) (promoteResult, error) {
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
-		return err
+		return promoteResult{}, err
 	}
 	user, workspace := workspaceParts()
 	stack, baseBranch, err := resolvePromoteStack(repoRoot, user, workspace)
 	if err != nil {
-		return err
+		return promoteResult{}, err
 	}
 	if len(stack) == 1 {
-		sha := strings.TrimSpace(targetSHA)
-		if sha == "" {
-			if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
-				sha = checkpoint.SHA
-			} else if current, err := gitutil.CurrentCommit(); err == nil {
-				sha = current.SHA
-			}
-		}
-		if sha == "" {
-			return fmt.Errorf("failed to resolve commit to promote")
-		}
-		return promoteLocal(branch, sha, forceTarget, noPolicy)
+		return promoteLocal(opts)
 	}
-	if baseBranch != "" && strings.TrimSpace(branch) != strings.TrimSpace(baseBranch) {
-		return fmt.Errorf("stacked workspace targets %s; use --to %s", baseBranch, baseBranch)
+	if baseBranch != "" && strings.TrimSpace(opts.Branch) != strings.TrimSpace(baseBranch) {
+		return promoteResult{}, fmt.Errorf("stacked workspace targets %s; use --to %s", baseBranch, baseBranch)
 	}
 
 	originalEnv := os.Getenv(config.EnvWorkspace)
 	defer restoreWorkspaceEnv(originalEnv)
 
+	var result promoteResult
 	// Promote bottom-up (base workspace first).
 	for i := len(stack) - 1; i >= 0; i-- {
 		entry := stack[i]
 		wsID := entry.User + "/" + entry.Name
 		if err := withWorkspaceEnv(wsID); err != nil {
-			return err
+			return promoteResult{}, err
 		}
-		sha := strings.TrimSpace(targetSHA)
-		if i != 0 || sha == "" {
-			sha = ""
-			if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
-				sha = checkpoint.SHA
-			}
+		localOpts := opts
+		if i != 0 {
+			localOpts.TargetSHA = ""
 		}
-		if strings.TrimSpace(sha) == "" {
-			return fmt.Errorf("checkpoint required before promote for workspace %s", wsID)
+		res, err := promoteLocal(localOpts)
+		if err != nil {
+			return promoteResult{}, err
 		}
-		if err := promoteLocal(branch, sha, forceTarget, noPolicy); err != nil {
-			return err
+		if i == 0 {
+			result = res
 		}
 	}
-	return nil
+	return result, nil
 }
 
 func resolvePromoteStack(repoRoot, user, workspace string) ([]stackWorkspace, string, error) {
@@ -485,28 +743,51 @@ func restoreWorkspaceEnv(prev string) {
 	_ = os.Setenv(config.EnvWorkspace, prev)
 }
 
-func recordPromoteMeta(branch, sha string) error {
-	if strings.TrimSpace(sha) == "" {
-		return nil
+type promoteMetaInput struct {
+	Branch         string
+	Strategy       string
+	ChangeID       string
+	AnchorSHA      string
+	Checkpoints    []metadata.ChangeCheckpoint
+	CheckpointSHAs []string
+	PublishedSHAs  []string
+	MergeCommitSHA *string
+	Mainline       *int
+}
+
+func recordPromoteMeta(input promoteMetaInput) (int, error) {
+	if strings.TrimSpace(input.ChangeID) == "" {
+		return 0, nil
 	}
-	changeID := changeIDForCommit(sha)
-	anchorSHA, checkpoints, err := changeMetaFromCheckpoints(changeID)
-	if err != nil {
-		return err
+	anchorSHA := strings.TrimSpace(input.AnchorSHA)
+	checkpoints := input.Checkpoints
+	if len(checkpoints) == 0 {
+		var err error
+		anchorSHA, checkpoints, err = changeMetaFromCheckpoints(input.ChangeID)
+		if err != nil {
+			return 0, err
+		}
 	}
 	if anchorSHA == "" {
-		anchorSHA = sha
+		if len(checkpoints) > 0 {
+			anchorSHA = checkpoints[0].SHA
+		} else if len(input.PublishedSHAs) > 0 {
+			anchorSHA = input.PublishedSHAs[0]
+		}
+	}
+	if anchorSHA == "" {
+		return 0, nil
 	}
 
 	meta, ok, err := metadata.ReadChangeMeta(anchorSHA)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if !ok {
 		meta = metadata.ChangeMeta{}
 	}
 	if meta.ChangeID == "" {
-		meta.ChangeID = changeID
+		meta.ChangeID = input.ChangeID
 	}
 	if meta.AnchorSHA == "" {
 		meta.AnchorSHA = anchorSHA
@@ -514,18 +795,27 @@ func recordPromoteMeta(branch, sha string) error {
 	if len(checkpoints) > 0 {
 		meta.Checkpoints = checkpoints
 	}
+	eventID := len(meta.PromoteEvents) + 1
+	strategy := strings.TrimSpace(input.Strategy)
+	if strategy == "" {
+		strategy = "rebase"
+	}
 	meta.PromoteEvents = append(meta.PromoteEvents, metadata.PromoteEvent{
-		Target:    strings.TrimSpace(branch),
-		Strategy:  "fast-forward",
-		Timestamp: time.Now().UTC(),
-		Published: []string{sha},
+		Target:         strings.TrimSpace(input.Branch),
+		Strategy:       strategy,
+		Timestamp:      time.Now().UTC(),
+		Published:      input.PublishedSHAs,
+		CheckpointSHAs: input.CheckpointSHAs,
+		PublishedSHAs:  input.PublishedSHAs,
+		MergeCommitSHA: input.MergeCommitSHA,
+		Mainline:       input.Mainline,
 	})
-	return metadata.WriteChangeMeta(meta)
+	return eventID, metadata.WriteChangeMeta(meta)
 }
 
-func startNewDraftAfterPromote(repoRoot, publishedSHA, branch string) error {
+func startNewDraftAfterPromote(repoRoot, checkpointSHA, publishedSHA, branch, trackTip string) (string, error) {
 	if strings.TrimSpace(publishedSHA) == "" {
-		return nil
+		return "", nil
 	}
 	user, workspace := workspaceParts()
 	if workspace == "" {
@@ -533,45 +823,56 @@ func startNewDraftAfterPromote(repoRoot, publishedSHA, branch string) error {
 	}
 	deviceID, err := config.DeviceID()
 	if err != nil {
-		return err
+		return "", err
 	}
 	newChangeID, err := gitutil.NewChangeID()
 	if err != nil {
-		return err
+		return "", err
 	}
 	treeSHA, err := gitutil.TreeOf(publishedSHA)
 	if err != nil {
-		return err
+		return "", err
 	}
-	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, publishedSHA, newChangeID)
+	baseParent := strings.TrimSpace(checkpointSHA)
+	if baseParent == "" {
+		baseParent = strings.TrimSpace(publishedSHA)
+	}
+	baseMarkerSHA, err := gitutil.CreateWorkspaceBaseMarker(treeSHA, baseParent)
 	if err != nil {
-		return err
+		return "", err
+	}
+	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, baseMarkerSHA, newChangeID)
+	if err != nil {
+		return "", err
 	}
 	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
 	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
 	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
-		return err
+		return "", err
 	}
-	if err := gitutil.UpdateRef(workspaceRef, publishedSHA); err != nil {
-		return err
+	if err := gitutil.UpdateRef(workspaceRef, baseMarkerSHA); err != nil {
+		return "", err
 	}
-	if err := writeWorkspaceLease(repoRoot, workspace, publishedSHA); err != nil {
-		return err
+	if err := writeWorkspaceLease(repoRoot, workspace, baseMarkerSHA); err != nil {
+		return "", err
 	}
-	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), publishedSHA); err != nil {
-		return err
+	if err := gitutil.EnsureHeadRef(repoRoot, workspaceHeadRef(workspace), baseMarkerSHA); err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(branch) != "" {
 		trackRef := "refs/heads/" + strings.TrimSpace(branch)
-		_ = updateWorkspaceTracking(repoRoot, workspace, trackRef, publishedSHA)
+		if strings.TrimSpace(trackTip) == "" {
+			trackTip = publishedSHA
+		}
+		_ = updateWorkspaceTracking(repoRoot, workspace, trackRef, strings.TrimSpace(trackTip))
 	}
 	if _, err := gitutil.Git("read-tree", "--reset", "-u", newDraftSHA); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := gitutil.Git("clean", "-fd", "--exclude=.jul"); err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	return baseMarkerSHA, nil
 }
 
 func fetchPublishTip(branch string) (string, string, error) {
@@ -596,7 +897,11 @@ func fetchPublishTip(branch string) (string, string, error) {
 	if len(fields) == 0 {
 		return "", remote.Name, nil
 	}
-	return strings.TrimSpace(fields[0]), remote.Name, nil
+	remoteTip := strings.TrimSpace(fields[0])
+	if err := fetchRef(remote.Name, ref); err != nil {
+		return "", remote.Name, err
+	}
+	return remoteTip, remote.Name, nil
 }
 
 func pushPublish(remoteName, sha, branch string, forceTarget bool) error {

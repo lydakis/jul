@@ -186,9 +186,9 @@ func newDeviceEnv(t *testing.T, name string) deviceEnv {
 	}
 	seedOpenCodeConfig(t, xdg)
 	env := map[string]string{
-		"HOME":            home,
-		"XDG_CONFIG_HOME": xdg,
-		"JUL_WORKSPACE":   "tester/@",
+		"HOME":                home,
+		"XDG_CONFIG_HOME":     xdg,
+		"JUL_WORKSPACE":       "tester/@",
 		"OPENCODE_PERMISSION": `{"*":"allow"}`,
 	}
 	return deviceEnv{Home: home, XDG: xdg, Env: env}

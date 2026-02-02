@@ -25,7 +25,16 @@ func newCheckpointCommand() Command {
 			ifConfigured := fs.Bool("if-configured", false, "Only adopt when configured")
 			noCI := fs.Bool("no-ci", false, "Skip CI run")
 			noReview := fs.Bool("no-review", false, "Skip review")
-			_ = fs.Parse(args)
+			jsonRequested := hasJSONFlag(args)
+			if jsonRequested {
+				fs.SetOutput(io.Discard)
+			}
+			if err := fs.Parse(args); err != nil {
+				if jsonRequested {
+					_ = output.EncodeError(os.Stdout, "checkpoint_invalid_args", err.Error(), nil)
+				}
+				return 1
+			}
 
 			hookMode := os.Getenv("JUL_ADOPT_FROM_HOOK") != ""
 			if *adopt && *ifConfigured && !config.CheckpointAdoptOnCommit() {
@@ -94,20 +103,21 @@ func newCheckpointCommand() Command {
 			if config.ReviewEnabled() && config.ReviewRunOnCheckpoint() && !skipReview {
 				stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
 				if _, _, err := runReviewWithStream(stream); err != nil {
-					if !errors.Is(err, agent.ErrAgentNotConfigured) && !errors.Is(err, agent.ErrBundledMissing) {
+					if !*jsonOut && !errors.Is(err, agent.ErrAgentNotConfigured) && !errors.Is(err, agent.ErrBundledMissing) {
 						fmt.Fprintf(os.Stderr, "review failed: %v\n", err)
 					}
 				}
 			}
 
 			if *jsonOut {
-				if code := writeJSON(res); code != 0 {
-					return code
-				}
 				if ciExit != 0 {
+					_ = output.EncodeError(os.Stdout, "checkpoint_ci_failed", fmt.Sprintf("ci failed for checkpoint %s", res.CheckpointSHA), []output.NextAction{
+						{Action: "status", Command: "jul ci status --json"},
+						{Action: "rerun", Command: fmt.Sprintf("jul ci run --target %s --json", res.CheckpointSHA)},
+					})
 					return ciExit
 				}
-				return 0
+				return writeJSON(res)
 			}
 
 			output.RenderCheckpoint(os.Stdout, res)

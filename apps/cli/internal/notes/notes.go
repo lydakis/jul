@@ -21,6 +21,7 @@ const (
 	RefCRComments             = "refs/notes/jul/cr-comments"
 	RefMeta                   = "refs/notes/jul/meta"
 	RefRepoMeta               = "refs/notes/jul/repo-meta"
+	RefChangeID               = "refs/notes/jul/change-id"
 )
 
 const MaxNoteSize = 16 * 1024

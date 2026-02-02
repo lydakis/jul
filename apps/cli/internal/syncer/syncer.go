@@ -181,12 +181,23 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 			}
 		}
 	}
+	hasCheckpoint := false
+	if strings.TrimSpace(changeID) != "" {
+		prefix := keepRefPath(user, workspace, changeID, "")
+		if refs, err := listRefs(prefix); err == nil && len(refs) > 0 {
+			hasCheckpoint = true
+		}
+	}
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
 		return Result{}, err
 	}
 
-	if res.BaseAdvanced && !res.Diverged && workspaceTip != "" && parentSHA != "" {
+	fastForwardAllowed := true
+	if config.SyncAutoRestack() && hasCheckpoint {
+		fastForwardAllowed = false
+	}
+	if res.BaseAdvanced && !res.Diverged && workspaceTip != "" && parentSHA != "" && fastForwardAllowed {
 		baseTree, err := gitutil.TreeOf(parentSHA)
 		if err == nil && baseTree == treeSHA {
 			if err := updateWorktree(repoRoot, workspaceTip); err != nil {
@@ -688,6 +699,7 @@ func pushJulNotes(remoteName string) error {
 		notes.RefCRComments,
 		notes.RefMeta,
 		notes.RefRepoMeta,
+		notes.RefChangeID,
 	}
 	for _, ref := range refs {
 		if !gitutil.RefExists(ref) {

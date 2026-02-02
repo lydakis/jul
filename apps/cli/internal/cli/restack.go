@@ -15,9 +15,9 @@ import (
 )
 
 func runWorkspaceRestack(args []string) int {
-fs, jsonOut := newFlagSet("ws restack")
-onto := fs.String("onto", "", "Retarget base to ref (e.g. main)")
-_ = fs.Parse(args)
+	fs, jsonOut := newFlagSet("ws restack")
+	onto := fs.String("onto", "", "Retarget base to ref (e.g. main)")
+	_ = fs.Parse(args)
 
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {

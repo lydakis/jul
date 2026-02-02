@@ -10,11 +10,13 @@ import (
 )
 
 type syncResult struct {
-	DraftSHA     string `json:"DraftSHA"`
-	WorkspaceRef string `json:"WorkspaceRef"`
-	SyncRef      string `json:"SyncRef"`
-	RemoteProblem string `json:"RemoteProblem"`
-	BaseAdvanced bool   `json:"BaseAdvanced"`
+	DraftSHA         string `json:"DraftSHA"`
+	WorkspaceRef     string `json:"WorkspaceRef"`
+	SyncRef          string `json:"SyncRef"`
+	RemoteProblem    string `json:"RemoteProblem"`
+	BaseAdvanced     bool   `json:"BaseAdvanced"`
+	WorkspaceUpdated bool   `json:"WorkspaceUpdated"`
+	Diverged         bool   `json:"Diverged"`
 }
 
 func TestIT_DRAFT_001(t *testing.T) {
@@ -122,12 +124,13 @@ func TestIT_SYNC_BASEADV_001(t *testing.T) {
 	runCmd(t, repoRoot, nil, "git", "clone", remoteDir, repoA)
 	runCmd(t, repoRoot, nil, "git", "clone", remoteDir, repoB)
 
-	deviceA := newDeviceEnv(t, "devA")	
+	deviceA := newDeviceEnv(t, "devA")
 	deviceB := newDeviceEnv(t, "devB")
 	julPath := buildCLI(t)
 
 	runCmd(t, repoA, deviceA.Env, julPath, "init", "demo")
 	runCmd(t, repoB, deviceB.Env, julPath, "init", "demo")
+	writeFile(t, repoB, ".jul/config.toml", "[sync]\nautorestack = false\n")
 
 	// Device B creates a draft on the old base.
 	writeFile(t, repoB, "conflict.txt", "from B\n")
@@ -157,5 +160,101 @@ func TestIT_SYNC_BASEADV_001(t *testing.T) {
 	baseAfter := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", bRes2.DraftSHA+"^"))
 	if baseBefore != baseAfter {
 		t.Fatalf("expected draft base to remain unchanged, got %s vs %s", baseBefore, baseAfter)
+	}
+}
+
+func TestIT_SYNC_AUTORESTACK_001(t *testing.T) {
+	root := t.TempDir()
+	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteFullCompat})
+
+	seed := filepath.Join(root, "seed")
+	initRepo(t, seed, true)
+	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "main")
+
+	repoA := filepath.Join(root, "repoA")
+	repoB := filepath.Join(root, "repoB")
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoA)
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoB)
+
+	deviceA := newDeviceEnv(t, "devA")
+	deviceB := newDeviceEnv(t, "devB")
+	julPath := buildCLI(t)
+
+	runCmd(t, repoA, deviceA.Env, julPath, "init", "demo")
+	runCmd(t, repoB, deviceB.Env, julPath, "init", "demo")
+
+	writeFile(t, repoB, "b.txt", "from B\n")
+	cpBOut := runCmd(t, repoB, deviceB.Env, julPath, "checkpoint", "-m", "feat: B", "--no-ci", "--no-review", "--json")
+	var cpB checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cpBOut)).Decode(&cpB); err != nil {
+		t.Fatalf("failed to decode checkpoint output: %v", err)
+	}
+
+	runCmd(t, repoA, deviceA.Env, julPath, "sync", "--json")
+	writeFile(t, repoA, "a.txt", "from A\n")
+	cpAOut := runCmd(t, repoA, deviceA.Env, julPath, "checkpoint", "-m", "feat: A", "--no-ci", "--no-review", "--json")
+	var cpA checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cpAOut)).Decode(&cpA); err != nil {
+		t.Fatalf("failed to decode checkpoint output: %v", err)
+	}
+
+	syncOut := runCmd(t, repoB, deviceB.Env, julPath, "sync", "--json")
+	var res syncResult
+	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&res); err != nil {
+		t.Fatalf("failed to decode sync output: %v", err)
+	}
+	if res.Diverged || res.BaseAdvanced {
+		t.Fatalf("expected autorestack to resolve base advanced, got %+v", res)
+	}
+	if !res.WorkspaceUpdated {
+		t.Fatalf("expected workspace updated after autorestack")
+	}
+
+	draftParent := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", res.DraftSHA+"^"))
+	if draftParent == cpB.CheckpointSHA {
+		t.Fatalf("expected restacked checkpoint to differ from %s", cpB.CheckpointSHA)
+	}
+	parentParent := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", draftParent+"^"))
+	if parentParent != cpA.CheckpointSHA {
+		t.Fatalf("expected restack parent %s, got %s", cpA.CheckpointSHA, parentParent)
+	}
+}
+
+func TestIT_SYNC_AUTORESTACK_002(t *testing.T) {
+	root := t.TempDir()
+	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteFullCompat})
+
+	seed := filepath.Join(root, "seed")
+	initRepo(t, seed, true)
+	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "main")
+
+	repoA := filepath.Join(root, "repoA")
+	repoB := filepath.Join(root, "repoB")
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoA)
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoB)
+
+	deviceA := newDeviceEnv(t, "devA")
+	deviceB := newDeviceEnv(t, "devB")
+	julPath := buildCLI(t)
+
+	runCmd(t, repoA, deviceA.Env, julPath, "init", "demo")
+	runCmd(t, repoB, deviceB.Env, julPath, "init", "demo")
+
+	writeFile(t, repoB, "conflict.txt", "from B\n")
+	runCmd(t, repoB, deviceB.Env, julPath, "checkpoint", "-m", "feat: B", "--no-ci", "--no-review", "--json")
+
+	runCmd(t, repoA, deviceA.Env, julPath, "sync", "--json")
+	writeFile(t, repoA, "conflict.txt", "from A\n")
+	runCmd(t, repoA, deviceA.Env, julPath, "checkpoint", "-m", "feat: A", "--no-ci", "--no-review", "--json")
+
+	syncOut := runCmd(t, repoB, deviceB.Env, julPath, "sync", "--json")
+	var res syncResult
+	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&res); err != nil {
+		t.Fatalf("failed to decode sync output: %v", err)
+	}
+	if !res.Diverged || !strings.Contains(res.RemoteProblem, "restack conflict") {
+		t.Fatalf("expected restack conflict, got %+v", res)
 	}
 }

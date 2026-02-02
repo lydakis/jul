@@ -101,9 +101,9 @@ func newBlameCommand() Command {
 				changeID = checkpoint.ChangeID
 			} else {
 				commitFallback = true
-				if resolved, err := gitutil.ResolveRef(baseSHA); err == nil {
-					baseSHA = strings.TrimSpace(resolved)
-				}
+			}
+			if resolved, err := gitutil.ResolveRef(baseSHA); err == nil {
+				baseSHA = strings.TrimSpace(resolved)
 			}
 
 			mainLines, err := blameFile(repoRoot, baseSHA, path, start, end)

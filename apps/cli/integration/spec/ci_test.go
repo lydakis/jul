@@ -4,14 +4,18 @@ package integration
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
+
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 func TestIT_CI_002(t *testing.T) {
 	repo := t.TempDir()
 	initRepo(t, repo, true)
+	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteFullCompat})
+	runCmd(t, repo, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, repo, nil, "git", "push", "-u", "origin", "main")
 	julPath := buildCLI(t)
 	device := newDeviceEnv(t, "dev1")
 
@@ -32,12 +36,16 @@ func TestIT_CI_002(t *testing.T) {
 	if !strings.Contains(note, "status") {
 		t.Fatalf("expected attestation note, got %s", note)
 	}
+
+	runCmd(t, repo, device.Env, julPath, "sync", "--json")
+
+	remoteNote := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", res.CheckpointSHA)
+	if !strings.Contains(remoteNote, "status") {
+		t.Fatalf("expected attestation note to sync, got %s", remoteNote)
+	}
 }
 
 func TestIT_CI_005(t *testing.T) {
-	if os.Getenv("JUL_ENABLE_PROMOTE_POLICY") == "" {
-		t.Skip("TODO: promote policy gating not enforced yet")
-	}
 	repo := t.TempDir()
 	initRepo(t, repo, true)
 	julPath := buildCLI(t)
@@ -45,6 +53,7 @@ func TestIT_CI_005(t *testing.T) {
 
 	runCmd(t, repo, device.Env, julPath, "init", "demo")
 	writeFile(t, repo, ".jul/ci.toml", "[commands]\npass = \"true\"\n")
+	writeFile(t, repo, ".jul/policy.toml", "[promote.main]\nmin_coverage_pct = 80\n")
 	writeFile(t, repo, "README.md", "coverage\n")
 
 	out := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "ci: coverage", "--no-review", "--json")
@@ -60,8 +69,20 @@ func TestIT_CI_005(t *testing.T) {
 	runCmd(t, repo, device.Env, julPath, "ci", "run", "--coverage-line", "10", "--coverage-branch", "10", "--target", res.CheckpointSHA)
 
 	// Expect promote to be blocked due to coverage policy.
-	outPromote, err := runCmdAllowFailure(t, repo, device.Env, julPath, "promote", "--to", "main")
+	outPromote, err := runCmdAllowFailure(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
 	if err == nil {
 		t.Fatalf("expected promote to be blocked for low coverage, got %s", outPromote)
+	}
+	var promoteErr output.ErrorOutput
+	if err := json.NewDecoder(strings.NewReader(outPromote)).Decode(&promoteErr); err != nil {
+		t.Fatalf("expected promote error json, got %v (%s)", err, outPromote)
+	}
+	if promoteErr.Code == "" || !strings.Contains(strings.ToLower(promoteErr.Message), "coverage") {
+		t.Fatalf("expected coverage error, got %+v", promoteErr)
+	}
+
+	outBypass := runCmd(t, repo, device.Env, julPath, "promote", "--to", "main", "--no-policy", "--json")
+	if !strings.Contains(outBypass, "\"status\"") {
+		t.Fatalf("expected promote to succeed with --no-policy, got %s", outBypass)
 	}
 }
