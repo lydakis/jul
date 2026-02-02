@@ -108,16 +108,18 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		}
 	}
 	resumeFromWorktree := false
+	rebaseDirtyWorktree := false
 	if strings.TrimSpace(oursSHA) == strings.TrimSpace(theirsSHA) {
 		if mergeHead := mergeHeadForOurs(repoRoot, oursSHA); mergeHead != "" {
 			theirsSHA = mergeHead
 			resumeFromWorktree = true
 		} else {
-			dirtyWorktree, _ := worktreeDirtyForRepo(repoRoot, oursSHA)
+			dirtyWorktree, headMatches := worktreeDirtyForRepo(repoRoot, oursSHA)
 			switch {
 			case dirtyWorktree:
 				// Preserve manual edits in the agent worktree even if refs now match.
 				resumeFromWorktree = true
+				rebaseDirtyWorktree = !headMatches
 			default:
 				return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
 			}
@@ -160,6 +162,13 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		if strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA) {
 			resumeMerge = true
 		}
+	}
+	if rebaseDirtyWorktree {
+		if err := reapplyDirtyWorktree(worktree, oursSHA); err != nil {
+			return output.MergeOutput{}, err
+		}
+		dirtyWorktree = true
+		resumeMerge = true
 	}
 	if !resumeMerge && resumeFromWorktree {
 		resumeMerge = true
@@ -347,6 +356,34 @@ func worktreeDirtyForRepo(repoRoot, oursSHA string) (bool, bool) {
 	return dirty, headMatches
 }
 
+func reapplyDirtyWorktree(worktree, baseSHA string) error {
+	if err := gitDir(worktree, nil, "add", "-A"); err != nil {
+		return err
+	}
+	patch, err := gitOutputDirRaw(worktree, "diff", "--cached", "--binary")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(patch) == "" {
+		return nil
+	}
+	_ = gitDir(worktree, nil, "merge", "--abort")
+	if err := gitDir(worktree, nil, "reset", "--hard", baseSHA); err != nil {
+		return err
+	}
+	if err := gitDir(worktree, nil, "clean", "-fd"); err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "apply", "--whitespace=nowarn")
+	cmd.Dir = worktree
+	cmd.Stdin = strings.NewReader(patch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to reapply agent edits: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func mergeConflictFiles(worktree string) []string {
 	out, err := gitOutputDir(worktree, "diff", "--name-only", "--diff-filter=U")
 	if err != nil {
@@ -427,6 +464,19 @@ func gitOutputDirAllowErr(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(output)), err
+}
+
+func gitOutputDirRaw(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return string(output), nil
+		}
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+	}
+	return string(output), nil
 }
 
 func fetchRef(remoteName, ref string) error {

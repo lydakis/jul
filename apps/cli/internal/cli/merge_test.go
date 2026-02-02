@@ -217,7 +217,7 @@ func TestRunMergeUsesMergeHeadWhenRefsMatch(t *testing.T) {
 	}
 }
 
-func TestRunMergeUsesDirtyWorktreeWhenRefsMatch(t *testing.T) {
+func TestRunMergeRebasesDirtyWorktreeWhenRefsMatch(t *testing.T) {
 	repo := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
@@ -230,7 +230,11 @@ func TestRunMergeUsesDirtyWorktreeWhenRefsMatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatalf("write base failed: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, "extra.txt"), []byte("extra-base\n"), 0o644); err != nil {
+		t.Fatalf("write extra base failed: %v", err)
+	}
 	runGitTestCmd(t, repo, "add", "conflict.txt")
+	runGitTestCmd(t, repo, "add", "extra.txt")
 	runGitTestCmd(t, repo, "commit", "-m", "base")
 
 	baseSHA, err := gitWithDirTest(repo, "rev-parse", "HEAD")
@@ -248,11 +252,14 @@ func TestRunMergeUsesDirtyWorktreeWhenRefsMatch(t *testing.T) {
 	}
 	baseSHA = strings.TrimSpace(baseSHA)
 
-	createDraft := func(content string) string {
+	createDraft := func(conflictContent, extraContent string) string {
 		runGitTestCmd(t, repo, "reset", "--hard", baseSHA)
 		runGitTestCmd(t, repo, "clean", "-fd")
-		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte(content+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte(conflictContent+"\n"), 0o644); err != nil {
 			t.Fatalf("write draft content failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "extra.txt"), []byte(extraContent+"\n"), 0o644); err != nil {
+			t.Fatalf("write draft extra failed: %v", err)
 		}
 		sha, err := gitutil.CreateDraftCommit(baseSHA, changeID)
 		if err != nil {
@@ -261,7 +268,7 @@ func TestRunMergeUsesDirtyWorktreeWhenRefsMatch(t *testing.T) {
 		return sha
 	}
 
-	ours := createDraft("ours")
+	ours := createDraft("base", "extra-ours")
 
 	deviceID, err := config.DeviceID()
 	if err != nil {
@@ -301,5 +308,13 @@ func TestRunMergeUsesDirtyWorktreeWhenRefsMatch(t *testing.T) {
 	}
 	if !strings.Contains(resolved, "manual resolution") {
 		t.Fatalf("expected manual resolution to land, got %s", resolved)
+	}
+
+	extra, err := gitWithDirTest(repo, "show", syncRef+":extra.txt")
+	if err != nil {
+		t.Fatalf("read extra ref failed: %v", err)
+	}
+	if !strings.Contains(extra, "extra-ours") {
+		t.Fatalf("expected extra changes to persist, got %s", extra)
 	}
 }
