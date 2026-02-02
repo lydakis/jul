@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -27,5 +28,14 @@ func TestIT_UNSUPPORTED_001(t *testing.T) {
 	out, _ := runCmdAllowFailure(t, repo, device.Env, julPath, "sync")
 	if !strings.Contains(strings.ToLower(out), "submodule") {
 		t.Fatalf("expected submodule warning, got %s", out)
+	}
+
+	jsonOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
+	var res syncResult
+	if err := json.NewDecoder(strings.NewReader(jsonOut)).Decode(&res); err != nil {
+		t.Fatalf("expected sync json output, got %v (%s)", err, jsonOut)
+	}
+	if res.DraftSHA == "" {
+		t.Fatalf("expected draft sha after sync")
 	}
 }

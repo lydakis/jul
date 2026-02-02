@@ -52,11 +52,15 @@ func TestIT_OFFLINE_001(t *testing.T) {
 	runCmd(t, repo, device.Env, julPath, "sync", "--json")
 
 	// Verify keep refs and notes are pushed.
-	keepRefs := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/jul/keep")
-	keepList := strings.Fields(strings.TrimSpace(keepRefs))
-	if len(keepList) < 2 {
-		t.Fatalf("expected keep refs on remote, got %s", keepRefs)
+	localKeep := runCmd(t, repo, nil, "git", "for-each-ref", "--format=%(refname)", "refs/jul/keep")
+	localKeepList := strings.Fields(strings.TrimSpace(localKeep))
+	if len(localKeepList) < 2 {
+		t.Fatalf("expected keep refs locally, got %s", localKeep)
 	}
+	for _, ref := range localKeepList {
+		ensureRemoteRefExists(t, remoteDir, ref)
+	}
+
 	notes := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/notes/jul")
 	if strings.TrimSpace(notes) == "" {
 		t.Fatalf("expected notes refs on remote")

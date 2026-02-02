@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 type checkpointResult struct {
@@ -138,6 +140,11 @@ func TestIT_CP_003(t *testing.T) {
 	if strings.TrimSpace(keepRefs) == "" {
 		t.Fatalf("expected keep refs to exist after failed checkpoint")
 	}
+	keepList := strings.Fields(strings.TrimSpace(keepRefs))
+	lastRef := keepList[len(keepList)-1]
+	parts := strings.Split(lastRef, "/")
+	checkpointSHA := parts[len(parts)-1]
+	_ = runCmd(t, repoB, nil, "git", "rev-parse", checkpointSHA)
 
 	syncOut := runCmd(t, repoB, deviceB.Env, julPath, "sync", "--json")
 	var syncRes struct {
@@ -149,5 +156,17 @@ func TestIT_CP_003(t *testing.T) {
 	}
 	if !syncRes.Diverged && !strings.Contains(syncRes.RemoteProblem, "workspace lease") {
 		t.Fatalf("expected workspace to be marked diverged, got %+v", syncRes)
+	}
+
+	promoteOut, err := runCmdAllowFailure(t, repoB, deviceB.Env, julPath, "promote", "--to", "main", "--json")
+	if err == nil {
+		t.Fatalf("expected promote to be blocked after diverged checkpoint, got %s", promoteOut)
+	}
+	var promoteErr output.ErrorOutput
+	if err := json.NewDecoder(strings.NewReader(promoteOut)).Decode(&promoteErr); err != nil {
+		t.Fatalf("expected promote error json, got %v (%s)", err, promoteOut)
+	}
+	if !strings.Contains(strings.ToLower(promoteErr.Message), "checkout") && !strings.Contains(strings.ToLower(promoteErr.Message), "restack") {
+		t.Fatalf("expected promote to suggest checkout/restack, got %+v", promoteErr)
 	}
 }

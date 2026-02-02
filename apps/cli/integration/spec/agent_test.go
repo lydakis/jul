@@ -4,6 +4,8 @@ package integration
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -22,19 +24,13 @@ func TestIT_AGENT_006(t *testing.T) {
 	writeFile(t, repo, "README.md", "fail ci\n")
 
 	cpOut, _ := runCmdAllowFailure(t, repo, device.Env, julPath, "checkpoint", "-m", "fail ci", "--no-review", "--json")
-	var cpRes output.ErrorOutput
-	if err := json.NewDecoder(strings.NewReader(cpOut)).Decode(&cpRes); err != nil {
-		t.Fatalf("expected checkpoint to emit json on error, got %v (%s)", err, cpOut)
-	}
+	cpRes := decodeErrorJSON(t, cpOut)
 	if cpRes.Code == "" || cpRes.Message == "" {
 		t.Fatalf("expected checkpoint error code/message, got %+v", cpRes)
 	}
 
 	promoteOut, _ := runCmdAllowFailure(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
-	var promoteRes output.ErrorOutput
-	if err := json.NewDecoder(strings.NewReader(promoteOut)).Decode(&promoteRes); err != nil {
-		t.Fatalf("expected promote to emit json error, got %v (%s)", err, promoteOut)
-	}
+	promoteRes := decodeErrorJSON(t, promoteOut)
 	if promoteRes.Code == "" || promoteRes.Message == "" {
 		t.Fatalf("expected promote error code/message, got %+v", promoteRes)
 	}
@@ -43,11 +39,23 @@ func TestIT_AGENT_006(t *testing.T) {
 	runCmd(t, repo, nil, "git", "remote", "add", "origin", "/no/such/remote.git")
 
 	syncOut, _ := runCmdAllowFailure(t, repo, device.Env, julPath, "sync", "--json")
-	var syncRes output.ErrorOutput
-	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&syncRes); err != nil {
-		t.Fatalf("expected sync to emit json error, got %v (%s)", err, syncOut)
-	}
+	syncRes := decodeErrorJSON(t, syncOut)
 	if syncRes.Code == "" || syncRes.Message == "" {
 		t.Fatalf("expected sync error code/message, got %+v", syncRes)
 	}
+}
+
+func decodeErrorJSON(t *testing.T, out string) output.ErrorOutput {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(out))
+	var res output.ErrorOutput
+	if err := dec.Decode(&res); err != nil {
+		t.Fatalf("expected json output, got %v (%s)", err, out)
+	}
+	if err := dec.Decode(&struct{}{}); err == nil {
+		t.Fatalf("expected only json output, got trailing data (%s)", out)
+	} else if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected only json output, got trailing data (%s)", out)
+	}
+	return res
 }

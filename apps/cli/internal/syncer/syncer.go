@@ -440,18 +440,24 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	if syncRes.RemoteName != "" {
 		checkpointSync := config.CheckpointSyncEnabled()
 		workspaceRemote, _ := remoteRefTip(syncRes.RemoteName, workspaceRef)
-		allowSecrets := config.AllowDraftSecrets()
-		ok, reason, err := DraftPushAllowed(repoRoot, checkpointSHA, newDraftSHA, allowSecrets)
-		if err != nil {
-			return res, err
-		}
-		if ok {
-			if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+		if config.DraftSyncEnabled() {
+			allowSecrets := config.AllowDraftSecrets()
+			ok, reason, err := DraftPushAllowed(repoRoot, checkpointSHA, newDraftSHA, allowSecrets)
+			if err != nil {
 				return res, err
 			}
-			res.RemotePushed = true
-		} else if strings.TrimSpace(reason) != "" {
-			res.RemoteProblem = reason
+			if ok {
+				if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+					return res, err
+				}
+				res.RemotePushed = true
+			} else if strings.TrimSpace(reason) != "" {
+				res.RemoteProblem = reason
+			}
+		} else {
+			if strings.TrimSpace(res.RemoteProblem) == "" {
+				res.RemoteProblem = "draft sync disabled"
+			}
 		}
 		if res.WorkspaceUpdated && checkpointSync {
 			if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, workspaceRef, workspaceRemote); err != nil {
@@ -596,18 +602,24 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 	if syncRes.RemoteName != "" {
 		checkpointSync := config.CheckpointSyncEnabled()
 		workspaceRemote, _ := remoteRefTip(syncRes.RemoteName, workspaceRef)
-		allowSecrets := config.AllowDraftSecrets()
-		ok, reason, err := DraftPushAllowed(repoRoot, headSHA, newDraftSHA, allowSecrets)
-		if err != nil {
-			return res, err
-		}
-		if ok {
-			if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+		if config.DraftSyncEnabled() {
+			allowSecrets := config.AllowDraftSecrets()
+			ok, reason, err := DraftPushAllowed(repoRoot, headSHA, newDraftSHA, allowSecrets)
+			if err != nil {
 				return res, err
 			}
-			res.RemotePushed = true
-		} else if strings.TrimSpace(reason) != "" {
-			res.RemoteProblem = reason
+			if ok {
+				if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+					return res, err
+				}
+				res.RemotePushed = true
+			} else if strings.TrimSpace(reason) != "" {
+				res.RemoteProblem = reason
+			}
+		} else {
+			if strings.TrimSpace(res.RemoteProblem) == "" {
+				res.RemoteProblem = "draft sync disabled"
+			}
 		}
 		if res.WorkspaceUpdated && checkpointSync {
 			if err := pushWorkspace(syncRes.RemoteName, headSHA, workspaceRef, workspaceRemote); err != nil {

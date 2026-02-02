@@ -124,4 +124,20 @@ func TestIT_PROMOTE_REWRITE_001(t *testing.T) {
 	if promoteErr.Code != "promote_target_rewritten" {
 		t.Fatalf("expected promote_target_rewritten, got %+v", promoteErr)
 	}
+
+	outConfirm := runCmd(t, repo, device.Env, julPath, "promote", "--to", "main", "--confirm-rewrite", "--json")
+	var promoteRes struct {
+		Status    string `json:"status"`
+		CommitSHA string `json:"commit_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(outConfirm)).Decode(&promoteRes); err != nil {
+		t.Fatalf("decode confirm promote output: %v", err)
+	}
+	if promoteRes.Status != "ok" {
+		t.Fatalf("expected promote ok after confirm, got %s", promoteRes.Status)
+	}
+	remoteMain := strings.TrimSpace(runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "rev-parse", "refs/heads/main"))
+	if promoteRes.CommitSHA != remoteMain {
+		t.Fatalf("expected confirm promote to update remote main, got %s vs %s", promoteRes.CommitSHA, remoteMain)
+	}
 }

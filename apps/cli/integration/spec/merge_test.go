@@ -124,6 +124,9 @@ func TestIT_MERGE_007(t *testing.T) {
 	if !strings.Contains(resolved, "manual resolution") {
 		t.Fatalf("expected manual resolution to land, got %s", resolved)
 	}
+	if strings.Contains(resolved, "<<<<<<<") || strings.Contains(resolved, ">>>>>>>") {
+		t.Fatalf("expected conflict markers removed, got %s", resolved)
+	}
 
 	rejectedOut := runCmd(t, repo, device.Env, julPath, "suggestions", "--status", "rejected", "--json")
 	if !strings.Contains(rejectedOut, suggestionID) {

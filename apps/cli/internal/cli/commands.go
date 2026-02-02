@@ -393,6 +393,13 @@ func promoteLocal(opts promoteOptions) (promoteResult, error) {
 	if err != nil {
 		return promoteResult{}, err
 	}
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	if err := ensureWorkspaceLeaseCurrent(repoRoot, user, workspace); err != nil {
+		return promoteResult{}, err
+	}
 
 	sha := strings.TrimSpace(opts.TargetSHA)
 	if sha == "" {
@@ -462,10 +469,6 @@ func promoteLocal(opts promoteOptions) (promoteResult, error) {
 		}
 	}
 
-	_, workspace := workspaceParts()
-	if workspace == "" {
-		workspace = "@"
-	}
 	trackTip := ""
 	if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err == nil && ok {
 		trackTip = strings.TrimSpace(cfg.TrackTip)

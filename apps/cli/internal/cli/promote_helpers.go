@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/identity"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/policy"
+	remotesel "github.com/lydakis/jul/cli/internal/remote"
 )
 
 func resolvePromoteStrategy(explicit, policyStrategy string, policyOK bool) (string, error) {
@@ -31,6 +33,86 @@ func resolvePromoteStrategy(explicit, policyStrategy string, policyOK bool) (str
 			Message: fmt.Sprintf("unsupported promote strategy %q", strategy),
 		}
 	}
+}
+
+func ensureWorkspaceLeaseCurrent(repoRoot, user, workspace string) error {
+	remote, err := remotesel.Resolve()
+	if err != nil {
+		switch err {
+		case remotesel.ErrNoRemote, remotesel.ErrRemoteMissing:
+			return nil
+		default:
+			return err
+		}
+	}
+	if strings.TrimSpace(remote.Name) == "" {
+		return nil
+	}
+	_, _ = identity.ResolveUserNamespace(remote.Name)
+
+	workspaceRefName := workspaceRef(user, workspace)
+	remoteTip, err := remoteRefTip(remote.Name, workspaceRefName)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(remoteTip) == "" {
+		return nil
+	}
+	if err := fetchRef(remote.Name, workspaceRefName); err != nil {
+		return err
+	}
+
+	leaseSHA, err := readWorkspaceLease(repoRoot, workspace)
+	if err != nil || strings.TrimSpace(leaseSHA) == "" {
+		return promoteError{
+			Code:    "promote_workspace_lease_missing",
+			Message: "promote blocked: workspace lease missing; run 'jul ws checkout @' first",
+		}
+	}
+
+	leaseBase := normalizeBaseCommit(leaseSHA)
+	remoteBase := normalizeBaseCommit(remoteTip)
+	if leaseBase == "" || remoteBase == "" {
+		return nil
+	}
+	if strings.TrimSpace(leaseBase) == strings.TrimSpace(remoteBase) {
+		return nil
+	}
+	if gitutil.IsAncestor(leaseBase, remoteBase) {
+		return promoteError{
+			Code:    "promote_base_advanced",
+			Message: "promote blocked: base advanced; run 'jul ws restack' or 'jul ws checkout'",
+		}
+	}
+	return promoteError{
+		Code:    "promote_base_diverged",
+		Message: "promote blocked: workspace base diverged; run 'jul ws checkout' to realign",
+	}
+}
+
+func normalizeBaseCommit(sha string) string {
+	trimmed := strings.TrimSpace(sha)
+	if trimmed == "" {
+		return ""
+	}
+	msg, err := gitutil.CommitMessage(trimmed)
+	if err == nil && isDraftMessage(msg) {
+		if parent, err := gitutil.ParentOf(trimmed); err == nil {
+			if parent = strings.TrimSpace(parent); parent != "" {
+				return parent
+			}
+		}
+	}
+	return trimmed
+}
+
+func readWorkspaceLease(repoRoot, workspace string) (string, error) {
+	path := filepath.Join(repoRoot, ".jul", "workspaces", workspace, "lease")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 func enforcePromotePolicy(cfg policy.PromotePolicy, checkpointSHA, changeID string) error {

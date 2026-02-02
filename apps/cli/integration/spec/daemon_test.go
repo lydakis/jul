@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -35,6 +36,19 @@ func TestIT_DAEMON_001(t *testing.T) {
 
 	waitForOutput(t, stdout1, stderr1, "Sync daemon running")
 
+	pidPath := filepath.Join(repo, ".jul", "sync-daemon.pid")
+	pidData, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatalf("failed to read daemon pid: %v", err)
+	}
+	pidVal, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		t.Fatalf("invalid daemon pid %q: %v", string(pidData), err)
+	}
+	if cmd1.Process != nil && pidVal != cmd1.Process.Pid {
+		t.Fatalf("expected pid file %d, got %d", cmd1.Process.Pid, pidVal)
+	}
+
 	cmd2 := exec.Command(julPath, "sync", "--daemon")
 	cmd2.Dir = repo
 	cmd2.Env = mergeEnv(device.Env)
@@ -45,6 +59,13 @@ func TestIT_DAEMON_001(t *testing.T) {
 	combined := stdout2.String() + stderr2.String()
 	if !strings.Contains(combined, "already running") {
 		t.Fatalf("expected second daemon start to report already running, got %s", combined)
+	}
+	pidData2, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatalf("failed to read daemon pid after second start: %v", err)
+	}
+	if strings.TrimSpace(string(pidData2)) != strings.TrimSpace(string(pidData)) {
+		t.Fatalf("expected pid file to remain unchanged, got %s vs %s", strings.TrimSpace(string(pidData)), strings.TrimSpace(string(pidData2)))
 	}
 }
 
@@ -70,6 +91,11 @@ func TestIT_DAEMON_002(t *testing.T) {
 	}
 	if err := waitForProcessExit(cmd, 2*time.Second); err != nil {
 		t.Fatalf("daemon did not exit cleanly: %v", err)
+	}
+
+	pidPath := filepath.Join(repo, ".jul", "sync-daemon.pid")
+	if _, err := os.Stat(pidPath); err == nil {
+		t.Fatalf("expected pid file to be removed on shutdown")
 	}
 }
 

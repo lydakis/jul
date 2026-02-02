@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,33 @@ func TestIT_DOCTOR_001(t *testing.T) {
 	deviceID := readDeviceID(t, device.Home)
 	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
 	ensureRemoteRefMissing(t, remoteDir, syncRef)
+
+	writeFile(t, repo, "promote.txt", "publish\n")
+	cpOut := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: publish", "--no-ci", "--no-review", "--json")
+	var cpRes checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cpOut)).Decode(&cpRes); err != nil {
+		t.Fatalf("decode checkpoint output: %v", err)
+	}
+	if cpRes.CheckpointSHA == "" {
+		t.Fatalf("expected checkpoint sha")
+	}
+
+	promoteOut := runCmd(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
+	var promoteRes struct {
+		Status    string `json:"status"`
+		CommitSHA string `json:"commit_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(promoteOut)).Decode(&promoteRes); err != nil {
+		t.Fatalf("decode promote output: %v", err)
+	}
+	if promoteRes.Status != "ok" {
+		t.Fatalf("expected promote ok, got %s", promoteRes.Status)
+	}
+
+	remoteMain := strings.TrimSpace(runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "rev-parse", "refs/heads/main"))
+	if promoteRes.CommitSHA != remoteMain {
+		t.Fatalf("expected promote to advance remote main to %s, got %s", promoteRes.CommitSHA, remoteMain)
+	}
 }
 
 func TestIT_DOCTOR_002(t *testing.T) {
@@ -105,6 +133,28 @@ func TestIT_DOCTOR_002(t *testing.T) {
 	deviceID := readDeviceID(t, device.Home)
 	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
 	ensureRemoteRefMissing(t, remoteDir, syncRef)
+
+	writeFile(t, repo, "checkpoint.txt", "ok\n")
+	cpOut := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: ok", "--no-ci", "--no-review", "--json")
+	var cpRes checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cpOut)).Decode(&cpRes); err != nil {
+		t.Fatalf("decode checkpoint output: %v", err)
+	}
+	if cpRes.CheckpointSHA == "" {
+		t.Fatalf("expected checkpoint sha")
+	}
+
+	runCmd(t, repo, device.Env, julPath, "sync", "--json")
+
+	workspaceRef := "refs/jul/workspaces/tester/@"
+	ensureRemoteRefExists(t, remoteDir, workspaceRef)
+	if strings.TrimSpace(cpRes.KeepRef) != "" {
+		ensureRemoteRefExists(t, remoteDir, cpRes.KeepRef)
+	}
+	notes := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/notes/jul")
+	if strings.TrimSpace(notes) == "" {
+		t.Fatalf("expected notes to sync, got empty refs")
+	}
 }
 
 func assertJulIgnored(t *testing.T, repo string) {

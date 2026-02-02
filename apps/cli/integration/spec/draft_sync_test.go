@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 type syncResult struct {
@@ -53,6 +55,17 @@ func TestIT_DRAFT_001(t *testing.T) {
 	}
 	if statusBefore != statusAfter {
 		t.Fatalf("expected status unchanged")
+	}
+
+	readme := readFile(t, repo, "README.md")
+	draftReadme := runCmd(t, repo, nil, "git", "show", res.DraftSHA+":README.md")
+	if readme != draftReadme {
+		t.Fatalf("expected draft README to match working tree")
+	}
+	staged := readFile(t, repo, "staged.txt")
+	draftStaged := runCmd(t, repo, nil, "git", "show", res.DraftSHA+":staged.txt")
+	if staged != draftStaged {
+		t.Fatalf("expected draft staged.txt to match working tree")
 	}
 }
 
@@ -161,6 +174,18 @@ func TestIT_SYNC_BASEADV_001(t *testing.T) {
 	if baseBefore != baseAfter {
 		t.Fatalf("expected draft base to remain unchanged, got %s vs %s", baseBefore, baseAfter)
 	}
+
+	promoteOut, err := runCmdAllowFailure(t, repoB, deviceB.Env, julPath, "promote", "--to", "main", "--json")
+	if err == nil {
+		t.Fatalf("expected promote to be blocked after base advance, got %s", promoteOut)
+	}
+	var promoteErr output.ErrorOutput
+	if err := json.NewDecoder(strings.NewReader(promoteOut)).Decode(&promoteErr); err != nil {
+		t.Fatalf("expected promote error json, got %v (%s)", err, promoteOut)
+	}
+	if !strings.Contains(strings.ToLower(promoteErr.Message), "restack") && !strings.Contains(strings.ToLower(promoteErr.Message), "checkout") {
+		t.Fatalf("expected promote to suggest restack/checkout, got %+v", promoteErr)
+	}
 }
 
 func TestIT_SYNC_AUTORESTACK_001(t *testing.T) {
@@ -209,6 +234,27 @@ func TestIT_SYNC_AUTORESTACK_001(t *testing.T) {
 	}
 	if !res.WorkspaceUpdated {
 		t.Fatalf("expected workspace updated after autorestack")
+	}
+
+	keepPrefix := "refs/jul/keep/tester/@/" + cpB.ChangeID + "/"
+	keepOut := runCmd(t, repoB, nil, "git", "for-each-ref", "--format=%(objectname) %(refname)", keepPrefix)
+	keepLines := strings.Fields(strings.TrimSpace(keepOut))
+	if len(keepLines) < 4 {
+		t.Fatalf("expected at least two keep refs after restack, got %s", keepOut)
+	}
+	workspaceTip := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", "refs/jul/workspaces/tester/@"))
+	if workspaceTip == cpB.CheckpointSHA {
+		t.Fatalf("expected workspace tip to move after restack")
+	}
+	foundWorkspace := false
+	for i := 0; i+1 < len(keepLines); i += 2 {
+		if strings.TrimSpace(keepLines[i]) == workspaceTip {
+			foundWorkspace = true
+			break
+		}
+	}
+	if !foundWorkspace {
+		t.Fatalf("expected workspace tip %s to be kept, got %s", workspaceTip, keepOut)
 	}
 
 	draftParent := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", res.DraftSHA+"^"))

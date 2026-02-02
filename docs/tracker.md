@@ -4,6 +4,39 @@
 
 **Note:** No backward compatibility guarantees; prioritize spec correctness.
 
+## Integration Spec Alignment (Implemented Tests)
+
+Status: **Aligned** = current test assertions match spec; **Partial** = spec has extra assertions or setup not yet covered.
+
+| ID | Status | Notes |
+| --- | --- | --- |
+| IT-INIT-001 | Aligned | Local-only init, device ID, ignore rules, HEAD ref. |
+| IT-DOCTOR-001 | Aligned | Detects no custom refs; sync disabled; promote still works. |
+| IT-DOCTOR-002 | Aligned | Draft sync blocked; checkpoints/notes still sync. |
+| IT-HEAD-001 | Aligned | HEAD remains on `refs/heads/jul/@`. |
+| IT-DRAFT-001 | Aligned | Index untouched; draft matches working tree. |
+| IT-DRAFT-002 | Aligned | Draft idempotent on unchanged tree. |
+| IT-DRAFT-004 | Aligned | `.jul/**` excluded from drafts. |
+| IT-SYNC-BASEADV-001 | Aligned | Base-advanced detected; draft base unchanged; promote blocked. |
+| IT-SYNC-AUTORESTACK-001 | Aligned | Clean autorestack creates new checkpoint and updates workspace. |
+| IT-SYNC-AUTORESTACK-002 | Aligned | Conflicts stop autorestack with merge guidance. |
+| IT-CP-001 | Aligned | Checkpoint refs/anchors/keep refs + new draft. |
+| IT-CP-003 | Aligned | Local checkpoint kept; divergence flagged; promote blocked. |
+| IT-CI-002 | Aligned | Attestation note written and synced. |
+| IT-CI-005 | Aligned | Coverage gating + `--no-policy` bypass. |
+| IT-PROMOTE-REBASE-001 | Aligned | Main advances; base marker + notes; new draft. |
+| IT-PROMOTE-REWRITE-001 | Aligned | Rewrite detected; confirm path succeeds. |
+| IT-MERGE-001 | Partial | Uses synthetic conflict, not explicit restack conflict path. |
+| IT-MERGE-007 | Aligned | Reject preserves manual path; no conflict markers. |
+| IT-MERGE-008 | Aligned | Stale worktree reset on ref change. |
+| IT-OFFLINE-001 | Aligned | Offline history syncs; keep refs + notes match remote. |
+| IT-DAEMON-001 | Partial | Single-instance verified; no zombie check. |
+| IT-DAEMON-002 | Partial | SIGTERM exit verified; no child-process cleanup check. |
+| IT-ROBUST-005 | Aligned | `.jul/` deletion tolerated or daemon exits cleanly. |
+| IT-AGENT-006 | Partial | JSON-only output asserted; does not validate `next_actions` or exit codes. |
+| IT-UNSUPPORTED-001 | Aligned | Submodule warning; sync still produces draft. |
+| IT-SEC-001 | Aligned | Secret scan blocks draft push. |
+
 ### P0 — Repo Safety & Core Invariants (must‑fix before daily use)
 - [x] **Workspace base tracking**: persist `base_ref` + pinned `base_sha` per workspace (e.g., `.jul/workspaces/<ws>/config`) and use it for diffs, suggestions, CRs, status, and divergence checks.
 - [x] **`jul ws restack`**: rebase checkpoint chain onto `base_ref` tip; support `--onto`; update `base_sha`, move `HEAD`, emit **restack trace per rewritten checkpoint**, mark suggestions stale, trigger CI for new SHAs.
