@@ -107,23 +107,17 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 			return output.MergeOutput{}, err
 		}
 	}
-
 	resumeFromWorktree := false
 	if strings.TrimSpace(oursSHA) == strings.TrimSpace(theirsSHA) {
 		if mergeHead := mergeHeadForOurs(repoRoot, oursSHA); mergeHead != "" {
 			theirsSHA = mergeHead
 			resumeFromWorktree = true
 		} else {
-			dirtyWorktree, headMatches := worktreeDirtyForRepo(repoRoot, oursSHA)
+			dirtyWorktree, _ := worktreeDirtyForRepo(repoRoot, oursSHA)
 			switch {
-			case dirtyWorktree && headMatches:
+			case dirtyWorktree:
 				// Preserve manual edits in the agent worktree even if refs now match.
 				resumeFromWorktree = true
-			case dirtyWorktree && !headMatches:
-				if err := resetAgentWorktree(repoRoot, oursSHA); err != nil {
-					return output.MergeOutput{}, err
-				}
-				return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
 			default:
 				return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
 			}
@@ -351,21 +345,6 @@ func worktreeDirtyForRepo(repoRoot, oursSHA string) (bool, bool) {
 	headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
 	headMatches := strings.TrimSpace(headSHA) != "" && strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA)
 	return dirty, headMatches
-}
-
-func resetAgentWorktree(repoRoot, baseSHA string) error {
-	worktree := filepath.Join(repoRoot, ".jul", "agent-workspace", "worktree")
-	if _, err := os.Stat(worktree); err != nil {
-		return nil
-	}
-	_ = gitDir(worktree, nil, "merge", "--abort")
-	if err := gitDir(worktree, nil, "reset", "--hard", baseSHA); err != nil {
-		return err
-	}
-	if err := gitDir(worktree, nil, "clean", "-fd"); err != nil {
-		return err
-	}
-	return nil
 }
 
 func mergeConflictFiles(worktree string) []string {

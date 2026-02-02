@@ -217,7 +217,7 @@ func TestRunMergeUsesMergeHeadWhenRefsMatch(t *testing.T) {
 	}
 }
 
-func TestRunMergeResetsDirtyWorktreeWhenRefsMatch(t *testing.T) {
+func TestRunMergeUsesDirtyWorktreeWhenRefsMatch(t *testing.T) {
 	repo := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
@@ -283,43 +283,23 @@ func TestRunMergeResetsDirtyWorktreeWhenRefsMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensure worktree failed: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(worktree, "conflict.txt"), []byte("stale resolution\n"), 0o644); err != nil {
-		t.Fatalf("write stale resolution failed: %v", err)
+	if err := os.WriteFile(filepath.Join(worktree, "conflict.txt"), []byte("manual resolution\n"), 0o644); err != nil {
+		t.Fatalf("write manual resolution failed: %v", err)
 	}
 
-	out, err := runMerge(false, nil)
+	out, err := runMerge(true, nil)
 	if err != nil {
 		t.Fatalf("merge failed: %v", err)
 	}
-	if out.Merge.Status != "up_to_date" {
-		t.Fatalf("expected up_to_date, got %s", out.Merge.Status)
+	if out.Merge.Status != "resolved" || !out.Merge.Applied {
+		t.Fatalf("expected resolved/applied merge, got %+v", out.Merge)
 	}
 
-	headSHA, err := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
+	resolved, err := gitWithDirTest(repo, "show", syncRef+":conflict.txt")
 	if err != nil {
-		t.Fatalf("rev-parse HEAD failed: %v", err)
+		t.Fatalf("read sync ref failed: %v", err)
 	}
-	if strings.TrimSpace(headSHA) != strings.TrimSpace(ours) {
-		t.Fatalf("expected worktree head %s, got %s", strings.TrimSpace(ours), strings.TrimSpace(headSHA))
-	}
-
-	dirty, err := worktreeDirty(worktree)
-	if err != nil {
-		t.Fatalf("worktree dirty check failed: %v", err)
-	}
-	if dirty {
-		t.Fatalf("expected worktree to be clean")
-	}
-
-	contents, err := os.ReadFile(filepath.Join(worktree, "conflict.txt"))
-	if err != nil {
-		t.Fatalf("read conflict file failed: %v", err)
-	}
-	text := string(contents)
-	if strings.Contains(text, "stale resolution") {
-		t.Fatalf("expected stale resolution to be cleared, got %s", text)
-	}
-	if !strings.Contains(text, "ours") {
-		t.Fatalf("expected updated content, got %s", text)
+	if !strings.Contains(resolved, "manual resolution") {
+		t.Fatalf("expected manual resolution to land, got %s", resolved)
 	}
 }
