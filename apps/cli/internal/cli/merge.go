@@ -113,11 +113,20 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		if mergeHead := mergeHeadForOurs(repoRoot, oursSHA); mergeHead != "" {
 			theirsSHA = mergeHead
 			resumeFromWorktree = true
-		} else if worktreeDirtyForRepo(repoRoot) {
-			// Preserve manual edits in the agent worktree even if refs now match.
-			resumeFromWorktree = true
 		} else {
-			return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
+			dirtyWorktree, headMatches := worktreeDirtyForRepo(repoRoot, oursSHA)
+			switch {
+			case dirtyWorktree && headMatches:
+				// Preserve manual edits in the agent worktree even if refs now match.
+				resumeFromWorktree = true
+			case dirtyWorktree && !headMatches:
+				if err := resetAgentWorktree(repoRoot, oursSHA); err != nil {
+					return output.MergeOutput{}, err
+				}
+				return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
+			default:
+				return output.MergeOutput{Merge: output.MergeSummary{Status: "up_to_date"}}, nil
+			}
 		}
 	} else if mergeHead := mergeHeadForOurs(repoRoot, oursSHA); mergeHead != "" {
 		theirsSHA = mergeHead
@@ -330,13 +339,33 @@ func mergeHeadForOurs(repoRoot, oursSHA string) string {
 	return strings.TrimSpace(mergeHead)
 }
 
-func worktreeDirtyForRepo(repoRoot string) bool {
+func worktreeDirtyForRepo(repoRoot, oursSHA string) (bool, bool) {
 	worktree := filepath.Join(repoRoot, ".jul", "agent-workspace", "worktree")
 	if _, err := os.Stat(worktree); err != nil {
-		return false
+		return false, false
 	}
 	dirty, _ := worktreeDirty(worktree)
-	return dirty
+	if !dirty {
+		return false, false
+	}
+	headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
+	headMatches := strings.TrimSpace(headSHA) != "" && strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA)
+	return dirty, headMatches
+}
+
+func resetAgentWorktree(repoRoot, baseSHA string) error {
+	worktree := filepath.Join(repoRoot, ".jul", "agent-workspace", "worktree")
+	if _, err := os.Stat(worktree); err != nil {
+		return nil
+	}
+	_ = gitDir(worktree, nil, "merge", "--abort")
+	if err := gitDir(worktree, nil, "reset", "--hard", baseSHA); err != nil {
+		return err
+	}
+	if err := gitDir(worktree, nil, "clean", "-fd"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func mergeConflictFiles(worktree string) []string {

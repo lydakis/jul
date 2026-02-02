@@ -216,3 +216,110 @@ func TestRunMergeUsesMergeHeadWhenRefsMatch(t *testing.T) {
 		t.Fatalf("expected merge to proceed when MERGE_HEAD exists")
 	}
 }
+
+func TestRunMergeResetsDirtyWorktreeWhenRefsMatch(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	runGitTestCmd(t, repo, "init")
+	runGitTestCmd(t, repo, "config", "user.name", "Test User")
+	runGitTestCmd(t, repo, "config", "user.email", "test@example.com")
+
+	if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base failed: %v", err)
+	}
+	runGitTestCmd(t, repo, "add", "conflict.txt")
+	runGitTestCmd(t, repo, "commit", "-m", "base")
+
+	baseSHA, err := gitWithDirTest(repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse failed: %v", err)
+	}
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	changeID, err := gitutil.NewChangeID()
+	if err != nil {
+		t.Fatalf("new Change-Id failed: %v", err)
+	}
+	baseSHA = strings.TrimSpace(baseSHA)
+
+	createDraft := func(content string) string {
+		runGitTestCmd(t, repo, "reset", "--hard", baseSHA)
+		runGitTestCmd(t, repo, "clean", "-fd")
+		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte(content+"\n"), 0o644); err != nil {
+			t.Fatalf("write draft content failed: %v", err)
+		}
+		sha, err := gitutil.CreateDraftCommit(baseSHA, changeID)
+		if err != nil {
+			t.Fatalf("create draft failed: %v", err)
+		}
+		return sha
+	}
+
+	ours := createDraft("ours")
+
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		t.Fatalf("device id failed: %v", err)
+	}
+	user := "tester"
+	workspace := "@"
+	syncRef := "refs/jul/sync/" + user + "/" + deviceID + "/" + workspace
+	workspaceRef := "refs/jul/workspaces/" + user + "/" + workspace
+
+	if err := gitutil.UpdateRef(syncRef, ours); err != nil {
+		t.Fatalf("update sync ref failed: %v", err)
+	}
+	if err := gitutil.UpdateRef(workspaceRef, ours); err != nil {
+		t.Fatalf("update workspace ref failed: %v", err)
+	}
+
+	worktree, err := agent.EnsureWorktree(repo, baseSHA, agent.WorktreeOptions{})
+	if err != nil {
+		t.Fatalf("ensure worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "conflict.txt"), []byte("stale resolution\n"), 0o644); err != nil {
+		t.Fatalf("write stale resolution failed: %v", err)
+	}
+
+	out, err := runMerge(false, nil)
+	if err != nil {
+		t.Fatalf("merge failed: %v", err)
+	}
+	if out.Merge.Status != "up_to_date" {
+		t.Fatalf("expected up_to_date, got %s", out.Merge.Status)
+	}
+
+	headSHA, err := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD failed: %v", err)
+	}
+	if strings.TrimSpace(headSHA) != strings.TrimSpace(ours) {
+		t.Fatalf("expected worktree head %s, got %s", strings.TrimSpace(ours), strings.TrimSpace(headSHA))
+	}
+
+	dirty, err := worktreeDirty(worktree)
+	if err != nil {
+		t.Fatalf("worktree dirty check failed: %v", err)
+	}
+	if dirty {
+		t.Fatalf("expected worktree to be clean")
+	}
+
+	contents, err := os.ReadFile(filepath.Join(worktree, "conflict.txt"))
+	if err != nil {
+		t.Fatalf("read conflict file failed: %v", err)
+	}
+	text := string(contents)
+	if strings.Contains(text, "stale resolution") {
+		t.Fatalf("expected stale resolution to be cleared, got %s", text)
+	}
+	if !strings.Contains(text, "ours") {
+		t.Fatalf("expected updated content, got %s", text)
+	}
+}
