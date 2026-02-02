@@ -537,7 +537,7 @@ Each scenario is specified as:
 **Covers:** Rebase promote strategy; mapping records.  
 **Setup:** Target branch exists; 2 checkpoints in current Change-Id.  
 **Steps:** `jul promote --to main --rebase`.  
-**Assertions:** `main` advances via fast-forward; workspace base marker created; mappings and reverse index notes written; new draft started.
+**Assertions:** `main` advances via fast-forward; workspace base marker created; mappings and reverse index notes written (see `refs/notes/jul/change-id`); new draft started.
 
 ### IT-PROMOTE-SQUASH-001 — Promote (Squash) Creates One Published Commit With Full-Range Trace Anchors
 

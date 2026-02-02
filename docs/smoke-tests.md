@@ -41,7 +41,7 @@ go test -tags jul_integ_spec ./integration/...
 - Requires `git` and `go` on PATH.
 - Tests build the CLI binary from `apps/cli`.
 - `jul ci run` defaults to the current draft; use `--target <rev>` or `--change <id>` to pin a specific checkpoint.
-- Real agent smoke test is opt-in:
+- Real agent smoke test is opt-in (ignored by default in smoke runs):
   - Set `JUL_REAL_AGENT=1`
   - Ensure OpenCode is configured (e.g., `~/.config/opencode` or env vars) so it can run headless.
   - If the bundled binary is missing, the test downloads it into `build/opencode/` before running.
