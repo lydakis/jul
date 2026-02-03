@@ -4,6 +4,7 @@ package integration
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,6 +111,15 @@ func TestIT_DAEMON_002(t *testing.T) {
 	if err == nil && strings.TrimSpace(string(childrenOut)) != "" {
 		t.Fatalf("expected no child processes after shutdown, got %s", strings.TrimSpace(string(childrenOut)))
 	}
+
+	syncOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
+	var syncRes syncResult
+	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&syncRes); err != nil {
+		t.Fatalf("failed to decode sync output after daemon shutdown: %v", err)
+	}
+	if syncRes.DraftSHA == "" {
+		t.Fatalf("expected sync to succeed after daemon shutdown, got %s", syncOut)
+	}
 }
 
 func TestIT_ROBUST_005(t *testing.T) {
@@ -142,6 +152,10 @@ func TestIT_ROBUST_005(t *testing.T) {
 	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
 		// Daemon exited; acceptable.
 		return
+	}
+	time.Sleep(300 * time.Millisecond)
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("expected daemon to remain running after .jul deletion, got %v", err)
 	}
 
 	if _, err := os.Stat(julDir); err != nil {

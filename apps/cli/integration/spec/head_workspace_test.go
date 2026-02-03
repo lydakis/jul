@@ -51,6 +51,37 @@ func TestIT_HEAD_001(t *testing.T) {
 		t.Fatalf("expected status json output, got %s", statusOut)
 	}
 	assertHeadRef(t, repo, "refs/heads/jul/@")
+
+	writeFile(t, repo, "README.md", "hello\nsecond\n")
+	checkpointOut2 := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: two", "--no-ci", "--no-review", "--json")
+	if !strings.Contains(checkpointOut2, "CheckpointSHA") {
+		t.Fatalf("expected checkpoint json output, got %s", checkpointOut2)
+	}
+	assertHeadRef(t, repo, "refs/heads/jul/@")
+
+	headBeforePromote := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
+	promoteOut := runCmd(t, repo, device.Env, julPath, "promote", "--to", "main", "--rebase", "--json")
+	if !strings.Contains(promoteOut, "\"status\"") {
+		t.Fatalf("expected promote json output, got %s", promoteOut)
+	}
+	assertHeadRef(t, repo, "refs/heads/jul/@")
+	headAfterPromote := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
+	if headAfterPromote == headBeforePromote {
+		t.Fatalf("expected HEAD to move after promote")
+	}
+	headMsg := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", headAfterPromote)
+	if !strings.Contains(headMsg, "Jul-Type: workspace-base") {
+		t.Fatalf("expected workspace base marker, got %s", headMsg)
+	}
+
+	runCmd(t, repo, nil, "git", "switch", "main")
+	headMain := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
+	runCmd(t, repo, device.Env, julPath, "ws", "checkout", "@")
+	assertHeadRef(t, repo, "refs/heads/jul/@")
+	headAfterCheckout := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
+	if headAfterCheckout == headMain {
+		t.Fatalf("expected HEAD to move back to jul workspace")
+	}
 }
 
 func assertHeadRef(t *testing.T, repo, want string) {

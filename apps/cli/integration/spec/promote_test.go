@@ -4,10 +4,12 @@ package integration
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
 )
 
@@ -72,14 +74,32 @@ func TestIT_PROMOTE_REBASE_001(t *testing.T) {
 
 	anchorRef := "refs/jul/anchors/" + cp2.ChangeID
 	anchorSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", anchorRef))
-	metaNote := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/meta", "show", anchorSHA)
-	if !strings.Contains(metaNote, "promote_events") {
-		t.Fatalf("expected promote metadata note, got %s", metaNote)
+	meta, ok, err := readChangeMetaInRepo(t, repo, anchorSHA)
+	if err != nil || !ok {
+		t.Fatalf("expected promote metadata note, got ok=%v err=%v", ok, err)
+	}
+	if len(meta.Checkpoints) != 2 {
+		t.Fatalf("expected 2 checkpoints in metadata, got %+v", meta.Checkpoints)
+	}
+	if meta.Checkpoints[0].SHA != cp1.CheckpointSHA || meta.Checkpoints[1].SHA != cp2.CheckpointSHA {
+		t.Fatalf("expected checkpoint list to match, got %+v", meta.Checkpoints)
+	}
+	if len(meta.PromoteEvents) == 0 {
+		t.Fatalf("expected promote events in metadata, got %+v", meta)
 	}
 
 	reverseNote := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/change-id", "show", cp2.CheckpointSHA)
 	if !strings.Contains(reverseNote, cp2.ChangeID) {
 		t.Fatalf("expected reverse index note, got %s", reverseNote)
+	}
+	reverseNote1 := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/change-id", "show", cp1.CheckpointSHA)
+	if !strings.Contains(reverseNote1, cp1.ChangeID) {
+		t.Fatalf("expected reverse index note for first checkpoint, got %s", reverseNote1)
+	}
+
+	lease := strings.TrimSpace(readFile(t, repo, ".jul/workspaces/@/lease"))
+	if lease != headSHA {
+		t.Fatalf("expected workspace lease to point at base marker, got %s", lease)
 	}
 }
 
@@ -113,6 +133,7 @@ func TestIT_PROMOTE_REWRITE_001(t *testing.T) {
 	runCmd(t, rewrite, nil, "git", "commit", "-m", "rewrite")
 	runCmd(t, rewrite, nil, "git", "push", "--force", "origin", "rewrite:main")
 
+	remoteMainBefore := strings.TrimSpace(runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "rev-parse", "refs/heads/main"))
 	outPromote, err := runCmdAllowFailure(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
 	if err == nil {
 		t.Fatalf("expected promote to refuse rewritten target, got %s", outPromote)
@@ -123,6 +144,10 @@ func TestIT_PROMOTE_REWRITE_001(t *testing.T) {
 	}
 	if promoteErr.Code != "promote_target_rewritten" {
 		t.Fatalf("expected promote_target_rewritten, got %+v", promoteErr)
+	}
+	remoteMainAfterFail := strings.TrimSpace(runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "rev-parse", "refs/heads/main"))
+	if remoteMainAfterFail != remoteMainBefore {
+		t.Fatalf("expected remote main unchanged after failed promote, got %s vs %s", remoteMainAfterFail, remoteMainBefore)
 	}
 
 	outConfirm := runCmd(t, repo, device.Env, julPath, "promote", "--to", "main", "--confirm-rewrite", "--json")
@@ -140,4 +165,40 @@ func TestIT_PROMOTE_REWRITE_001(t *testing.T) {
 	if promoteRes.CommitSHA != remoteMain {
 		t.Fatalf("expected confirm promote to update remote main, got %s vs %s", promoteRes.CommitSHA, remoteMain)
 	}
+	if remoteMainBefore == remoteMain {
+		t.Fatalf("expected remote main to change after confirm promote")
+	}
+	if remoteMainBefore == remoteMain {
+		t.Fatalf("expected remote main to change after confirm promote")
+	}
+
+	headSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
+	headMsg := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", headSHA)
+	if !strings.Contains(headMsg, "Jul-Type: workspace-base") {
+		t.Fatalf("expected workspace base marker after confirm promote, got %s", headMsg)
+	}
+	deviceID := readDeviceID(t, device.Home)
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	draftSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", syncRef))
+	draftParent := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", draftSHA+"^"))
+	if draftParent != headSHA {
+		t.Fatalf("expected new draft parent to be base marker, got %s", draftParent)
+	}
+}
+
+func readChangeMetaInRepo(t *testing.T, repo, anchorSHA string) (metadata.ChangeMeta, bool, error) {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("chdir to repo: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+	return metadata.ReadChangeMeta(anchorSHA)
 }

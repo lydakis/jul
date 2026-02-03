@@ -35,4 +35,14 @@ func TestIT_SEC_001(t *testing.T) {
 	deviceID := readDeviceID(t, device.Home)
 	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
 	ensureRemoteRefMissing(t, remoteDir, syncRef)
+
+	allowOut := runCmd(t, repo, device.Env, julPath, "sync", "--allow-secrets", "--json")
+	var allowRes syncResult
+	if err := json.NewDecoder(strings.NewReader(allowOut)).Decode(&allowRes); err != nil {
+		t.Fatalf("failed to decode allow-secrets sync output: %v", err)
+	}
+	if allowRes.DraftSHA == "" {
+		t.Fatalf("expected draft sha on allow-secrets sync, got %s", allowOut)
+	}
+	ensureRemoteRefExists(t, remoteDir, syncRef)
 }

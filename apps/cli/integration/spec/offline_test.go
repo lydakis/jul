@@ -4,6 +4,7 @@ package integration
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -26,8 +27,14 @@ func TestIT_OFFLINE_001(t *testing.T) {
 	}
 
 	traceOut1 := runCmd(t, repo, device.Env, julPath, "trace", "--prompt", "offline one", "--json")
-	if !strings.Contains(traceOut1, "trace_sha") {
-		t.Fatalf("expected trace output, got %s", traceOut1)
+	var trace1 struct {
+		TraceSHA string `json:"trace_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(traceOut1)).Decode(&trace1); err != nil {
+		t.Fatalf("failed to decode trace output: %v", err)
+	}
+	if trace1.TraceSHA == "" {
+		t.Fatalf("expected trace sha, got %s", traceOut1)
 	}
 
 	writeFile(t, repo, "offline.txt", "one\ntwo\n")
@@ -41,8 +48,14 @@ func TestIT_OFFLINE_001(t *testing.T) {
 	}
 
 	traceOut2 := runCmd(t, repo, device.Env, julPath, "trace", "--prompt", "offline two", "--json")
-	if !strings.Contains(traceOut2, "trace_sha") {
-		t.Fatalf("expected trace output, got %s", traceOut2)
+	var trace2 struct {
+		TraceSHA string `json:"trace_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(traceOut2)).Decode(&trace2); err != nil {
+		t.Fatalf("failed to decode trace output: %v", err)
+	}
+	if trace2.TraceSHA == "" {
+		t.Fatalf("expected trace sha, got %s", traceOut2)
 	}
 
 	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteFullCompat})
@@ -60,9 +73,27 @@ func TestIT_OFFLINE_001(t *testing.T) {
 	for _, ref := range localKeepList {
 		ensureRemoteRefExists(t, remoteDir, ref)
 	}
+	remoteKeep := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/jul/keep")
+	remoteKeepList := strings.Fields(strings.TrimSpace(remoteKeep))
+	sort.Strings(localKeepList)
+	sort.Strings(remoteKeepList)
+	if strings.Join(localKeepList, ",") != strings.Join(remoteKeepList, ",") {
+		t.Fatalf("expected remote keep refs to match local, got local=%v remote=%v", localKeepList, remoteKeepList)
+	}
 
-	notes := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/notes/jul")
-	if strings.TrimSpace(notes) == "" {
+	localNotes := runCmd(t, repo, nil, "git", "for-each-ref", "--format=%(refname)", "refs/notes/jul")
+	remoteNotes := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/notes/jul")
+	if strings.TrimSpace(remoteNotes) == "" {
 		t.Fatalf("expected notes refs on remote")
 	}
+	localNotesList := strings.Fields(strings.TrimSpace(localNotes))
+	remoteNotesList := strings.Fields(strings.TrimSpace(remoteNotes))
+	sort.Strings(localNotesList)
+	sort.Strings(remoteNotesList)
+	if strings.Join(localNotesList, ",") != strings.Join(remoteNotesList, ",") {
+		t.Fatalf("expected remote notes to match local, got local=%v remote=%v", localNotesList, remoteNotesList)
+	}
+
+	_ = runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "notes", "--ref", "refs/notes/jul/traces", "show", trace1.TraceSHA)
+	_ = runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "notes", "--ref", "refs/notes/jul/traces", "show", trace2.TraceSHA)
 }

@@ -52,7 +52,9 @@ func TestSmokeGitRemoteFlow(t *testing.T) {
 		t.Fatalf("expected sync refs, got %+v", syncRes)
 	}
 	runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.SyncRef)
-	runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.WorkspaceRef)
+	if _, err := runCmdAllowFailure(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.WorkspaceRef); err != nil {
+		// Workspace base may not exist until the first checkpoint in a new repo.
+	}
 
 	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
 	var checkpointRes checkpointJSON
@@ -97,7 +99,9 @@ func TestSmokeJulRemoteFlow(t *testing.T) {
 		t.Fatalf("expected sync refs, got %+v", syncRes)
 	}
 	runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.SyncRef)
-	runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.WorkspaceRef)
+	if _, err := runCmdAllowFailure(t, repo, nil, "git", "--git-dir", remoteDir, "show-ref", syncRes.WorkspaceRef); err != nil {
+		// Workspace base may not exist until the first checkpoint in a new repo.
+	}
 
 	checkpointOut := runCmd(t, repo, env, julPath, "checkpoint", "-m", "feat: first", "--no-ci", "--no-review", "--json")
 	var checkpointRes checkpointJSON

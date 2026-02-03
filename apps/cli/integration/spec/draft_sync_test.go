@@ -12,13 +12,14 @@ import (
 )
 
 type syncResult struct {
-	DraftSHA         string `json:"DraftSHA"`
-	WorkspaceRef     string `json:"WorkspaceRef"`
-	SyncRef          string `json:"SyncRef"`
-	RemoteProblem    string `json:"RemoteProblem"`
-	BaseAdvanced     bool   `json:"BaseAdvanced"`
-	WorkspaceUpdated bool   `json:"WorkspaceUpdated"`
-	Diverged         bool   `json:"Diverged"`
+	DraftSHA         string   `json:"DraftSHA"`
+	WorkspaceRef     string   `json:"WorkspaceRef"`
+	SyncRef          string   `json:"SyncRef"`
+	RemoteProblem    string   `json:"RemoteProblem"`
+	BaseAdvanced     bool     `json:"BaseAdvanced"`
+	WorkspaceUpdated bool     `json:"WorkspaceUpdated"`
+	Diverged         bool     `json:"Diverged"`
+	Warnings         []string `json:"Warnings"`
 }
 
 func TestIT_DRAFT_001(t *testing.T) {
@@ -258,6 +259,9 @@ func TestIT_SYNC_AUTORESTACK_001(t *testing.T) {
 	}
 
 	draftParent := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", res.DraftSHA+"^"))
+	if draftParent != workspaceTip {
+		t.Fatalf("expected draft parent to match workspace tip, got %s vs %s", draftParent, workspaceTip)
+	}
 	if draftParent == cpB.CheckpointSHA {
 		t.Fatalf("expected restacked checkpoint to differ from %s", cpB.CheckpointSHA)
 	}
@@ -303,4 +307,5 @@ func TestIT_SYNC_AUTORESTACK_002(t *testing.T) {
 	if !res.Diverged || !strings.Contains(res.RemoteProblem, "restack conflict") {
 		t.Fatalf("expected restack conflict, got %+v", res)
 	}
+
 }

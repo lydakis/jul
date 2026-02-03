@@ -20,6 +20,7 @@ func TestIT_UNSUPPORTED_001(t *testing.T) {
 
 	runCmd(t, repo, nil, "git", "-c", "protocol.file.allow=always", "submodule", "add", sub, "submod")
 	runCmd(t, repo, nil, "git", "commit", "-m", "add submodule")
+	writeFile(t, sub, "sub.txt", "dirty change\n")
 
 	julPath := buildCLI(t)
 	device := newDeviceEnv(t, "dev1")
@@ -37,5 +38,11 @@ func TestIT_UNSUPPORTED_001(t *testing.T) {
 	}
 	if res.DraftSHA == "" {
 		t.Fatalf("expected draft sha after sync")
+	}
+	subHead := strings.TrimSpace(runCmd(t, sub, nil, "git", "rev-parse", "HEAD"))
+	treeEntry := runCmd(t, repo, nil, "git", "ls-tree", res.DraftSHA, "submod")
+	parts := strings.Fields(strings.TrimSpace(treeEntry))
+	if len(parts) < 3 || parts[0] != "160000" || parts[2] != subHead {
+		t.Fatalf("expected gitlink to submodule head %s, got %s", subHead, treeEntry)
 	}
 }

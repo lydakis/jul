@@ -293,6 +293,17 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 		}
 
 		if config.CheckpointSyncEnabled() {
+			workspaceRemote, _ := remoteRefTip(remote.Name, workspaceRef)
+			if !res.Diverged && !res.BaseAdvanced {
+				if localWorkspace, err := gitutil.ResolveRef(workspaceRef); err == nil {
+					localWorkspace = strings.TrimSpace(localWorkspace)
+					if localWorkspace != "" && (res.WorkspaceUpdated || strings.TrimSpace(workspaceRemote) == "") {
+						if err := pushWorkspace(remote.Name, localWorkspace, workspaceRef, workspaceRemote); err != nil {
+							return res, err
+						}
+					}
+				}
+			}
 			if err := pushKeepRefs(remote.Name, user, workspace); err != nil {
 				return res, err
 			}

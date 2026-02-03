@@ -4,9 +4,11 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/lydakis/jul/cli/internal/notes"
 	"github.com/lydakis/jul/cli/internal/output"
 )
 
@@ -32,9 +34,16 @@ func TestIT_CI_002(t *testing.T) {
 		t.Fatalf("expected checkpoint sha")
 	}
 
-	note := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", res.CheckpointSHA)
-	if !strings.Contains(note, "status") {
-		t.Fatalf("expected attestation note, got %s", note)
+	note := strings.TrimSpace(runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", res.CheckpointSHA))
+	if len(note) > notes.MaxNoteSize {
+		t.Fatalf("expected attestation note within size limit, got %d bytes", len(note))
+	}
+	var att map[string]any
+	if err := json.Unmarshal([]byte(note), &att); err != nil {
+		t.Fatalf("expected attestation note JSON, got %v (%s)", err, note)
+	}
+	if status, ok := att["status"]; !ok || strings.TrimSpace(fmt.Sprint(status)) == "" {
+		t.Fatalf("expected attestation status, got %+v", att)
 	}
 
 	runCmd(t, repo, device.Env, julPath, "sync", "--json")
@@ -79,6 +88,19 @@ func TestIT_CI_005(t *testing.T) {
 	}
 	if promoteErr.Code == "" || !strings.Contains(strings.ToLower(promoteErr.Message), "coverage") {
 		t.Fatalf("expected coverage error, got %+v", promoteErr)
+	}
+	if strings.Count(promoteErr.Message, "%") < 2 {
+		t.Fatalf("expected coverage message to include actual and threshold, got %s", promoteErr.Message)
+	}
+	foundBypass := false
+	for _, action := range promoteErr.NextActions {
+		if strings.TrimSpace(action.Command) == "jul promote --no-policy --json" {
+			foundBypass = true
+			break
+		}
+	}
+	if !foundBypass {
+		t.Fatalf("expected bypass next_action, got %+v", promoteErr.NextActions)
 	}
 
 	outBypass := runCmd(t, repo, device.Env, julPath, "promote", "--to", "main", "--no-policy", "--json")

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 type mergeOutput struct {
@@ -50,14 +52,24 @@ func TestIT_MERGE_001(t *testing.T) {
 	writeFile(t, repoA, "conflict.txt", "from A\n")
 	runCmd(t, repoA, deviceA.Env, julPath, "checkpoint", "-m", "feat: A", "--no-ci", "--no-review", "--json")
 
-	syncOut := runCmd(t, repoB, deviceB.Env, julPath, "sync", "--json")
-	var syncRes syncResult
-	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&syncRes); err != nil {
-		t.Fatalf("failed to decode sync output: %v", err)
+	runCmd(t, repoA, deviceA.Env, julPath, "promote", "--to", "main", "--rebase", "--json")
+	runCmd(t, repoB, nil, "git", "fetch", "origin", "main:main")
+
+	restackOut, err := runCmdAllowFailure(t, repoB, deviceB.Env, julPath, "ws", "restack", "--json")
+	if err == nil {
+		t.Fatalf("expected restack conflict, got %s", restackOut)
 	}
-	if !syncRes.Diverged || !strings.Contains(syncRes.RemoteProblem, "restack conflict") {
-		t.Fatalf("expected restack conflict, got %+v", syncRes)
+	var restackErr output.ErrorOutput
+	if err := json.NewDecoder(strings.NewReader(restackOut)).Decode(&restackErr); err != nil {
+		t.Fatalf("expected restack error json, got %v (%s)", err, restackOut)
 	}
+	if restackErr.Code == "" || !strings.Contains(strings.ToLower(restackErr.Message), "restack conflict") {
+		t.Fatalf("expected restack conflict error, got %+v", restackErr)
+	}
+
+	deviceID := readDeviceID(t, deviceB.Home)
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	draftBefore := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", syncRef))
 
 	mergeOut, err := runCmdAllowFailure(t, repoB, deviceB.Env, julPath, "merge", "--apply", "--json")
 	if err != nil {
@@ -75,11 +87,13 @@ func TestIT_MERGE_001(t *testing.T) {
 		t.Fatalf("expected resolved/applied merge, got %+v", res.Merge)
 	}
 
-	deviceID := readDeviceID(t, deviceB.Home)
-	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
-	resolved := runCmd(t, repoB, nil, "git", "show", syncRef+":conflict.txt")
+	resolved := readFile(t, repoB, "conflict.txt")
 	if strings.Contains(resolved, "<<<<<<<") || strings.Contains(resolved, ">>>>>>>") {
 		t.Fatalf("expected resolved content, got %s", resolved)
+	}
+	draftAfter := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", syncRef))
+	if draftAfter == draftBefore {
+		t.Fatalf("expected draft to update after merge")
 	}
 }
 
@@ -170,7 +184,7 @@ func TestIT_MERGE_008(t *testing.T) {
 
 	runCmd(t, repo, device.Env, julPath, "init", "demo")
 
-	setupMergeConflictWithContents(t, repo, device, julPath, "base\n", "ours-one\n", "theirs-one\n")
+	_, _, baseSHA := setupMergeConflictWithContents(t, repo, device, julPath, "base\n", "ours-one\n", "theirs-one\n")
 	_, _ = runCmdInput(t, repo, device.Env, "n\n", julPath, "merge", "--json")
 
 	worktree := filepath.Join(repo, ".jul", "agent-workspace", "worktree")
@@ -178,7 +192,7 @@ func TestIT_MERGE_008(t *testing.T) {
 		t.Fatalf("failed to write stale resolution: %v", err)
 	}
 
-	setupMergeConflictWithContents(t, repo, device, julPath, "base\n", "ours-two\n", "theirs-two\n")
+	setupMergeConflictFromBase(t, repo, device, julPath, baseSHA, "ours-two\n", "theirs-two\n")
 	_, _ = runCmdInput(t, repo, device.Env, "n\n", julPath, "merge", "--json")
 
 	contents, err := os.ReadFile(filepath.Join(worktree, "conflict.txt"))
@@ -216,10 +230,10 @@ func setupMergeConflictWithContents(t *testing.T, repo string, device deviceEnv,
 	oursOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
 	var oursRes syncResult
 	if err := json.NewDecoder(strings.NewReader(oursOut)).Decode(&oursRes); err != nil {
-		t.Fatalf("failed to decode sync output: %v", err)
+		t.Fatalf("failed to decode sync output: %v (%s)", err, oursOut)
 	}
 	if oursRes.DraftSHA == "" {
-		t.Fatalf("expected draft sha")
+		t.Fatalf("expected draft sha, got %s", oursOut)
 	}
 
 	runCmd(t, repo, nil, "git", "reset", "--hard", cp.CheckpointSHA)
@@ -227,10 +241,10 @@ func setupMergeConflictWithContents(t *testing.T, repo string, device deviceEnv,
 	theirsOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
 	var theirsRes syncResult
 	if err := json.NewDecoder(strings.NewReader(theirsOut)).Decode(&theirsRes); err != nil {
-		t.Fatalf("failed to decode sync output: %v", err)
+		t.Fatalf("failed to decode sync output: %v (%s)", err, theirsOut)
 	}
 	if theirsRes.DraftSHA == "" {
-		t.Fatalf("expected draft sha")
+		t.Fatalf("expected draft sha, got %s", theirsOut)
 	}
 
 	deviceID := readDeviceID(t, device.Home)
@@ -246,4 +260,45 @@ func setupMergeConflictWithContents(t *testing.T, repo string, device deviceEnv,
 	}
 
 	return oursRes.DraftSHA, workspaceRef, cp.CheckpointSHA
+}
+
+func setupMergeConflictFromBase(t *testing.T, repo string, device deviceEnv, julPath, baseSHA, ours, theirs string) {
+	if strings.TrimSpace(baseSHA) == "" {
+		t.Fatalf("expected base sha for merge conflict setup")
+	}
+
+	workspaceRef := "refs/jul/workspaces/tester/@"
+	runCmd(t, repo, nil, "git", "update-ref", workspaceRef, baseSHA)
+	leasePath := filepath.Join(repo, ".jul", "workspaces", "@", "lease")
+	if err := os.WriteFile(leasePath, []byte(strings.TrimSpace(baseSHA)+"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write workspace lease: %v", err)
+	}
+
+	runCmd(t, repo, nil, "git", "reset", "--hard", baseSHA)
+	writeFile(t, repo, "conflict.txt", ours)
+	oursOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
+	var oursRes syncResult
+	if err := json.NewDecoder(strings.NewReader(oursOut)).Decode(&oursRes); err != nil {
+		t.Fatalf("failed to decode sync output: %v (%s)", err, oursOut)
+	}
+	if oursRes.DraftSHA == "" {
+		t.Fatalf("expected draft sha, got %s", oursOut)
+	}
+
+	runCmd(t, repo, nil, "git", "reset", "--hard", baseSHA)
+	writeFile(t, repo, "conflict.txt", theirs)
+	theirsOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
+	var theirsRes syncResult
+	if err := json.NewDecoder(strings.NewReader(theirsOut)).Decode(&theirsRes); err != nil {
+		t.Fatalf("failed to decode sync output: %v (%s)", err, theirsOut)
+	}
+	if theirsRes.DraftSHA == "" {
+		t.Fatalf("expected draft sha, got %s", theirsOut)
+	}
+
+	deviceID := readDeviceID(t, device.Home)
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+
+	runCmd(t, repo, nil, "git", "update-ref", syncRef, oursRes.DraftSHA)
+	runCmd(t, repo, nil, "git", "update-ref", workspaceRef, theirsRes.DraftSHA)
 }

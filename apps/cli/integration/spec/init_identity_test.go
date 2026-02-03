@@ -73,6 +73,14 @@ func TestIT_DOCTOR_001(t *testing.T) {
 	deviceID := readDeviceID(t, device.Home)
 	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
 	ensureRemoteRefMissing(t, remoteDir, syncRef)
+	keepRefs := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/jul/keep")
+	if strings.TrimSpace(keepRefs) != "" {
+		t.Fatalf("expected no keep refs on remote, got %s", keepRefs)
+	}
+	notes := runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/notes/jul")
+	if strings.TrimSpace(notes) != "" {
+		t.Fatalf("expected no notes on remote, got %s", notes)
+	}
 
 	writeFile(t, repo, "promote.txt", "publish\n")
 	cpOut := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: publish", "--no-ci", "--no-review", "--json")
@@ -126,8 +134,22 @@ func TestIT_DOCTOR_002(t *testing.T) {
 
 	writeFile(t, repo, "draft.txt", "change\n")
 	syncOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
-	if !strings.Contains(syncOut, "DraftSHA") {
+	var syncRes syncResult
+	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&syncRes); err != nil {
+		t.Fatalf("failed to decode sync output: %v", err)
+	}
+	if syncRes.DraftSHA == "" {
 		t.Fatalf("expected sync json output, got %s", syncOut)
+	}
+	foundWarning := false
+	for _, warning := range syncRes.Warnings {
+		if strings.Contains(strings.ToLower(warning), "draft sync disabled") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("expected draft sync disabled warning, got %+v", syncRes.Warnings)
 	}
 
 	deviceID := readDeviceID(t, device.Home)

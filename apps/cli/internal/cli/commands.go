@@ -908,10 +908,22 @@ func fetchPublishTip(branch string) (string, string, error) {
 		return "", remote.Name, nil
 	}
 	remoteTip := strings.TrimSpace(fields[0])
-	if err := fetchRef(remote.Name, ref); err != nil {
+	if err := fetchPublishRef(remote.Name, branch); err != nil {
 		return "", remote.Name, err
 	}
 	return remoteTip, remote.Name, nil
+}
+
+func fetchPublishRef(remoteName, branch string) error {
+	remoteName = strings.TrimSpace(remoteName)
+	branch = strings.TrimSpace(branch)
+	if remoteName == "" || branch == "" {
+		return nil
+	}
+	ref := "refs/heads/" + branch
+	remoteRef := fmt.Sprintf("refs/remotes/%s/%s", remoteName, branch)
+	_, err := gitutil.Git("fetch", remoteName, "+"+ref+":"+remoteRef)
+	return err
 }
 
 func pushPublish(remoteName, sha, branch string, forceTarget bool) error {
