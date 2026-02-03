@@ -95,6 +95,9 @@ func TestIT_DAEMON_002(t *testing.T) {
 	}
 	waitForOutput(t, stdout, stderr, "Sync daemon running")
 
+	draftIndexPath := filepath.Join(repo, ".jul", "draft-index")
+	waitForFile(t, draftIndexPath, 2*time.Second)
+
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("failed to signal daemon: %v", err)
 	}
@@ -105,6 +108,11 @@ func TestIT_DAEMON_002(t *testing.T) {
 	pidPath := filepath.Join(repo, ".jul", "sync-daemon.pid")
 	if _, err := os.Stat(pidPath); err == nil {
 		t.Fatalf("expected pid file to be removed on shutdown")
+	}
+
+	lockPath := filepath.Join(repo, ".jul", "draft-index.lock")
+	if _, err := os.Stat(lockPath); err == nil {
+		t.Fatalf("expected draft index lock to be removed on shutdown")
 	}
 
 	childrenOut, err := exec.Command("ps", "-o", "pid=", "--ppid", strconv.Itoa(cmd.Process.Pid)).Output()
@@ -175,6 +183,24 @@ func waitForOutput(t *testing.T, stdout, stderr *bytes.Buffer, needle string) {
 			combined := stdout.String() + stderr.String()
 			if strings.Contains(combined, needle) {
 				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for file %s", path)
+		default:
+			if _, err := os.Stat(path); err == nil {
+				return
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("failed to stat %s: %v", path, err)
 			}
 			time.Sleep(20 * time.Millisecond)
 		}

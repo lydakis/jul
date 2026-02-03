@@ -95,6 +95,10 @@ func TestIT_MERGE_001(t *testing.T) {
 	if draftAfter == draftBefore {
 		t.Fatalf("expected draft to update after merge")
 	}
+	merged := runCmd(t, repoB, nil, "git", "show", syncRef+":conflict.txt")
+	if strings.Contains(merged, "<<<<<<<") || strings.Contains(merged, ">>>>>>>") {
+		t.Fatalf("expected committed merge to be clean, got %s", merged)
+	}
 }
 
 func TestIT_MERGE_007(t *testing.T) {

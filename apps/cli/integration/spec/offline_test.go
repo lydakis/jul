@@ -64,6 +64,30 @@ func TestIT_OFFLINE_001(t *testing.T) {
 	runCmd(t, repo, device.Env, julPath, "doctor")
 	runCmd(t, repo, device.Env, julPath, "sync", "--json")
 
+	workspaceRef := "refs/jul/workspaces/tester/@"
+	localWorkspace := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", workspaceRef))
+	remoteWorkspace := strings.TrimSpace(runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "rev-parse", workspaceRef))
+	if localWorkspace != remoteWorkspace {
+		t.Fatalf("expected remote workspace ref to match local, got %s vs %s", localWorkspace, remoteWorkspace)
+	}
+
+	changeRef := "refs/jul/changes/" + cp2.ChangeID
+	localChange := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", changeRef))
+	remoteChange := strings.TrimSpace(runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "rev-parse", changeRef))
+	if localChange != remoteChange {
+		t.Fatalf("expected remote change ref to match local, got %s vs %s", localChange, remoteChange)
+	}
+
+	anchorRef := "refs/jul/anchors/" + cp2.ChangeID
+	localAnchor := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", anchorRef))
+	remoteAnchor := strings.TrimSpace(runCmd(t, repo, nil, "git", "--git-dir", remoteDir, "rev-parse", anchorRef))
+	if localAnchor != remoteAnchor {
+		t.Fatalf("expected remote anchor ref to match local, got %s vs %s", localAnchor, remoteAnchor)
+	}
+	if localAnchor != cp1.CheckpointSHA {
+		t.Fatalf("expected anchor ref to stay on first checkpoint %s, got %s", cp1.CheckpointSHA, localAnchor)
+	}
+
 	// Verify keep refs and notes are pushed.
 	localKeep := runCmd(t, repo, nil, "git", "for-each-ref", "--format=%(refname)", "refs/jul/keep")
 	localKeepList := strings.Fields(strings.TrimSpace(localKeep))

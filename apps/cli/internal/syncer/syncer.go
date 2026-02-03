@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
@@ -305,6 +306,12 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 				}
 			}
 			if err := pushKeepRefs(remote.Name, user, workspace); err != nil {
+				return res, err
+			}
+			if err := pushChangeRefs(remote.Name); err != nil {
+				return res, err
+			}
+			if err := pushAnchorRefs(remote.Name); err != nil {
 				return res, err
 			}
 			if err := pushJulNotes(remote.Name); err != nil {
@@ -708,6 +715,92 @@ func pushKeepRefs(remoteName, user, workspace string) error {
 	return nil
 }
 
+func pushChangeRefs(remoteName string) error {
+	if strings.TrimSpace(remoteName) == "" {
+		return nil
+	}
+	refs, err := listRefs("refs/jul/changes/")
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		sha, err := gitutil.ResolveRef(ref)
+		if err != nil {
+			continue
+		}
+		sha = strings.TrimSpace(sha)
+		if sha == "" {
+			continue
+		}
+		remoteTip, _ := remoteRefTip(remoteName, ref)
+		remoteTip = strings.TrimSpace(remoteTip)
+		if remoteTip == "" {
+			if err := pushRef(remoteName, sha, ref, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if remoteTip == sha {
+			continue
+		}
+		if !commitExists(remoteTip) {
+			// Remote advanced beyond local visibility; avoid clobbering.
+			continue
+		}
+		if gitutil.IsAncestor(remoteTip, sha) {
+			if err := pushWorkspace(remoteName, sha, ref, remoteTip); err != nil {
+				return err
+			}
+			continue
+		}
+		if gitutil.IsAncestor(sha, remoteTip) {
+			continue
+		}
+		localWhen, lerr := commitTime(sha)
+		remoteWhen, rerr := commitTime(remoteTip)
+		if lerr != nil || rerr != nil {
+			continue
+		}
+		if localWhen.After(remoteWhen) {
+			if err := pushWorkspace(remoteName, sha, ref, remoteTip); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func pushAnchorRefs(remoteName string) error {
+	if strings.TrimSpace(remoteName) == "" {
+		return nil
+	}
+	refs, err := listRefs("refs/jul/anchors/")
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		sha, err := gitutil.ResolveRef(ref)
+		if err != nil {
+			continue
+		}
+		sha = strings.TrimSpace(sha)
+		if sha == "" {
+			continue
+		}
+		remoteTip, _ := remoteRefTip(remoteName, ref)
+		if strings.TrimSpace(remoteTip) == "" {
+			if err := pushRef(remoteName, sha, ref, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.TrimSpace(remoteTip) != sha {
+			return fmt.Errorf("anchor ref mismatch for %s", ref)
+		}
+	}
+	return nil
+}
+
 func pushJulNotes(remoteName string) error {
 	if strings.TrimSpace(remoteName) == "" {
 		return nil
@@ -748,6 +841,25 @@ func listRefs(prefix string) ([]string, error) {
 	}
 	lines := strings.Fields(strings.TrimSpace(out))
 	return lines, nil
+}
+
+func commitExists(sha string) bool {
+	if strings.TrimSpace(sha) == "" {
+		return false
+	}
+	_, err := gitutil.Git("cat-file", "-e", sha+"^{commit}")
+	return err == nil
+}
+
+func commitTime(sha string) (time.Time, error) {
+	if strings.TrimSpace(sha) == "" {
+		return time.Time{}, fmt.Errorf("commit sha required")
+	}
+	out, err := gitutil.Git("log", "-1", "--format=%cI", sha)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.RFC3339, strings.TrimSpace(out))
 }
 
 func hasSubmodules(repoRoot string) (bool, error) {

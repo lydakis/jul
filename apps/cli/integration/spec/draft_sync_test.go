@@ -299,6 +299,12 @@ func TestIT_SYNC_AUTORESTACK_002(t *testing.T) {
 	writeFile(t, repoA, "conflict.txt", "from A\n")
 	runCmd(t, repoA, deviceA.Env, julPath, "checkpoint", "-m", "feat: A", "--no-ci", "--no-review", "--json")
 
+	deviceID := readDeviceID(t, deviceB.Home)
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	syncBefore := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", syncRef))
+	leaseBefore := strings.TrimSpace(readFile(t, repoB, ".jul/workspaces/@/lease"))
+	draftBefore := runCmd(t, repoB, nil, "git", "show", syncRef+":conflict.txt")
+
 	syncOut := runCmd(t, repoB, deviceB.Env, julPath, "sync", "--json")
 	var res syncResult
 	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&res); err != nil {
@@ -306,6 +312,19 @@ func TestIT_SYNC_AUTORESTACK_002(t *testing.T) {
 	}
 	if !res.Diverged || !strings.Contains(res.RemoteProblem, "restack conflict") {
 		t.Fatalf("expected restack conflict, got %+v", res)
+	}
+
+	syncAfter := strings.TrimSpace(runCmd(t, repoB, nil, "git", "rev-parse", syncRef))
+	leaseAfter := strings.TrimSpace(readFile(t, repoB, ".jul/workspaces/@/lease"))
+	if syncAfter != syncBefore {
+		t.Fatalf("expected sync ref unchanged on restack conflict, got %s vs %s", syncAfter, syncBefore)
+	}
+	if leaseAfter != leaseBefore {
+		t.Fatalf("expected workspace lease unchanged on restack conflict, got %s vs %s", leaseAfter, leaseBefore)
+	}
+	draftAfter := runCmd(t, repoB, nil, "git", "show", syncRef+":conflict.txt")
+	if draftAfter != draftBefore {
+		t.Fatalf("expected draft content unchanged on restack conflict, got %s vs %s", draftAfter, draftBefore)
 	}
 
 }
