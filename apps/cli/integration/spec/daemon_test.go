@@ -67,6 +67,14 @@ func TestIT_DAEMON_001(t *testing.T) {
 	if strings.TrimSpace(string(pidData2)) != strings.TrimSpace(string(pidData)) {
 		t.Fatalf("expected pid file to remain unchanged, got %s vs %s", strings.TrimSpace(string(pidData)), strings.TrimSpace(string(pidData2)))
 	}
+
+	statOut, err := exec.Command("ps", "-p", strconv.Itoa(pidVal), "-o", "stat=").Output()
+	if err != nil {
+		t.Fatalf("failed to read daemon process state: %v", err)
+	}
+	if strings.Contains(strings.ToUpper(strings.TrimSpace(string(statOut))), "Z") {
+		t.Fatalf("expected daemon not to be a zombie, got %s", strings.TrimSpace(string(statOut)))
+	}
 }
 
 func TestIT_DAEMON_002(t *testing.T) {
@@ -96,6 +104,11 @@ func TestIT_DAEMON_002(t *testing.T) {
 	pidPath := filepath.Join(repo, ".jul", "sync-daemon.pid")
 	if _, err := os.Stat(pidPath); err == nil {
 		t.Fatalf("expected pid file to be removed on shutdown")
+	}
+
+	childrenOut, err := exec.Command("ps", "-o", "pid=", "--ppid", strconv.Itoa(cmd.Process.Pid)).Output()
+	if err == nil && strings.TrimSpace(string(childrenOut)) != "" {
+		t.Fatalf("expected no child processes after shutdown, got %s", strings.TrimSpace(string(childrenOut)))
 	}
 }
 

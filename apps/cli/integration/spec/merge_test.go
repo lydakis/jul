@@ -19,21 +19,53 @@ type mergeOutput struct {
 }
 
 func TestIT_MERGE_001(t *testing.T) {
-	repo := t.TempDir()
-	initRepo(t, repo, true)
+	root := t.TempDir()
+	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteFullCompat})
+
+	seed := filepath.Join(root, "seed")
+	initRepo(t, seed, true)
+	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "main")
+
+	repoA := filepath.Join(root, "repoA")
+	repoB := filepath.Join(root, "repoB")
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoA)
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoB)
+	runCmd(t, repoA, nil, "git", "config", "user.name", "Test User")
+	runCmd(t, repoA, nil, "git", "config", "user.email", "test@example.com")
+	runCmd(t, repoB, nil, "git", "config", "user.name", "Test User")
+	runCmd(t, repoB, nil, "git", "config", "user.email", "test@example.com")
+
 	julPath := buildCLI(t)
-	device := newDeviceEnv(t, "dev1")
+	deviceA := newDeviceEnv(t, "devA")
+	deviceB := newDeviceEnv(t, "devB")
 
-	runCmd(t, repo, device.Env, julPath, "init", "demo")
+	runCmd(t, repoA, deviceA.Env, julPath, "init", "demo")
+	runCmd(t, repoB, deviceB.Env, julPath, "init", "demo")
 
-	oursRef, _, checkpointSHA := setupMergeConflict(t, repo, device, julPath)
-	mergeOut, err := runCmdAllowFailure(t, repo, device.Env, julPath, "merge", "--apply", "--json")
+	writeFile(t, repoB, "conflict.txt", "from B\n")
+	runCmd(t, repoB, deviceB.Env, julPath, "checkpoint", "-m", "feat: B", "--no-ci", "--no-review", "--json")
+
+	runCmd(t, repoA, deviceA.Env, julPath, "sync", "--json")
+	writeFile(t, repoA, "conflict.txt", "from A\n")
+	runCmd(t, repoA, deviceA.Env, julPath, "checkpoint", "-m", "feat: A", "--no-ci", "--no-review", "--json")
+
+	syncOut := runCmd(t, repoB, deviceB.Env, julPath, "sync", "--json")
+	var syncRes syncResult
+	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&syncRes); err != nil {
+		t.Fatalf("failed to decode sync output: %v", err)
+	}
+	if !syncRes.Diverged || !strings.Contains(syncRes.RemoteProblem, "restack conflict") {
+		t.Fatalf("expected restack conflict, got %+v", syncRes)
+	}
+
+	mergeOut, err := runCmdAllowFailure(t, repoB, deviceB.Env, julPath, "merge", "--apply", "--json")
 	if err != nil {
-		worktree := filepath.Join(repo, ".jul", "agent-workspace", "worktree")
+		worktree := filepath.Join(repoB, ".jul", "agent-workspace", "worktree")
 		if werr := os.WriteFile(filepath.Join(worktree, "conflict.txt"), []byte("manual resolution\n"), 0o644); werr != nil {
 			t.Fatalf("failed to write manual resolution: %v", werr)
 		}
-		mergeOut = runCmd(t, repo, device.Env, julPath, "merge", "--apply", "--json")
+		mergeOut = runCmd(t, repoB, deviceB.Env, julPath, "merge", "--apply", "--json")
 	}
 	var res mergeOutput
 	if err := json.NewDecoder(strings.NewReader(mergeOut)).Decode(&res); err != nil {
@@ -43,16 +75,12 @@ func TestIT_MERGE_001(t *testing.T) {
 		t.Fatalf("expected resolved/applied merge, got %+v", res.Merge)
 	}
 
-	deviceID := readDeviceID(t, device.Home)
+	deviceID := readDeviceID(t, deviceB.Home)
 	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
-	resolved := runCmd(t, repo, nil, "git", "show", syncRef+":conflict.txt")
+	resolved := runCmd(t, repoB, nil, "git", "show", syncRef+":conflict.txt")
 	if strings.Contains(resolved, "<<<<<<<") || strings.Contains(resolved, ">>>>>>>") {
 		t.Fatalf("expected resolved content, got %s", resolved)
 	}
-
-	// Ensure we did not lose our base checkpoint.
-	_ = checkpointSHA
-	_ = oursRef
 }
 
 func TestIT_MERGE_007(t *testing.T) {

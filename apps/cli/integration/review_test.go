@@ -64,17 +64,19 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	}
 
 	suggestionsOut := runCmd(t, repo, env, julPath, "suggestions", "--json")
-	var suggestions []struct {
-		SuggestionID string `json:"suggestion_id"`
-		Status       string `json:"status"`
+	var suggestions struct {
+		Suggestions []struct {
+			SuggestionID string `json:"suggestion_id"`
+			Status       string `json:"status"`
+		} `json:"suggestions"`
 	}
 	if err := json.NewDecoder(strings.NewReader(suggestionsOut)).Decode(&suggestions); err != nil {
 		t.Fatalf("failed to decode suggestions output: %v", err)
 	}
-	if len(suggestions) == 0 {
+	if len(suggestions.Suggestions) == 0 {
 		t.Fatalf("expected suggestions to be stored")
 	}
-	if suggestions[0].Status == "" {
+	if suggestions.Suggestions[0].Status == "" {
 		t.Fatalf("expected suggestion status")
 	}
 }

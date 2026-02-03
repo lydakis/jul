@@ -56,7 +56,18 @@ func TestAdoptCheckpointOnGitCommit(t *testing.T) {
 	}
 
 	workspaceRef := "refs/jul/workspaces/tester/@"
-	draft := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", workspaceRef))
+	workspaceTip := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", workspaceRef))
+	if workspaceTip != head {
+		t.Fatalf("expected workspace ref to point at head, got %s", workspaceTip)
+	}
+
+	deviceIDPath := filepath.Join(home, ".config", "jul", "device")
+	deviceID := strings.TrimSpace(readFile(t, filepath.Dir(deviceIDPath), filepath.Base(deviceIDPath)))
+	if deviceID == "" {
+		t.Fatalf("expected device id to be recorded")
+	}
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	draft := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", syncRef))
 	parentsLine := runCmd(t, repo, nil, "git", "rev-list", "--parents", "-n", "1", draft)
 	parts := strings.Fields(parentsLine)
 	if len(parts) < 2 {

@@ -26,14 +26,14 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-CI-005 | Aligned | Coverage gating + `--no-policy` bypass. |
 | IT-PROMOTE-REBASE-001 | Aligned | Main advances; base marker + notes; new draft. |
 | IT-PROMOTE-REWRITE-001 | Aligned | Rewrite detected; confirm path succeeds. |
-| IT-MERGE-001 | Partial | Uses synthetic conflict, not explicit restack conflict path. |
+| IT-MERGE-001 | Aligned | Restack conflict path exercised; merge resolves without conflict markers. |
 | IT-MERGE-007 | Aligned | Reject preserves manual path; no conflict markers. |
 | IT-MERGE-008 | Aligned | Stale worktree reset on ref change. |
 | IT-OFFLINE-001 | Aligned | Offline history syncs; keep refs + notes match remote. |
-| IT-DAEMON-001 | Partial | Single-instance verified; no zombie check. |
-| IT-DAEMON-002 | Partial | SIGTERM exit verified; no child-process cleanup check. |
+| IT-DAEMON-001 | Aligned | Single-instance + zombie check. |
+| IT-DAEMON-002 | Aligned | SIGTERM exit + child-process cleanup check. |
 | IT-ROBUST-005 | Aligned | `.jul/` deletion tolerated or daemon exits cleanly. |
-| IT-AGENT-006 | Partial | JSON-only output asserted; does not validate `next_actions` or exit codes. |
+| IT-AGENT-006 | Aligned | JSON-only output, `next_actions`, and exit codes asserted. |
 | IT-UNSUPPORTED-001 | Aligned | Submodule warning; sync still produces draft. |
 | IT-SEC-001 | Aligned | Secret scan blocks draft push. |
 

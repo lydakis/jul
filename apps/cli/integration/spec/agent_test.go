@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -23,25 +24,52 @@ func TestIT_AGENT_006(t *testing.T) {
 	writeFile(t, repo, ".jul/policy.toml", "[promote.main]\nrequired_checks = [\"test\"]\n")
 	writeFile(t, repo, "README.md", "fail ci\n")
 
-	cpOut, _ := runCmdAllowFailure(t, repo, device.Env, julPath, "checkpoint", "-m", "fail ci", "--no-review", "--json")
+	cpOut, err := runCmdAllowFailure(t, repo, device.Env, julPath, "checkpoint", "-m", "fail ci", "--no-review", "--json")
+	if err == nil {
+		t.Fatalf("expected checkpoint to fail")
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 0 {
+		t.Fatalf("expected non-zero checkpoint exit code")
+	}
 	cpRes := decodeErrorJSON(t, cpOut)
 	if cpRes.Code == "" || cpRes.Message == "" {
 		t.Fatalf("expected checkpoint error code/message, got %+v", cpRes)
 	}
+	if len(cpRes.NextActions) == 0 {
+		t.Fatalf("expected checkpoint next_actions, got %+v", cpRes)
+	}
 
-	promoteOut, _ := runCmdAllowFailure(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
+	promoteOut, err := runCmdAllowFailure(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
+	if err == nil {
+		t.Fatalf("expected promote to fail")
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 0 {
+		t.Fatalf("expected non-zero promote exit code")
+	}
 	promoteRes := decodeErrorJSON(t, promoteOut)
 	if promoteRes.Code == "" || promoteRes.Message == "" {
 		t.Fatalf("expected promote error code/message, got %+v", promoteRes)
+	}
+	if len(promoteRes.NextActions) == 0 {
+		t.Fatalf("expected promote next_actions, got %+v", promoteRes)
 	}
 
 	// Simulate network failure by pointing remote to an invalid path.
 	runCmd(t, repo, nil, "git", "remote", "add", "origin", "/no/such/remote.git")
 
-	syncOut, _ := runCmdAllowFailure(t, repo, device.Env, julPath, "sync", "--json")
+	syncOut, err := runCmdAllowFailure(t, repo, device.Env, julPath, "sync", "--json")
+	if err == nil {
+		t.Fatalf("expected sync to fail")
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 0 {
+		t.Fatalf("expected non-zero sync exit code")
+	}
 	syncRes := decodeErrorJSON(t, syncOut)
 	if syncRes.Code == "" || syncRes.Message == "" {
 		t.Fatalf("expected sync error code/message, got %+v", syncRes)
+	}
+	if len(syncRes.NextActions) == 0 {
+		t.Fatalf("expected sync next_actions, got %+v", syncRes)
 	}
 }
 

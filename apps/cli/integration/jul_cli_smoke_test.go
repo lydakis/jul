@@ -41,7 +41,9 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 		t.Fatalf("expected sync refs, got %+v", syncRes)
 	}
 	runCmd(t, repo, nil, "git", "show-ref", syncRes.SyncRef)
-	runCmd(t, repo, nil, "git", "show-ref", syncRes.WorkspaceRef)
+	if _, err := runCmdAllowFailure(t, repo, nil, "git", "show-ref", syncRes.WorkspaceRef); err != nil {
+		// Workspace base may not exist until the first checkpoint in a new repo.
+	}
 
 	// Create an explicit trace with prompt metadata.
 	traceOut := runCmd(t, repo, env, julPath, "trace", "--prompt", "write a trace", "--json")
@@ -73,6 +75,11 @@ func TestSmokeLocalOnlyFlow(t *testing.T) {
 		t.Fatalf("expected keep ref and checkpoint sha")
 	}
 	runCmd(t, repo, nil, "git", "show-ref", checkpointRes.KeepRef)
+	runCmd(t, repo, nil, "git", "show-ref", syncRes.WorkspaceRef)
+	workspaceTip := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", syncRes.WorkspaceRef))
+	if workspaceTip != checkpointRes.CheckpointSHA {
+		t.Fatalf("expected workspace ref to point at checkpoint, got %s", workspaceTip)
+	}
 
 	agentPath := filepath.Join(t.TempDir(), "agent.sh")
 	agentScript := `#!/bin/sh
@@ -110,14 +117,16 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	suggestionID := reviewRes.Suggestions[0].SuggestionID
 
 	suggestionsOut := runCmd(t, repo, envAgent, julPath, "suggestions", "--json")
-	var suggestions []struct {
-		SuggestionID string `json:"suggestion_id"`
-		Status       string `json:"status"`
+	var suggestions struct {
+		Suggestions []struct {
+			SuggestionID string `json:"suggestion_id"`
+			Status       string `json:"status"`
+		} `json:"suggestions"`
 	}
 	if err := json.NewDecoder(strings.NewReader(suggestionsOut)).Decode(&suggestions); err != nil {
 		t.Fatalf("failed to decode suggestions output: %v", err)
 	}
-	if len(suggestions) == 0 || suggestions[0].SuggestionID == "" {
+	if len(suggestions.Suggestions) == 0 || suggestions.Suggestions[0].SuggestionID == "" {
 		t.Fatalf("expected suggestion entries")
 	}
 
@@ -156,13 +165,15 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 	}
 
 	appliedOut := runCmd(t, repo, envAgent, julPath, "suggestions", "--status", "applied", "--json")
-	var appliedRes []struct {
-		SuggestionID string `json:"suggestion_id"`
+	var appliedRes struct {
+		Suggestions []struct {
+			SuggestionID string `json:"suggestion_id"`
+		} `json:"suggestions"`
 	}
 	if err := json.NewDecoder(strings.NewReader(appliedOut)).Decode(&appliedRes); err != nil {
 		t.Fatalf("failed to decode applied suggestions: %v", err)
 	}
-	if len(appliedRes) == 0 {
+	if len(appliedRes.Suggestions) == 0 {
 		t.Fatalf("expected applied suggestions")
 	}
 
@@ -331,11 +342,20 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		t.Fatalf("expected Change-Id on checkpoint")
 	}
 	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", "tester", "@")
-	newDraftSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", workspaceRef))
-	if newDraftSHA == "" {
+	baseMarkerSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", workspaceRef))
+	if baseMarkerSHA == "" {
 		t.Fatalf("expected workspace ref after promote")
 	}
-	if newDraftSHA == checkpointRes.CheckpointSHA {
+	if baseMarkerSHA == checkpointRes.CheckpointSHA {
+		t.Fatalf("expected workspace base marker after promote")
+	}
+	baseMarkerMsg := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", baseMarkerSHA)
+	if !strings.Contains(baseMarkerMsg, "Jul-Type: workspace-base") {
+		t.Fatalf("expected workspace base marker message, got %s", baseMarkerMsg)
+	}
+
+	newDraftSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", syncRes.SyncRef))
+	if newDraftSHA == "" {
 		t.Fatalf("expected new draft after promote")
 	}
 	newDraftMsg := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", newDraftSHA)

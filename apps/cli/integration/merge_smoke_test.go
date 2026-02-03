@@ -105,7 +105,7 @@ printf '{"version":1,"status":"completed","suggestions":[]}\n'
 		t.Fatalf("expected resolved/applied merge, got %+v", mergeRes.Merge)
 	}
 
-	resolved := runCmd(t, repo, nil, "git", "show", oursRes.WorkspaceRef+":conflict.txt")
+	resolved := runCmd(t, repo, nil, "git", "show", oursRes.SyncRef+":conflict.txt")
 	if !strings.Contains(resolved, "resolved") {
 		t.Fatalf("expected resolved content, got %s", resolved)
 	}
