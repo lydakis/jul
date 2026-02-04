@@ -14,6 +14,8 @@
 - Unit tests (Server): `cd apps/server && go test ./...`
 - Smoke tests (local-only): `cd apps/cli && go test ./integration -run Smoke`
 - Smoke tests (remote): `cd apps/server && go test ./integration -run Smoke`
+- Local build (release): `go build -o ./bin/jul ./apps/cli/cmd/jul`
+- GoReleaser snapshot: `./scripts/fetch-opencode.sh && goreleaser release --snapshot --clean`
 - Format: `gofmt -w $(rg --files -g '*.go' apps/cli apps/server)`
 
 ## Coding Style & Naming Conventions
