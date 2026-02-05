@@ -106,6 +106,121 @@ fi
 	}
 }
 
+func TestCheckpointWatchDetachesAndCompletes(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "demo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("failed to create repo dir: %v", err)
+	}
+
+	runCmd(t, repo, nil, "git", "init")
+	runCmd(t, repo, nil, "git", "config", "user.name", "Test User")
+	runCmd(t, repo, nil, "git", "config", "user.email", "test@example.com")
+
+	writeFile(t, repo, "README.md", "hello\n")
+	runCmd(t, repo, nil, "git", "add", "README.md")
+	runCmd(t, repo, nil, "git", "commit", "-m", "feat: base")
+
+	agentPath := filepath.Join(tmp, "agent-suggest.sh")
+	agentScript := `#!/bin/sh
+set -e
+sleep 1
+cd "$JUL_AGENT_WORKSPACE"
+git config user.name "Agent"
+git config user.email "agent@example.com"
+echo "agent change" >> README.md
+git add README.md
+git commit -m "agent suggestion" >/dev/null
+sha=$(git rev-parse HEAD)
+if [ -n "$JUL_AGENT_OUTPUT" ]; then
+  printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason":"review","description":"agent change","confidence":0.9}]}\n' "$sha" > "$JUL_AGENT_OUTPUT"
+else
+  printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason":"review","description":"agent change","confidence":0.9}]}\n' "$sha"
+fi
+`
+	if err := os.WriteFile(agentPath, []byte(agentScript), 0o755); err != nil {
+		t.Fatalf("write agent script failed: %v", err)
+	}
+
+	julPath := buildCLI(t)
+	home := filepath.Join(tmp, "home")
+	env := map[string]string{
+		"HOME":           home,
+		"JUL_WORKSPACE":  "tester/@",
+		"JUL_AGENT_CMD":  agentPath,
+		"JUL_AGENT_MODE": "file",
+	}
+
+	runCmd(t, repo, env, julPath, "init", "demo")
+
+	ciConfig := `[commands]
+cmd1 = "sleep 1"
+`
+	if err := os.MkdirAll(filepath.Join(repo, ".jul"), 0o755); err != nil {
+		t.Fatalf("failed to create .jul dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".jul", "ci.toml"), []byte(ciConfig), 0o644); err != nil {
+		t.Fatalf("write ci config failed: %v", err)
+	}
+
+	_ = os.RemoveAll(filepath.Join(repo, ".jul", "ci"))
+	_ = os.RemoveAll(filepath.Join(repo, ".jul", "review"))
+
+	cmd := exec.Command(julPath, "checkpoint", "-m", "feat: first", "--watch", "--json")
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(env)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start checkpoint failed: %v", err)
+	}
+
+	_ = waitForSuffixFile(t, filepath.Join(repo, ".jul", "ci", "logs"), ".log", 2*time.Second)
+
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("failed to interrupt checkpoint: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("checkpoint did not detach cleanly: %v\n%s", err, output.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("checkpoint did not exit after interrupt")
+	}
+
+	ciRunPath := waitForSuffixFile(t, filepath.Join(repo, ".jul", "ci", "runs"), ".json", 5*time.Second)
+	waitForCIRunCompletion(t, ciRunPath, 5*time.Second)
+
+	reviewResult := waitForSuffixFile(t, filepath.Join(repo, ".jul", "review", "results"), ".json", 5*time.Second)
+	data, err := os.ReadFile(reviewResult)
+	if err != nil {
+		t.Fatalf("read review result failed: %v", err)
+	}
+	var res struct {
+		Suggestions []struct {
+			SuggestionID string `json:"suggestion_id"`
+		} `json:"suggestions"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &res); err != nil {
+		t.Fatalf("decode review result failed: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("review error: %s", res.Error)
+	}
+	if len(res.Suggestions) == 0 {
+		t.Fatalf("expected background review suggestions")
+	}
+}
+
 func TestCheckpointStartsBackgroundCIAndReview(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "demo")
