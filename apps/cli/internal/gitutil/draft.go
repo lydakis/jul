@@ -73,6 +73,14 @@ func writeTree(repoRoot, indexPath string) (string, error) {
 	}
 	defer os.Remove(excludePath)
 
+	if _, err := os.Stat(indexPath); err == nil {
+		if err := updateIndexIncremental(repoRoot, indexPath, excludePath); err == nil {
+			return gitWithEnv(repoRoot, map[string]string{
+				"GIT_INDEX_FILE": indexPath,
+			}, "write-tree")
+		}
+	}
+
 	if err := runGitWithEnv(repoRoot, map[string]string{
 		"GIT_INDEX_FILE": indexPath,
 	}, "-c", "core.excludesfile="+excludePath, "add", "-A", "--", "."); err != nil {
@@ -81,6 +89,50 @@ func writeTree(repoRoot, indexPath string) (string, error) {
 	return gitWithEnv(repoRoot, map[string]string{
 		"GIT_INDEX_FILE": indexPath,
 	}, "write-tree")
+}
+
+func updateIndexIncremental(repoRoot, indexPath, excludePath string) error {
+	env := map[string]string{
+		"GIT_INDEX_FILE": indexPath,
+	}
+	diffOut, err := gitWithEnv(repoRoot, env, "-c", "core.excludesfile="+excludePath, "diff", "--name-only", "-z")
+	if err != nil {
+		return err
+	}
+	untrackedOut, err := gitWithEnv(repoRoot, env, "-c", "core.excludesfile="+excludePath, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return err
+	}
+	paths := collectChangedPaths(diffOut, untrackedOut)
+	if len(paths) == 0 {
+		return nil
+	}
+	args := append([]string{"-c", "core.excludesfile=" + excludePath, "add", "-A", "--"}, paths...)
+	return runGitWithEnv(repoRoot, env, args...)
+}
+
+func collectChangedPaths(outputs ...string) []string {
+	seen := map[string]struct{}{}
+	for _, out := range outputs {
+		if out == "" {
+			continue
+		}
+		for _, entry := range strings.Split(out, "\x00") {
+			path := strings.TrimSpace(entry)
+			if path == "" {
+				continue
+			}
+			seen[path] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(seen))
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 func writeTempExcludes(repoRoot string) (string, error) {

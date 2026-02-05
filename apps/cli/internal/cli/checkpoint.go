@@ -100,10 +100,16 @@ func newCheckpointCommand() Command {
 				return 1
 			}
 
-			res.Timings = timings
+			if res.Timings.PhaseMs == nil {
+				res.Timings = timings
+			} else {
+				for k, v := range timings.PhaseMs {
+					res.Timings.PhaseMs[k] = v
+				}
+			}
 
 			if repoRoot, err := gitutil.RepoTopLevel(); err == nil {
-				_, _ = refreshStatusCache(repoRoot)
+				_, _ = updateStatusCacheForCheckpoint(repoRoot, res)
 			}
 
 			var ciRun *ciRun

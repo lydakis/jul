@@ -21,6 +21,8 @@ import (
 
 type Result struct {
 	DraftSHA         string
+	ChangeID         string
+	TreeSHA          string
 	WorkspaceRef     string
 	SyncRef          string
 	WorkspaceUpdated bool
@@ -54,6 +56,8 @@ type CheckpointResult struct {
 
 type SyncOptions struct {
 	AllowSecrets bool
+	TreeSHA      string
+	SkipTrace    bool
 }
 
 func Sync() (Result, error) {
@@ -192,6 +196,7 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 			}
 		}
 	}
+	res.ChangeID = changeID
 	hasCheckpoint := false
 	if strings.TrimSpace(changeID) != "" {
 		prefix := keepRefPath(user, workspace, changeID, "")
@@ -201,10 +206,15 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 	}
 	timings.Add("prepare", time.Since(prepareStart))
 	snapshotStart := time.Now()
-	treeSHA, err := gitutil.DraftTree()
-	if err != nil {
-		return Result{}, err
+	treeSHA := strings.TrimSpace(opts.TreeSHA)
+	if treeSHA == "" {
+		var err error
+		treeSHA, err = gitutil.DraftTree()
+		if err != nil {
+			return Result{}, err
+		}
 	}
+	res.TreeSHA = treeSHA
 
 	fastForwardAllowed := true
 	if config.SyncAutoRestack() && hasCheckpoint {
@@ -226,6 +236,7 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 			if err != nil {
 				return res, err
 			}
+			res.TreeSHA = treeSHA
 		}
 	}
 
@@ -338,12 +349,15 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 	}
 
 	finalizeStart := time.Now()
-	res, err = finalizeSync(res, !res.Diverged)
+	res, err = finalizeSync(res, !res.Diverged, opts.SkipTrace)
 	timings.Add("finalize", time.Since(finalizeStart))
 	return res, err
 }
 
-func finalizeSync(res Result, allowCanonical bool) (Result, error) {
+func finalizeSync(res Result, allowCanonical bool, skipTrace bool) (Result, error) {
+	if skipTrace {
+		return res, nil
+	}
 	if _, err := Trace(TraceOptions{Implicit: true, UpdateCanonical: allowCanonical}); err != nil {
 		return res, err
 	}
@@ -361,19 +375,35 @@ func ensureWorkspaceAligned(syncRes Result) error {
 }
 
 func Checkpoint(message string) (CheckpointResult, error) {
-	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true})
-	if err != nil {
-		return CheckpointResult{}, err
-	}
-
-	syncRes, err := Sync()
+	timings := metrics.NewTimings()
+	syncStart := time.Now()
+	syncRes, err := SyncWithOptions(SyncOptions{SkipTrace: true})
+	timings.Add("sync", time.Since(syncStart))
 	if err != nil {
 		return CheckpointResult{}, err
 	}
 	if err := ensureWorkspaceAligned(syncRes); err != nil {
 		return CheckpointResult{}, err
 	}
+	treeSHA := strings.TrimSpace(syncRes.TreeSHA)
+	traceStart := time.Now()
+	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true, TreeSHA: treeSHA})
+	timings.Add("trace", time.Since(traceStart))
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	if treeSHA == "" {
+		treeSHA = strings.TrimSpace(traceRes.TreeSHA)
+	}
+	if treeSHA == "" {
+		var err error
+		treeSHA, err = gitutil.DraftTree()
+		if err != nil {
+			return CheckpointResult{}, err
+		}
+	}
 
+	commitStart := time.Now()
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return CheckpointResult{}, err
@@ -395,11 +425,14 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		return CheckpointResult{}, fmt.Errorf("draft sha missing")
 	}
 
-	draftMessage, _ := gitutil.CommitMessage(draftSHA)
-	changeID := gitutil.ExtractChangeID(draftMessage)
+	changeID := strings.TrimSpace(syncRes.ChangeID)
 	if changeID == "" {
-		if generated, err := gitutil.NewChangeID(); err == nil {
-			changeID = generated
+		draftMessage, _ := gitutil.CommitMessage(draftSHA)
+		changeID = gitutil.ExtractChangeID(draftMessage)
+		if changeID == "" {
+			if generated, err := gitutil.NewChangeID(); err == nil {
+				changeID = generated
+			}
 		}
 	}
 
@@ -414,9 +447,14 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		message = ensureTrailer(message, "Trace-Base", traceRes.TraceBase)
 	}
 
-	treeSHA, err := gitutil.TreeOf(draftSHA)
-	if err != nil {
-		return CheckpointResult{}, err
+	if treeSHA == "" {
+		treeSHA = strings.TrimSpace(syncRes.TreeSHA)
+	}
+	if treeSHA == "" {
+		treeSHA, err = gitutil.TreeOf(draftSHA)
+		if err != nil {
+			return CheckpointResult{}, err
+		}
 	}
 	parentSHA, _ := gitutil.ParentOf(draftSHA)
 	checkpointSHA, err := gitutil.CommitTree(treeSHA, parentSHA, message)
@@ -439,13 +477,14 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		}
 	}
 
-	newDraftSHA, err := gitutil.CreateDraftCommit(checkpointSHA, changeID)
+	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, checkpointSHA, changeID)
 	if err != nil {
 		return CheckpointResult{}, err
 	}
 	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
 		return CheckpointResult{}, err
 	}
+	timings.Add("commit", time.Since(commitStart))
 
 	res := CheckpointResult{
 		CheckpointSHA: checkpointSHA,
@@ -460,6 +499,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		RemotePushed:  syncRes.RemotePushed,
 		Diverged:      syncRes.Diverged,
 		RemoteProblem: syncRes.RemoteProblem,
+		Timings:       timings,
 	}
 
 	if !syncRes.Diverged {
@@ -859,6 +899,9 @@ func listRefs(prefix string) ([]string, error) {
 	if strings.TrimSpace(prefix) == "" {
 		return nil, nil
 	}
+	if refs, ok, err := gitutil.ListRefsFast(prefix); ok {
+		return refs, err
+	}
 	out, err := gitutil.Git("for-each-ref", "--format=%(refname)", prefix)
 	if err != nil {
 		return nil, err
@@ -888,6 +931,9 @@ func commitTime(sha string) (time.Time, error) {
 
 func hasSubmodules(repoRoot string) (bool, error) {
 	if strings.TrimSpace(repoRoot) == "" {
+		return false, nil
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".gitmodules")); err != nil {
 		return false, nil
 	}
 	out, err := gitutil.Git("-C", repoRoot, "submodule", "status")

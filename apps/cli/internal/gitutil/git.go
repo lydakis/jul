@@ -85,6 +85,14 @@ func RepoTopLevel() (string, error) {
 		}
 		repoTopLevelMu.Unlock()
 	}
+	if wd != "" {
+		if root, ok := findRepoRoot(wd); ok && strings.TrimSpace(root) != "" {
+			repoTopLevelMu.Lock()
+			repoTopLevelCache[wd] = root
+			repoTopLevelMu.Unlock()
+			return root, nil
+		}
+	}
 	root, err := git("rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err

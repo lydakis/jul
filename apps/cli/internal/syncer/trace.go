@@ -25,6 +25,7 @@ type TraceOptions struct {
 	Agent           string
 	SessionID       string
 	Turn            int
+	TreeSHA         string
 	Force           bool
 	Implicit        bool
 	UpdateCanonical bool
@@ -36,6 +37,7 @@ type TraceResult struct {
 	TraceSyncRef string
 	CanonicalSHA string
 	TraceBase    string
+	TreeSHA      string
 	PromptHash   string
 	RemoteName   string
 	RemotePushed bool
@@ -88,10 +90,14 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 		}
 	}
 
-	treeSHA, err := gitutil.DraftTree()
-	if err != nil {
-		return res, err
+	treeSHA := strings.TrimSpace(opts.TreeSHA)
+	if treeSHA == "" {
+		treeSHA, err = gitutil.DraftTree()
+		if err != nil {
+			return res, err
+		}
 	}
+	res.TreeSHA = treeSHA
 
 	parent := resolveTraceParent(traceSyncRef, traceRef)
 	res.TraceBase = parent

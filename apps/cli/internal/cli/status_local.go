@@ -17,15 +17,26 @@ import (
 func buildLocalStatus() (output.Status, error) {
 	timings := metrics.NewTimings()
 	commitStart := time.Now()
-	info, err := gitutil.CurrentCommit()
-	if err != nil {
-		info, err = fallbackCommitInfo()
+	info := gitutil.CommitInfo{}
+	head, err := gitutil.ReadHeadInfo()
+	if err == nil {
+		info.SHA = head.SHA
+		info.Branch = head.Branch
+		info.TopLevel = head.RepoRoot
+	} else {
+		info, err = gitutil.CurrentCommit()
 		if err != nil {
-			return output.Status{}, err
+			info, err = fallbackCommitInfo()
+			if err != nil {
+				return output.Status{}, err
+			}
 		}
 	}
 	timings.Add("commit_info", time.Since(commitStart))
 	repoName := config.RepoName()
+	if repoName == "" && info.TopLevel != "" {
+		repoName = filepath.Base(info.TopLevel)
+	}
 	if repoName != "" {
 		info.RepoName = repoName
 	}
@@ -38,7 +49,10 @@ func buildLocalStatus() (output.Status, error) {
 	wsID := config.WorkspaceID()
 	timings.Add("workspace", time.Since(workspaceStart))
 	repoRootStart := time.Now()
-	repoRoot, _ := gitutil.RepoTopLevel()
+	repoRoot := strings.TrimSpace(info.TopLevel)
+	if repoRoot == "" {
+		repoRoot, _ = gitutil.RepoTopLevel()
+	}
 	timings.Add("repo_root", time.Since(repoRootStart))
 
 	draftStart := time.Now()
@@ -107,24 +121,29 @@ func buildLocalStatus() (output.Status, error) {
 	}
 	timings.Add("attestation", time.Since(attStart))
 
+	changeID := ""
+	if checkpoint != nil && checkpoint.ChangeID != "" {
+		changeID = checkpoint.ChangeID
+	}
 	draftChangeID := ""
-	if draftSHA != "" {
+	if changeID == "" && draftSHA != "" {
 		if msg, err := gitutil.CommitMessage(draftSHA); err == nil {
 			draftChangeID = gitutil.ExtractChangeID(msg)
 		}
 		if draftChangeID == "" {
 			draftChangeID = gitutil.FallbackChangeID(draftSHA)
 		}
-	}
-
-	changeID := info.ChangeID
-	if checkpoint != nil && checkpoint.ChangeID != "" {
-		changeID = checkpoint.ChangeID
-	} else if draftChangeID != "" {
 		changeID = draftChangeID
 	}
+	if changeID == "" && info.ChangeID != "" {
+		changeID = info.ChangeID
+	}
 	if changeID == "" {
-		changeID = gitutil.FallbackChangeID(info.SHA)
+		if draftSHA != "" {
+			changeID = gitutil.FallbackChangeID(draftSHA)
+		} else {
+			changeID = gitutil.FallbackChangeID(info.SHA)
+		}
 	}
 
 	suggestStart := time.Now()
@@ -160,7 +179,7 @@ func buildLocalStatus() (output.Status, error) {
 			status.TrackRef = strings.TrimSpace(cfg.TrackRef)
 			status.TrackTip = strings.TrimSpace(cfg.TrackTip)
 			if status.TrackRef != "" {
-				if tip, err := gitutil.Git("-C", repoRoot, "rev-parse", status.TrackRef); err == nil {
+				if tip, err := gitutil.ResolveRef(status.TrackRef); err == nil {
 					status.TrackTipCurrent = strings.TrimSpace(tip)
 					if status.TrackTip != "" && status.TrackTipCurrent != "" && status.TrackTipCurrent != status.TrackTip {
 						status.BaseAdvanced = true
@@ -437,48 +456,74 @@ func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
 }
 
 func readWorkingTreeStatus() (*output.WorkingTreeStatus, error) {
-	out, err := gitutil.Git("status", "--porcelain")
-	if err != nil {
-		return nil, err
+	type cmdResult struct {
+		out string
+		err error
 	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return &output.WorkingTreeStatus{Clean: true}, nil
+	statusCh := make(chan cmdResult, 1)
+	untrackedCh := make(chan cmdResult, 1)
+	go func() {
+		out, err := gitutil.Git("status", "--porcelain", "-uno")
+		statusCh <- cmdResult{out: out, err: err}
+	}()
+	go func() {
+		out, err := gitutil.Git("ls-files", "--others", "--exclude-standard")
+		untrackedCh <- cmdResult{out: out, err: err}
+	}()
+
+	statusRes := <-statusCh
+	untrackedRes := <-untrackedCh
+	if statusRes.err != nil {
+		return nil, statusRes.err
+	}
+	if untrackedRes.err != nil {
+		return nil, untrackedRes.err
 	}
 
 	status := &output.WorkingTreeStatus{}
-	lines := strings.Split(out, "\n")
-	for _, line := range lines {
-		if len(line) < 2 {
-			continue
+	out := strings.TrimSpace(statusRes.out)
+	if out != "" {
+		lines := strings.Split(out, "\n")
+		for _, line := range lines {
+			if len(line) < 2 {
+				continue
+			}
+			code := line[:2]
+			path := strings.TrimSpace(line[2:])
+			if path == "" {
+				continue
+			}
+			staged := code[0]
+			unstaged := code[1]
+			if staged != ' ' {
+				status.Staged = append(status.Staged, output.WorkingTreeEntry{
+					Path:   path,
+					Status: string(staged),
+				})
+			}
+			if unstaged != ' ' && unstaged != '?' {
+				status.Unstaged = append(status.Unstaged, output.WorkingTreeEntry{
+					Path:   path,
+					Status: string(unstaged),
+				})
+			}
 		}
-		code := line[:2]
-		path := strings.TrimSpace(line[2:])
-		if path == "" {
-			continue
-		}
-		if code == "??" {
+	}
+
+	untracked := strings.TrimSpace(untrackedRes.out)
+	if untracked != "" {
+		for _, line := range strings.Split(untracked, "\n") {
+			path := strings.TrimSpace(line)
+			if path == "" {
+				continue
+			}
 			status.Untracked = append(status.Untracked, output.WorkingTreeEntry{
 				Path:   path,
 				Status: "?",
 			})
-			continue
-		}
-		staged := code[0]
-		unstaged := code[1]
-		if staged != ' ' {
-			status.Staged = append(status.Staged, output.WorkingTreeEntry{
-				Path:   path,
-				Status: string(staged),
-			})
-		}
-		if unstaged != ' ' && unstaged != '?' {
-			status.Unstaged = append(status.Unstaged, output.WorkingTreeEntry{
-				Path:   path,
-				Status: string(unstaged),
-			})
 		}
 	}
+
 	if len(status.Staged) == 0 && len(status.Unstaged) == 0 && len(status.Untracked) == 0 {
 		status.Clean = true
 	}

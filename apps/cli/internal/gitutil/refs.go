@@ -9,6 +9,9 @@ func RefExists(ref string) bool {
 	if strings.TrimSpace(ref) == "" {
 		return false
 	}
+	if exists, ok := refExistsFast(ref); ok {
+		return exists
+	}
 	_, err := git("show-ref", "--verify", "--quiet", ref)
 	return err == nil
 }
@@ -16,6 +19,9 @@ func RefExists(ref string) bool {
 func ResolveRef(ref string) (string, error) {
 	if strings.TrimSpace(ref) == "" {
 		return "", fmt.Errorf("ref required")
+	}
+	if sha, ok := resolveRefFast(ref); ok {
+		return sha, nil
 	}
 	return git("rev-parse", ref)
 }

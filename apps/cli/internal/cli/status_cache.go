@@ -11,6 +11,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
 	"github.com/lydakis/jul/cli/internal/output"
+	"github.com/lydakis/jul/cli/internal/syncer"
 )
 
 const statusCacheLimit = 20
@@ -131,6 +132,110 @@ func refreshStatusCache(repoRoot string) (*statusCache, error) {
 		return nil, err
 	}
 	return &cache, nil
+}
+
+func updateStatusCacheForCheckpoint(repoRoot string, res syncer.CheckpointResult) (*statusCache, error) {
+	if strings.TrimSpace(repoRoot) == "" {
+		root, err := gitutil.RepoTopLevel()
+		if err != nil {
+			return nil, err
+		}
+		repoRoot = root
+	}
+	cache, err := readStatusCache(repoRoot)
+	if err != nil || cache == nil {
+		return refreshStatusCache(repoRoot)
+	}
+
+	author, when, message := checkpointLogInfo(res.CheckpointSHA)
+	whenLabel := ""
+	if !when.IsZero() {
+		whenLabel = when.Format("2006-01-02 15:04:05")
+	}
+	summary := output.CheckpointSummary{
+		CommitSHA: res.CheckpointSHA,
+		Message:   firstLine(message),
+		ChangeID:  res.ChangeID,
+		When:      whenLabel,
+	}
+	last := &output.CheckpointStatus{
+		CommitSHA: res.CheckpointSHA,
+		Message:   summary.Message,
+		Author:    author,
+		When:      whenLabel,
+		ChangeID:  res.ChangeID,
+	}
+
+	updated := make([]output.CheckpointSummary, 0, statusCacheLimit)
+	if summary.CommitSHA != "" {
+		updated = append(updated, summary)
+	}
+	for _, cp := range cache.Checkpoints {
+		if cp.CommitSHA == "" || cp.CommitSHA == summary.CommitSHA {
+			continue
+		}
+		updated = append(updated, cp)
+		if len(updated) >= statusCacheLimit {
+			break
+		}
+	}
+
+	cache.WorkspaceID = strings.TrimSpace(config.WorkspaceID())
+	_, workspace := workspaceParts()
+	cache.Workspace = strings.TrimSpace(workspace)
+	cache.GeneratedAt = time.Now().UTC()
+	cache.LastCheckpoint = last
+	cache.Checkpoints = updated
+	cache.DraftFilesChanged = draftFilesChangedFrom(res.CheckpointSHA, res.DraftSHA)
+	if cache.SuggestionsPendingByChange == nil {
+		cache.SuggestionsPendingByChange = map[string]int{}
+	}
+	if res.ChangeID != "" {
+		if _, ok := cache.SuggestionsPendingByChange[res.ChangeID]; !ok {
+			cache.SuggestionsPendingByChange[res.ChangeID] = 0
+		}
+	}
+
+	if cache.PromoteStatus != nil && cache.PromoteStatus.Target != "" && res.CheckpointSHA != "" {
+		targetRef := "refs/heads/" + cache.PromoteStatus.Target
+		if gitutil.RefExists(targetRef) {
+			cache.PromoteStatus.Eligible = true
+			if !gitutil.IsAncestor(res.CheckpointSHA, targetRef) {
+				cache.PromoteStatus.CheckpointsAhead++
+			}
+		} else {
+			cache.PromoteStatus.Eligible = false
+		}
+	}
+
+	if err := writeStatusCache(repoRoot, *cache); err != nil {
+		return nil, err
+	}
+	return cache, nil
+}
+
+func checkpointLogInfo(commitSHA string) (string, time.Time, string) {
+	if strings.TrimSpace(commitSHA) == "" {
+		return "", time.Time{}, ""
+	}
+	out, err := gitutil.Git("log", "-1", "--format=%an%x00%cI%x00%B", commitSHA)
+	if err != nil {
+		return "", time.Time{}, ""
+	}
+	parts := strings.SplitN(out, "\x00", 3)
+	if len(parts) < 3 {
+		return "", time.Time{}, strings.TrimSpace(out)
+	}
+	author := strings.TrimSpace(parts[0])
+	whenISO := strings.TrimSpace(parts[1])
+	message := parts[2]
+	when := time.Time{}
+	if whenISO != "" {
+		if parsed, err := time.Parse(time.RFC3339, whenISO); err == nil {
+			when = parsed
+		}
+	}
+	return author, when, message
 }
 
 func cacheMatchesWorkspace(cache *statusCache, wsID, workspace string) bool {
