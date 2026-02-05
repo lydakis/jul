@@ -41,6 +41,7 @@ type CheckpointResult struct {
 	CheckpointSHA    string
 	DraftSHA         string
 	ChangeID         string
+	Message          string `json:"-"`
 	TraceBase        string
 	TraceHead        string
 	WorkspaceRef     string
@@ -377,37 +378,35 @@ func ensureWorkspaceAligned(syncRes Result) error {
 func Checkpoint(message string) (CheckpointResult, error) {
 	timings := metrics.NewTimings()
 	syncStart := time.Now()
-	syncRes, err := SyncWithOptions(SyncOptions{SkipTrace: true})
-	timings.Add("sync", time.Since(syncStart))
-	if err != nil {
-		return CheckpointResult{}, err
-	}
-	if err := ensureWorkspaceAligned(syncRes); err != nil {
-		return CheckpointResult{}, err
-	}
-	treeSHA := strings.TrimSpace(syncRes.TreeSHA)
-	traceStart := time.Now()
-	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true, TreeSHA: treeSHA})
-	timings.Add("trace", time.Since(traceStart))
-	if err != nil {
-		return CheckpointResult{}, err
-	}
-	if treeSHA == "" {
-		treeSHA = strings.TrimSpace(traceRes.TreeSHA)
-	}
-	if treeSHA == "" {
-		var err error
-		treeSHA, err = gitutil.DraftTree()
-		if err != nil {
-			return CheckpointResult{}, err
-		}
-	}
-
-	commitStart := time.Now()
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return CheckpointResult{}, err
 	}
+
+	remoteName := ""
+	remoteProblem := ""
+	remote, rerr := remotesel.Resolve()
+	if rerr == nil {
+		remoteName = remote.Name
+	} else {
+		switch rerr {
+		case remotesel.ErrNoRemote:
+			remoteProblem = "no remote configured"
+		case remotesel.ErrMultipleRemote:
+			remoteProblem = "multiple remotes found; run 'jul remote set <name>'"
+		case remotesel.ErrRemoteMissing:
+			remoteProblem = "configured remote not found"
+		default:
+			return CheckpointResult{}, rerr
+		}
+	}
+
+	if rerr == nil {
+		_, _ = identity.ResolveUserNamespace(remote.Name)
+	} else {
+		_, _ = identity.ResolveUserNamespace("")
+	}
+
 	user, workspace := workspaceParts()
 	if workspace == "" {
 		workspace = "@"
@@ -420,22 +419,86 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	workspaceRef := fmt.Sprintf("refs/jul/workspaces/%s/%s", user, workspace)
 	syncRef := fmt.Sprintf("refs/jul/sync/%s/%s/%s", user, deviceID, workspace)
 
-	draftSHA := syncRes.DraftSHA
-	if draftSHA == "" {
-		return CheckpointResult{}, fmt.Errorf("draft sha missing")
+	if remoteName != "" {
+		_ = fetchRef(remoteName, workspaceRef)
+	}
+	workspaceTip := ""
+	if gitutil.RefExists(workspaceRef) {
+		if sha, err := gitutil.ResolveRef(workspaceRef); err == nil {
+			workspaceTip = strings.TrimSpace(sha)
+		}
 	}
 
-	changeID := strings.TrimSpace(syncRes.ChangeID)
-	if changeID == "" {
-		draftMessage, _ := gitutil.CommitMessage(draftSHA)
-		changeID = gitutil.ExtractChangeID(draftMessage)
-		if changeID == "" {
-			if generated, err := gitutil.NewChangeID(); err == nil {
-				changeID = generated
+	leaseBase, _ := readWorkspaceLease(repoRoot, workspace)
+	leaseBase = strings.TrimSpace(leaseBase)
+	if leaseBase != "" {
+		if msg, err := gitutil.CommitMessage(leaseBase); err == nil && isDraftMessage(msg) {
+			if parent, err := gitutil.ParentOf(leaseBase); err == nil && strings.TrimSpace(parent) != "" {
+				leaseBase = strings.TrimSpace(parent)
+			}
+		}
+	}
+	workspaceBase := strings.TrimSpace(workspaceTip)
+	if workspaceBase != "" {
+		if msg, err := gitutil.CommitMessage(workspaceBase); err == nil && isDraftMessage(msg) {
+			if parent, err := gitutil.ParentOf(workspaceBase); err == nil && strings.TrimSpace(parent) != "" {
+				workspaceBase = strings.TrimSpace(parent)
 			}
 		}
 	}
 
+	diverged := false
+	if leaseBase == "" && workspaceBase != "" {
+		diverged = true
+		remoteProblem = "workspace lease missing; run 'jul ws checkout' first"
+	}
+	if leaseBase != "" && workspaceBase != "" && leaseBase != workspaceBase {
+		if !gitutil.IsAncestor(leaseBase, workspaceBase) {
+			diverged = true
+			remoteProblem = "workspace lease corrupted; run 'jul ws checkout' to realign"
+		}
+	}
+
+	parentSHA, changeID := resolveDraftBase(workspaceRef, syncRef)
+	if leaseBase != "" {
+		parentSHA = leaseBase
+	} else if workspaceTip != "" {
+		parentSHA = workspaceTip
+	}
+	if strings.TrimSpace(parentSHA) == "" {
+		if head, err := gitutil.ResolveRef("HEAD"); err == nil {
+			parentSHA = strings.TrimSpace(head)
+		}
+	}
+	if changeID == "" && parentSHA != "" {
+		if msg, err := gitutil.CommitMessage(parentSHA); err == nil {
+			changeID = gitutil.ExtractChangeID(msg)
+		}
+	}
+	if changeID == "" {
+		if generated, err := gitutil.NewChangeID(); err == nil {
+			changeID = generated
+		}
+	}
+
+	treeSHA, err := gitutil.DraftTree()
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	timings.Add("sync", time.Since(syncStart))
+
+	if err := ensureWorkspaceAligned(Result{Diverged: diverged, RemoteProblem: remoteProblem}); err != nil {
+		return CheckpointResult{}, err
+	}
+
+	traceStart := time.Now()
+	traceRes, err := Trace(TraceOptions{Force: true, UpdateCanonical: true, TreeSHA: treeSHA})
+	timings.Add("trace", time.Since(traceStart))
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+
+	commitStart := time.Now()
 	if strings.TrimSpace(message) == "" {
 		message = "checkpoint"
 	}
@@ -447,41 +510,30 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		message = ensureTrailer(message, "Trace-Base", traceRes.TraceBase)
 	}
 
-	if treeSHA == "" {
-		treeSHA = strings.TrimSpace(syncRes.TreeSHA)
-	}
-	if treeSHA == "" {
-		treeSHA, err = gitutil.TreeOf(draftSHA)
-		if err != nil {
-			return CheckpointResult{}, err
-		}
-	}
-	parentSHA, _ := gitutil.ParentOf(draftSHA)
 	checkpointSHA, err := gitutil.CommitTree(treeSHA, parentSHA, message)
 	if err != nil {
 		return CheckpointResult{}, err
 	}
 
 	keepRef := keepRefPath(user, workspace, changeID, checkpointSHA)
-	if err := gitutil.UpdateRef(keepRef, checkpointSHA); err != nil {
-		return CheckpointResult{}, err
-	}
 	changeRef := changeRefPath(changeID)
-	if err := gitutil.UpdateRef(changeRef, checkpointSHA); err != nil {
-		return CheckpointResult{}, err
-	}
 	anchorRef := anchorRefPath(changeID)
-	if !gitutil.RefExists(anchorRef) {
-		if err := gitutil.UpdateRef(anchorRef, checkpointSHA); err != nil {
-			return CheckpointResult{}, err
-		}
-	}
-
 	newDraftSHA, err := gitutil.CreateDraftCommitFromTree(treeSHA, checkpointSHA, changeID)
 	if err != nil {
 		return CheckpointResult{}, err
 	}
-	if err := gitutil.UpdateRef(syncRef, newDraftSHA); err != nil {
+	updates := []gitutil.RefUpdate{
+		{Ref: keepRef, SHA: checkpointSHA},
+		{Ref: changeRef, SHA: checkpointSHA},
+		{Ref: syncRef, SHA: newDraftSHA},
+	}
+	if !gitutil.RefExists(anchorRef) {
+		updates = append(updates, gitutil.RefUpdate{Ref: anchorRef, SHA: checkpointSHA})
+	}
+	if !diverged {
+		updates = append(updates, gitutil.RefUpdate{Ref: workspaceRef, SHA: checkpointSHA})
+	}
+	if err := gitutil.UpdateRefs(updates); err != nil {
 		return CheckpointResult{}, err
 	}
 	timings.Add("commit", time.Since(commitStart))
@@ -490,22 +542,20 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		CheckpointSHA: checkpointSHA,
 		DraftSHA:      newDraftSHA,
 		ChangeID:      changeID,
+		Message:       message,
 		TraceBase:     traceRes.TraceBase,
 		TraceHead:     traceRes.CanonicalSHA,
 		WorkspaceRef:  workspaceRef,
 		SyncRef:       syncRef,
 		KeepRef:       keepRef,
-		RemoteName:    syncRes.RemoteName,
-		RemotePushed:  syncRes.RemotePushed,
-		Diverged:      syncRes.Diverged,
-		RemoteProblem: syncRes.RemoteProblem,
+		RemoteName:    remoteName,
+		RemotePushed:  false,
+		Diverged:      diverged,
+		RemoteProblem: remoteProblem,
 		Timings:       timings,
 	}
 
-	if !syncRes.Diverged {
-		if err := gitutil.UpdateRef(workspaceRef, checkpointSHA); err != nil {
-			return res, err
-		}
+	if !diverged {
 		res.WorkspaceUpdated = true
 		if err := writeWorkspaceLease(repoRoot, workspace, checkpointSHA); err != nil {
 			return res, err
@@ -515,9 +565,9 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		}
 	}
 
-	if syncRes.RemoteName != "" {
+	if remoteName != "" {
 		checkpointSync := config.CheckpointSyncEnabled()
-		workspaceRemote, _ := remoteRefTip(syncRes.RemoteName, workspaceRef)
+		workspaceRemote, _ := remoteRefTip(remoteName, workspaceRef)
 		if config.DraftSyncEnabled() {
 			allowSecrets := config.AllowDraftSecrets()
 			ok, reason, err := DraftPushAllowed(repoRoot, checkpointSHA, newDraftSHA, allowSecrets)
@@ -525,7 +575,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 				return res, err
 			}
 			if ok {
-				if err := pushRef(syncRes.RemoteName, newDraftSHA, syncRef, true); err != nil {
+				if err := pushRef(remoteName, newDraftSHA, syncRef, true); err != nil {
 					return res, err
 				}
 				res.RemotePushed = true
@@ -538,22 +588,22 @@ func Checkpoint(message string) (CheckpointResult, error) {
 			}
 		}
 		if res.WorkspaceUpdated && checkpointSync {
-			if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, workspaceRef, workspaceRemote); err != nil {
+			if err := pushWorkspace(remoteName, checkpointSHA, workspaceRef, workspaceRemote); err != nil {
 				return res, err
 			}
 		}
 		if checkpointSync {
-			if err := pushKeepRefs(syncRes.RemoteName, user, workspace); err != nil {
+			if err := pushKeepRefs(remoteName, user, workspace); err != nil {
 				return res, err
 			}
-			if err := pushJulNotes(syncRes.RemoteName); err != nil {
+			if err := pushJulNotes(remoteName); err != nil {
 				return res, err
 			}
-			if err := pushRef(syncRes.RemoteName, checkpointSHA, keepRef, true); err != nil {
+			if err := pushRef(remoteName, checkpointSHA, keepRef, true); err != nil {
 				return res, err
 			}
-			changeRemote, _ := remoteRefTip(syncRes.RemoteName, changeRef)
-			if err := pushWorkspace(syncRes.RemoteName, checkpointSHA, changeRef, changeRemote); err != nil {
+			changeRemote, _ := remoteRefTip(remoteName, changeRef)
+			if err := pushWorkspace(remoteName, checkpointSHA, changeRef, changeRemote); err != nil {
 				return res, err
 			}
 			localAnchor, _ := gitutil.ResolveRef(anchorRef)
@@ -561,9 +611,9 @@ func Checkpoint(message string) (CheckpointResult, error) {
 			if localAnchor == "" {
 				return res, fmt.Errorf("anchor ref missing for change %s", changeID)
 			}
-			anchorRemote, _ := remoteRefTip(syncRes.RemoteName, anchorRef)
+			anchorRemote, _ := remoteRefTip(remoteName, anchorRef)
 			if strings.TrimSpace(anchorRemote) == "" {
-				if err := pushRef(syncRes.RemoteName, localAnchor, anchorRef, false); err != nil {
+				if err := pushRef(remoteName, localAnchor, anchorRef, false); err != nil {
 					return res, err
 				}
 			} else if strings.TrimSpace(anchorRemote) != localAnchor {
@@ -653,6 +703,7 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 		CheckpointSHA: headSHA,
 		DraftSHA:      newDraftSHA,
 		ChangeID:      changeID,
+		Message:       headMsg,
 		TraceBase:     traceRes.TraceBase,
 		TraceHead:     traceRes.CanonicalSHA,
 		WorkspaceRef:  workspaceRef,

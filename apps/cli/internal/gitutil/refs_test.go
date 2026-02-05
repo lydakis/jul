@@ -169,3 +169,59 @@ func TestListRefsFastAndRefExists(t *testing.T) {
 		t.Fatalf("expected RefExists to be false for missing ref")
 	}
 }
+
+func TestUpdateRefs(t *testing.T) {
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = repo
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+	cmd = exec.Command("git", "config", "user.name", "Test User")
+	cmd.Dir = repo
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git config user.name failed: %v", err)
+	}
+	cmd = exec.Command("git", "config", "user.email", "test@example.com")
+	cmd.Dir = repo
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git config user.email failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write file failed: %v", err)
+	}
+	cmd = exec.Command("git", "add", "README.md")
+	cmd.Dir = repo
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git add failed: %v", err)
+	}
+	cmd = exec.Command("git", "commit", "-m", "test commit")
+	cmd.Dir = repo
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git commit failed: %v", err)
+	}
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() {
+		_ = os.Chdir(cwd)
+	})
+
+	headSHA, err := ResolveRef("HEAD")
+	if err != nil {
+		t.Fatalf("ResolveRef HEAD failed: %v", err)
+	}
+	updates := []RefUpdate{
+		{Ref: "refs/jul/test/a", SHA: headSHA},
+		{Ref: "refs/jul/test/b", SHA: headSHA},
+	}
+	if err := UpdateRefs(updates); err != nil {
+		t.Fatalf("UpdateRefs failed: %v", err)
+	}
+	if !RefExists("refs/jul/test/a") {
+		t.Fatalf("expected refs/jul/test/a to exist")
+	}
+	if !RefExists("refs/jul/test/b") {
+		t.Fatalf("expected refs/jul/test/b to exist")
+	}
+}

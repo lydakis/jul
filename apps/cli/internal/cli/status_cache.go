@@ -147,11 +147,13 @@ func updateStatusCacheForCheckpoint(repoRoot string, res syncer.CheckpointResult
 		return refreshStatusCache(repoRoot)
 	}
 
-	author, when, message := checkpointLogInfo(res.CheckpointSHA)
-	whenLabel := ""
-	if !when.IsZero() {
-		whenLabel = when.Format("2006-01-02 15:04:05")
+	author := strings.TrimSpace(config.UserName())
+	if author == "" {
+		author = "user"
 	}
+	when := time.Now().UTC()
+	whenLabel := when.Format("2006-01-02 15:04:05")
+	message := strings.TrimSpace(res.Message)
 	summary := output.CheckpointSummary{
 		CommitSHA: res.CheckpointSHA,
 		Message:   firstLine(message),
@@ -186,7 +188,7 @@ func updateStatusCacheForCheckpoint(repoRoot string, res syncer.CheckpointResult
 	cache.GeneratedAt = time.Now().UTC()
 	cache.LastCheckpoint = last
 	cache.Checkpoints = updated
-	cache.DraftFilesChanged = draftFilesChangedFrom(res.CheckpointSHA, res.DraftSHA)
+	cache.DraftFilesChanged = 0
 	if cache.SuggestionsPendingByChange == nil {
 		cache.SuggestionsPendingByChange = map[string]int{}
 	}
@@ -196,46 +198,14 @@ func updateStatusCacheForCheckpoint(repoRoot string, res syncer.CheckpointResult
 		}
 	}
 
-	if cache.PromoteStatus != nil && cache.PromoteStatus.Target != "" && res.CheckpointSHA != "" {
-		targetRef := "refs/heads/" + cache.PromoteStatus.Target
-		if gitutil.RefExists(targetRef) {
-			cache.PromoteStatus.Eligible = true
-			if !gitutil.IsAncestor(res.CheckpointSHA, targetRef) {
-				cache.PromoteStatus.CheckpointsAhead++
-			}
-		} else {
-			cache.PromoteStatus.Eligible = false
-		}
+	if cache.PromoteStatus != nil && cache.PromoteStatus.Target != "" && cache.PromoteStatus.Eligible {
+		cache.PromoteStatus.CheckpointsAhead++
 	}
 
 	if err := writeStatusCache(repoRoot, *cache); err != nil {
 		return nil, err
 	}
 	return cache, nil
-}
-
-func checkpointLogInfo(commitSHA string) (string, time.Time, string) {
-	if strings.TrimSpace(commitSHA) == "" {
-		return "", time.Time{}, ""
-	}
-	out, err := gitutil.Git("log", "-1", "--format=%an%x00%cI%x00%B", commitSHA)
-	if err != nil {
-		return "", time.Time{}, ""
-	}
-	parts := strings.SplitN(out, "\x00", 3)
-	if len(parts) < 3 {
-		return "", time.Time{}, strings.TrimSpace(out)
-	}
-	author := strings.TrimSpace(parts[0])
-	whenISO := strings.TrimSpace(parts[1])
-	message := parts[2]
-	when := time.Time{}
-	if whenISO != "" {
-		if parsed, err := time.Parse(time.RFC3339, whenISO); err == nil {
-			when = parsed
-		}
-	}
-	return author, when, message
 }
 
 func cacheMatchesWorkspace(cache *statusCache, wsID, workspace string) bool {

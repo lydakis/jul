@@ -122,10 +122,6 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 	}
 	res.TraceSHA = traceSHA
 
-	if err := gitutil.UpdateRef(traceSyncRef, traceSHA); err != nil {
-		return res, err
-	}
-
 	prompt := strings.TrimSpace(opts.Prompt)
 	var promptHash string
 	if prompt != "" {
@@ -212,11 +208,6 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 			}
 		}
 		res.CanonicalSHA = canonical
-		if canonical != "" {
-			if err := gitutil.UpdateRef(traceRef, canonical); err != nil {
-				return res, err
-			}
-		}
 	} else if sha, err := gitutil.ResolveRef(traceRef); err == nil {
 		res.CanonicalSHA = strings.TrimSpace(sha)
 	}
@@ -230,6 +221,14 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 			CreatedAt: time.Now().UTC(),
 		}
 		_ = metadata.WriteTrace(mergeNote)
+	}
+
+	updates := []gitutil.RefUpdate{{Ref: traceSyncRef, SHA: traceSHA}}
+	if allowCanonical && canonical != "" {
+		updates = append(updates, gitutil.RefUpdate{Ref: traceRef, SHA: canonical})
+	}
+	if err := gitutil.UpdateRefs(updates); err != nil {
+		return res, err
 	}
 
 	if rerr == nil && allowRemote {

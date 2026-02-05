@@ -2,8 +2,14 @@ package gitutil
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 )
+
+type RefUpdate struct {
+	Ref string
+	SHA string
+}
 
 func RefExists(ref string) bool {
 	if strings.TrimSpace(ref) == "" {
@@ -32,6 +38,32 @@ func UpdateRef(ref, sha string) error {
 	}
 	_, err := git("update-ref", ref, sha)
 	return err
+}
+
+func UpdateRefs(updates []RefUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	repoRoot, err := RepoTopLevel()
+	if err != nil {
+		return err
+	}
+	var input strings.Builder
+	for _, update := range updates {
+		ref := strings.TrimSpace(update.Ref)
+		sha := strings.TrimSpace(update.SHA)
+		if ref == "" || sha == "" {
+			return fmt.Errorf("ref and sha required")
+		}
+		fmt.Fprintf(&input, "update %s %s\n", ref, sha)
+	}
+	cmd := exec.Command("git", "-C", repoRoot, "update-ref", "--stdin")
+	cmd.Stdin = strings.NewReader(input.String())
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git update-ref --stdin failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func ParentOf(sha string) (string, error) {

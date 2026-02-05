@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/lydakis/jul/cli/internal/syncignore"
 )
@@ -95,13 +96,26 @@ func updateIndexIncremental(repoRoot, indexPath, excludePath string) error {
 	env := map[string]string{
 		"GIT_INDEX_FILE": indexPath,
 	}
-	diffOut, err := gitWithEnv(repoRoot, env, "-c", "core.excludesfile="+excludePath, "diff", "--name-only", "-z")
-	if err != nil {
-		return err
+	var diffOut string
+	var diffErr error
+	var untrackedOut string
+	var untrackedErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		diffOut, diffErr = gitWithEnv(repoRoot, env, "-c", "core.excludesfile="+excludePath, "diff", "--name-only", "-z")
+	}()
+	go func() {
+		defer wg.Done()
+		untrackedOut, untrackedErr = gitWithEnv(repoRoot, env, "-c", "core.excludesfile="+excludePath, "ls-files", "--others", "--exclude-standard", "-z")
+	}()
+	wg.Wait()
+	if diffErr != nil {
+		return diffErr
 	}
-	untrackedOut, err := gitWithEnv(repoRoot, env, "-c", "core.excludesfile="+excludePath, "ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return err
+	if untrackedErr != nil {
+		return untrackedErr
 	}
 	paths := collectChangedPaths(diffOut, untrackedOut)
 	if len(paths) == 0 {
