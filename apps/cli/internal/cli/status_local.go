@@ -16,6 +16,7 @@ import (
 
 func buildLocalStatus() (output.Status, error) {
 	timings := metrics.NewTimings()
+	commitStart := time.Now()
 	info, err := gitutil.CurrentCommit()
 	if err != nil {
 		info, err = fallbackCommitInfo()
@@ -23,20 +24,26 @@ func buildLocalStatus() (output.Status, error) {
 			return output.Status{}, err
 		}
 	}
+	timings.Add("commit_info", time.Since(commitStart))
 	repoName := config.RepoName()
 	if repoName != "" {
 		info.RepoName = repoName
 	}
 
+	workspaceStart := time.Now()
 	user, workspace := workspaceParts()
 	if workspace == "" {
 		workspace = "@"
 	}
 	wsID := config.WorkspaceID()
+	timings.Add("workspace", time.Since(workspaceStart))
+	repoRootStart := time.Now()
 	repoRoot, _ := gitutil.RepoTopLevel()
+	timings.Add("repo_root", time.Since(repoRootStart))
 
+	draftStart := time.Now()
 	draftSHA := ""
-	if ref, err := syncRef(user, workspace); err == nil && gitutil.RefExists(ref) {
+	if ref, err := syncRef(user, workspace); err == nil {
 		if sha, err := gitutil.ResolveRef(ref); err == nil {
 			draftSHA = sha
 		}
@@ -44,6 +51,7 @@ func buildLocalStatus() (output.Status, error) {
 	if draftSHA == "" {
 		draftSHA = info.SHA
 	}
+	timings.Add("draft_sha", time.Since(draftStart))
 
 	var checkpoint *output.CheckpointStatus
 	var attView attestationView
@@ -57,10 +65,18 @@ func buildLocalStatus() (output.Status, error) {
 		}
 		timings.Add("read_cache", time.Since(cacheStart))
 	}
+	attStart := time.Now()
+	attResolved := false
 	if cached != nil && cached.LastCheckpoint != nil {
 		checkpoint = cached.LastCheckpoint
-		if checkpoint.CommitSHA != "" {
+		if cachedView, ok := cachedAttestationView(cached, checkpoint.CommitSHA); ok {
+			attView = cachedView
+			attResolved = true
+		} else if checkpoint.CommitSHA != "" {
 			attView, _ = resolveAttestationView(checkpoint.CommitSHA)
+			if attView.Status != "" || attView.Attestation != nil || attView.InheritedFrom != "" {
+				attResolved = true
+			}
 		}
 	} else {
 		last, err := latestCheckpoint()
@@ -76,14 +92,20 @@ func buildLocalStatus() (output.Status, error) {
 				ChangeID:  last.ChangeID,
 			}
 			attView, _ = resolveAttestationView(last.SHA)
+			if attView.Status != "" || attView.Attestation != nil || attView.InheritedFrom != "" {
+				attResolved = true
+			}
 		}
 	}
-	if attView.Attestation == nil && draftSHA != "" {
-		attView, _ = resolveAttestationView(draftSHA)
+	if !attResolved && draftSHA != "" {
+		if checkpoint == nil || checkpoint.CommitSHA != draftSHA {
+			attView, _ = resolveAttestationView(draftSHA)
+		}
 	}
-	if attView.Attestation == nil {
+	if !attResolved && info.SHA != "" && info.SHA != draftSHA {
 		attView, _ = resolveAttestationView(info.SHA)
 	}
+	timings.Add("attestation", time.Since(attStart))
 
 	draftChangeID := ""
 	if draftSHA != "" {
@@ -105,9 +127,12 @@ func buildLocalStatus() (output.Status, error) {
 		changeID = gitutil.FallbackChangeID(info.SHA)
 	}
 
+	suggestStart := time.Now()
 	suggestionsPending := 0
-	if cached != nil && cached.SuggestionsPendingByChange != nil {
-		suggestionsPending = cached.SuggestionsPendingByChange[changeID]
+	if cached != nil {
+		if cached.SuggestionsPendingByChange != nil {
+			suggestionsPending = cached.SuggestionsPendingByChange[changeID]
+		}
 	} else {
 		suggestions, err := metadata.ListSuggestions(changeID, "pending", 1000)
 		if err != nil {
@@ -115,6 +140,7 @@ func buildLocalStatus() (output.Status, error) {
 		}
 		suggestionsPending = len(suggestions)
 	}
+	timings.Add("suggestions_pending", time.Since(suggestStart))
 
 	status := output.Status{
 		WorkspaceID:        wsID,
@@ -129,6 +155,7 @@ func buildLocalStatus() (output.Status, error) {
 		SuggestionsPending: suggestionsPending,
 	}
 	if repoRoot != "" {
+		trackStart := time.Now()
 		if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err == nil && ok {
 			status.TrackRef = strings.TrimSpace(cfg.TrackRef)
 			status.TrackTip = strings.TrimSpace(cfg.TrackTip)
@@ -141,6 +168,7 @@ func buildLocalStatus() (output.Status, error) {
 				}
 			}
 		}
+		timings.Add("track_ref", time.Since(trackStart))
 	}
 	if attView.Status != "" {
 		status.AttestationStatus = attView.Status
@@ -155,20 +183,41 @@ func buildLocalStatus() (output.Status, error) {
 		}
 	}
 
-	filesChanged := draftFilesChanged(draftSHA)
+	filesStart := time.Now()
+	filesChanged := 0
+	if cached != nil {
+		filesChanged = cached.DraftFilesChanged
+	} else {
+		baseSHA := ""
+		if checkpoint != nil && checkpoint.CommitSHA != "" {
+			baseSHA = checkpoint.CommitSHA
+		}
+		filesChanged = draftFilesChangedFrom(baseSHA, draftSHA)
+	}
+	timings.Add("draft_files", time.Since(filesStart))
 	status.Draft = &output.DraftStatus{
 		CommitSHA:    draftSHA,
 		ChangeID:     changeID,
 		FilesChanged: filesChanged,
 	}
+	draftCIStart := time.Now()
 	status.DraftCI = buildDraftCIStatus(draftSHA)
+	timings.Add("draft_ci", time.Since(draftCIStart))
+	workStart := time.Now()
 	if tree, err := readWorkingTreeStatus(); err == nil {
 		status.WorkingTree = tree
 	}
+	timings.Add("working_tree", time.Since(workStart))
 
 	if cached != nil && len(cached.Checkpoints) > 0 {
 		status.Checkpoints = cached.Checkpoints
-		status.PromoteStatus = buildPromoteStatusFromSummaries(cached.Checkpoints)
+		if cached.PromoteStatus != nil {
+			status.PromoteStatus = cached.PromoteStatus
+		} else {
+			promoteStart := time.Now()
+			status.PromoteStatus = buildPromoteStatusFromSummaries(cached.Checkpoints)
+			timings.Add("promote_status", time.Since(promoteStart))
+		}
 	} else {
 		fallbackStart := time.Now()
 		checkpoints, err := listCheckpoints(statusCacheLimit)
@@ -195,7 +244,9 @@ func buildLocalStatus() (output.Status, error) {
 			})
 		}
 		status.Checkpoints = summaries
+		promoteStart := time.Now()
 		status.PromoteStatus = buildPromoteStatusFromSummaries(summaries)
+		timings.Add("promote_status", time.Since(promoteStart))
 		timings.Add("fallback_scan", time.Since(fallbackStart))
 	}
 	status.Timings = timings
@@ -215,6 +266,23 @@ func buildPromoteStatusFromSummaries(checkpoints []output.CheckpointSummary) *ou
 		})
 	}
 	return buildPromoteStatus(entries)
+}
+
+func cachedAttestationView(cache *statusCache, commitSHA string) (attestationView, bool) {
+	if cache == nil || strings.TrimSpace(commitSHA) == "" {
+		return attestationView{}, false
+	}
+	for _, summary := range cache.Checkpoints {
+		if summary.CommitSHA != commitSHA {
+			continue
+		}
+		return attestationView{
+			Status:        summary.CIStatus,
+			Stale:         summary.CIStale,
+			InheritedFrom: summary.CIInheritedFrom,
+		}, true
+	}
+	return attestationView{}, false
 }
 
 func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {

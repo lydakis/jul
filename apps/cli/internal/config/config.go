@@ -7,10 +7,32 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
 	EnvWorkspace = "JUL_WORKSPACE"
+)
+
+type cachedConfig struct {
+	modTime time.Time
+	values  map[string]string
+}
+
+type cachedGitValue struct {
+	modTime time.Time
+	value   string
+}
+
+var (
+	configCacheMu  sync.Mutex
+	configCache    = map[string]cachedConfig{}
+	repoTopLevelMu sync.Mutex
+	repoTopLevelWD string
+	repoTopLevelOK string
+	gitConfigMu    sync.Mutex
+	gitConfigCache = map[string]cachedGitValue{}
 )
 
 func WorkspaceID() string {
@@ -311,12 +333,69 @@ func usernameFallback() string {
 }
 
 func gitConfigValue(key string) string {
+	configPath := gitConfigPath()
+	modTime := time.Time{}
+	if configPath != "" {
+		if info, err := os.Stat(configPath); err == nil {
+			modTime = info.ModTime()
+		}
+	}
+	cacheKey := configPath + "\x00" + key
+	if !modTime.IsZero() {
+		gitConfigMu.Lock()
+		if cached, ok := gitConfigCache[cacheKey]; ok && cached.modTime.Equal(modTime) {
+			gitConfigMu.Unlock()
+			return cached.value
+		}
+		gitConfigMu.Unlock()
+	}
 	cmd := exec.Command("git", "config", "--get", key)
 	output, err := cmd.Output()
 	if err != nil {
+		if !modTime.IsZero() {
+			gitConfigMu.Lock()
+			gitConfigCache[cacheKey] = cachedGitValue{modTime: modTime, value: ""}
+			gitConfigMu.Unlock()
+		}
 		return ""
 	}
-	return strings.TrimSpace(string(output))
+	value := strings.TrimSpace(string(output))
+	if !modTime.IsZero() {
+		gitConfigMu.Lock()
+		gitConfigCache[cacheKey] = cachedGitValue{modTime: modTime, value: value}
+		gitConfigMu.Unlock()
+	}
+	return value
+}
+
+func gitConfigPath() string {
+	root, err := repoTopLevel()
+	if err != nil {
+		return ""
+	}
+	gitDir := filepath.Join(root, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		return ""
+	}
+	if info.IsDir() {
+		return filepath.Join(gitDir, "config")
+	}
+	data, err := os.ReadFile(gitDir)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(data))
+	if strings.HasPrefix(line, "gitdir:") {
+		path := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+		if path != "" && !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		if path != "" {
+			return filepath.Join(path, "config")
+		}
+	}
+	return ""
 }
 
 func userConfigValue(key string) string {
@@ -324,11 +403,7 @@ func userConfigValue(key string) string {
 	if err != nil {
 		return ""
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	config := parseUserConfig(string(data))
+	config := readConfigCached(path)
 	return config[key]
 }
 
@@ -337,11 +412,7 @@ func repoConfigValue(key string) string {
 	if err != nil {
 		return ""
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	config := parseUserConfig(string(data))
+	config := readConfigCached(path)
 	return config[key]
 }
 
@@ -384,6 +455,48 @@ func parseUserConfig(raw string) map[string]string {
 	return config
 }
 
+func readConfigCached(path string) map[string]string {
+	if strings.TrimSpace(path) == "" {
+		return map[string]string{}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return map[string]string{}
+	}
+	configCacheMu.Lock()
+	if cached, ok := configCache[path]; ok {
+		if !cached.modTime.IsZero() && cached.modTime.Equal(info.ModTime()) && cached.values != nil {
+			values := cached.values
+			configCacheMu.Unlock()
+			return values
+		}
+	}
+	configCacheMu.Unlock()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]string{}
+	}
+	values := parseUserConfig(string(data))
+	configCacheMu.Lock()
+	configCache[path] = cachedConfig{modTime: info.ModTime(), values: values}
+	configCacheMu.Unlock()
+	return values
+}
+
+func updateConfigCache(path string, content []byte) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	values := parseUserConfig(string(content))
+	configCacheMu.Lock()
+	configCache[path] = cachedConfig{modTime: info.ModTime(), values: values}
+	configCacheMu.Unlock()
+}
+
 func configBool(key string, def bool) bool {
 	if cfg := configValue(key); cfg != "" {
 		normalized := strings.ToLower(strings.TrimSpace(cfg))
@@ -424,10 +537,28 @@ func repoConfigPath() (string, error) {
 }
 
 func repoTopLevel() (string, error) {
+	if wd, err := os.Getwd(); err == nil {
+		repoTopLevelMu.Lock()
+		if repoTopLevelOK != "" && repoTopLevelWD == wd {
+			root := repoTopLevelOK
+			repoTopLevelMu.Unlock()
+			return root, nil
+		}
+		repoTopLevelMu.Unlock()
+	}
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	root := strings.TrimSpace(string(output))
+	if root != "" {
+		if wd, err := os.Getwd(); err == nil {
+			repoTopLevelMu.Lock()
+			repoTopLevelWD = wd
+			repoTopLevelOK = root
+			repoTopLevelMu.Unlock()
+		}
+	}
+	return root, nil
 }

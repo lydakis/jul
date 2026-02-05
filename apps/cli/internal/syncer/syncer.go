@@ -63,6 +63,7 @@ func Sync() (Result, error) {
 func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 	timings := metrics.NewTimings()
 	totalStart := time.Now()
+	prepareStart := time.Now()
 	defer func() {
 		res.Timings = timings
 		res.Timings.TotalMs = time.Since(totalStart).Milliseconds()
@@ -198,6 +199,7 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 			hasCheckpoint = true
 		}
 	}
+	timings.Add("prepare", time.Since(prepareStart))
 	snapshotStart := time.Now()
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
@@ -335,7 +337,10 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 		timings.Add("push", time.Since(pushStart))
 	}
 
-	return finalizeSync(res, !res.Diverged)
+	finalizeStart := time.Now()
+	res, err = finalizeSync(res, !res.Diverged)
+	timings.Add("finalize", time.Since(finalizeStart))
+	return res, err
 }
 
 func finalizeSync(res Result, allowCanonical bool) (Result, error) {
@@ -693,13 +698,17 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 }
 
 func workspaceParts() (string, string) {
-	_, _ = identity.ResolveUserNamespace("")
 	id := strings.TrimSpace(config.WorkspaceID())
 	parts := strings.SplitN(id, "/", 2)
 	if len(parts) == 2 {
 		return parts[0], parts[1]
 	}
 	user := strings.TrimSpace(config.UserNamespace())
+	if user == "" {
+		if resolved, err := identity.ResolveUserNamespace(""); err == nil {
+			user = strings.TrimSpace(resolved)
+		}
+	}
 	if user == "" {
 		user = strings.TrimSpace(config.UserName())
 	}

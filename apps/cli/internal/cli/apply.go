@@ -204,8 +204,19 @@ func draftFilesChanged(draftSHA string) int {
 	if strings.TrimSpace(draftSHA) == "" {
 		return 0
 	}
+	base := ""
 	if checkpoint, _ := latestCheckpoint(); checkpoint != nil {
-		files, _ := diffNameOnly(checkpoint.SHA, draftSHA)
+		base = checkpoint.SHA
+	}
+	return draftFilesChangedFrom(base, draftSHA)
+}
+
+func draftFilesChangedFrom(baseSHA, draftSHA string) int {
+	if strings.TrimSpace(draftSHA) == "" {
+		return 0
+	}
+	if strings.TrimSpace(baseSHA) != "" {
+		files, _ := diffNameOnly(baseSHA, draftSHA)
 		return len(files)
 	}
 	if parent, err := gitutil.ParentOf(draftSHA); err == nil && strings.TrimSpace(parent) != "" {

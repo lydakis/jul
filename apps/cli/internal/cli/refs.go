@@ -11,13 +11,17 @@ import (
 )
 
 func workspaceParts() (string, string) {
-	_, _ = identity.ResolveUserNamespace("")
 	id := strings.TrimSpace(config.WorkspaceID())
 	parts := strings.SplitN(id, "/", 2)
 	if len(parts) == 2 {
 		return parts[0], parts[1]
 	}
 	user := strings.TrimSpace(config.UserNamespace())
+	if user == "" {
+		if resolved, err := identity.ResolveUserNamespace(""); err == nil {
+			user = strings.TrimSpace(resolved)
+		}
+	}
 	if user == "" {
 		user = strings.TrimSpace(config.UserName())
 	}

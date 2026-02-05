@@ -29,7 +29,11 @@ func SetRepoConfigValue(section, key, value string) error {
 		return err
 	}
 	content := renderConfigSections(sections)
-	return os.WriteFile(path, []byte(content), 0o644)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return err
+	}
+	updateConfigCache(path, []byte(content))
+	return nil
 }
 
 func parseConfigSections(raw string) map[string]map[string]string {

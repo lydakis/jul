@@ -21,6 +21,8 @@ type statusCache struct {
 	GeneratedAt                time.Time                  `json:"generated_at"`
 	LastCheckpoint             *output.CheckpointStatus   `json:"last_checkpoint,omitempty"`
 	Checkpoints                []output.CheckpointSummary `json:"checkpoints,omitempty"`
+	DraftFilesChanged          int                        `json:"draft_files_changed,omitempty"`
+	PromoteStatus              *output.PromoteStatus      `json:"promote_status,omitempty"`
 	SuggestionsPendingByChange map[string]int             `json:"suggestions_pending_by_change,omitempty"`
 }
 
@@ -62,12 +64,15 @@ func refreshStatusCache(repoRoot string) (*statusCache, error) {
 		repoRoot = root
 	}
 	wsID := strings.TrimSpace(config.WorkspaceID())
-	_, workspace := workspaceParts()
+	user, workspace := workspaceParts()
 	checkpoints, err := listCheckpoints(statusCacheLimit)
 	if err != nil {
 		return nil, err
 	}
 	pendingCounts, _ := metadata.PendingSuggestionCounts()
+	if pendingCounts == nil {
+		pendingCounts = map[string]int{}
+	}
 
 	summaries := make([]output.CheckpointSummary, 0, len(checkpoints))
 	for _, cp := range checkpoints {
@@ -99,6 +104,18 @@ func refreshStatusCache(repoRoot string) (*statusCache, error) {
 			ChangeID:  cp.ChangeID,
 		}
 	}
+	promote := buildPromoteStatusFromSummaries(summaries)
+	draftSHA := ""
+	if ref, err := syncRef(user, workspace); err == nil {
+		if sha, err := gitutil.ResolveRef(ref); err == nil {
+			draftSHA = sha
+		}
+	}
+	baseSHA := ""
+	if last != nil {
+		baseSHA = last.CommitSHA
+	}
+	draftFilesChanged := draftFilesChangedFrom(baseSHA, draftSHA)
 
 	cache := statusCache{
 		WorkspaceID:                wsID,
@@ -106,6 +123,8 @@ func refreshStatusCache(repoRoot string) (*statusCache, error) {
 		GeneratedAt:                time.Now().UTC(),
 		LastCheckpoint:             last,
 		Checkpoints:                summaries,
+		DraftFilesChanged:          draftFilesChanged,
+		PromoteStatus:              promote,
 		SuggestionsPendingByChange: pendingCounts,
 	}
 	if err := writeStatusCache(repoRoot, cache); err != nil {

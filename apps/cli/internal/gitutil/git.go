@@ -5,9 +5,11 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,19 +24,34 @@ type CommitInfo struct {
 	TopLevel  string
 }
 
+var (
+	repoTopLevelMu    sync.Mutex
+	repoTopLevelCache = map[string]string{}
+)
+
 func CurrentCommit() (CommitInfo, error) {
-	sha, err := git("rev-parse", "HEAD")
+	meta, err := git("log", "-1", "--format=%H%x00%an%x00%cI%x00%B")
 	if err != nil {
 		return CommitInfo{}, err
 	}
-	branch, _ := git("rev-parse", "--abbrev-ref", "HEAD")
-	message, _ := git("log", "-1", "--format=%B")
-	author, _ := git("log", "-1", "--format=%an")
-	committedISO, err := git("log", "-1", "--format=%cI")
-	if err != nil {
-		return CommitInfo{}, err
+	parts := strings.SplitN(meta, "\x00", 4)
+	if len(parts) < 4 {
+		return CommitInfo{}, fmt.Errorf("unexpected git log output")
 	}
-	top, _ := git("rev-parse", "--show-toplevel")
+	sha := parts[0]
+	author := parts[1]
+	committedISO := parts[2]
+	message := parts[3]
+	refOut, _ := git("rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD")
+	top := ""
+	branch := ""
+	if strings.TrimSpace(refOut) != "" {
+		lines := strings.Split(refOut, "\n")
+		top = strings.TrimSpace(lines[0])
+		if len(lines) > 1 {
+			branch = strings.TrimSpace(lines[1])
+		}
+	}
 
 	committed := time.Now().UTC()
 	if committedISO != "" {
@@ -59,7 +76,25 @@ func CurrentCommit() (CommitInfo, error) {
 }
 
 func RepoTopLevel() (string, error) {
-	return git("rev-parse", "--show-toplevel")
+	wd, err := os.Getwd()
+	if err == nil {
+		repoTopLevelMu.Lock()
+		if cached, ok := repoTopLevelCache[wd]; ok && cached != "" {
+			repoTopLevelMu.Unlock()
+			return cached, nil
+		}
+		repoTopLevelMu.Unlock()
+	}
+	root, err := git("rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	if wd != "" && strings.TrimSpace(root) != "" {
+		repoTopLevelMu.Lock()
+		repoTopLevelCache[wd] = root
+		repoTopLevelMu.Unlock()
+	}
+	return root, nil
 }
 
 func RootCommit() (string, error) {
