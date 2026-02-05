@@ -245,7 +245,7 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 	}
 
 	// Trace-Base should remain in Trace-Head ancestry after restack.
-	checkpoints, err := listCheckpoints()
+	checkpoints, err := listCheckpoints(0)
 	if err != nil {
 		t.Fatalf("list checkpoints failed: %v", err)
 	}

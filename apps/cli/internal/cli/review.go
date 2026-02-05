@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/lydakis/jul/cli/internal/agent"
@@ -19,16 +21,42 @@ import (
 	"github.com/lydakis/jul/cli/internal/output"
 )
 
+type reviewMode string
+
+const (
+	reviewModeSummary reviewMode = "summary"
+	reviewModeSuggest reviewMode = "suggest"
+)
+
 func newReviewCommand() Command {
 	return Command{
 		Name:    "review",
 		Summary: "Run the internal review agent",
 		Run: func(args []string) int {
 			fs, jsonOut := newFlagSet("review")
+			suggest := fs.Bool("suggest", false, "Create suggestions instead of summary")
+			from := fs.String("from", "", "Reuse prior review summary (requires --suggest)")
 			_ = fs.Parse(args)
 
-			stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
-			created, summary, err := runReviewWithStream(stream)
+			mode := reviewModeSummary
+			if *suggest {
+				mode = reviewModeSuggest
+			}
+			fromID := strings.TrimSpace(*from)
+			if fromID != "" && mode != reviewModeSuggest {
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "review_invalid_args", "--from requires --suggest", nil)
+				} else {
+					fmt.Fprintln(os.Stderr, "review failed: --from requires --suggest")
+				}
+				return 1
+			}
+
+			if reviewInternalEnv() {
+				return runReviewInternalCommand(mode, fromID, *jsonOut)
+			}
+
+			run, err := startBackgroundReview(mode, fromID)
 			if err != nil {
 				if *jsonOut {
 					_ = output.EncodeError(os.Stdout, "review_failed", fmt.Sprintf("review failed: %v", err), nil)
@@ -38,97 +66,234 @@ func newReviewCommand() Command {
 				return 1
 			}
 
-			if *jsonOut {
-				out := output.ReviewOutput{
-					Review:      summary,
-					Suggestions: created,
-				}
-				if len(created) > 0 {
-					out.NextActions = buildSuggestionActions(created)
-				}
-				return writeJSON(out)
+			stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
+			watch := stream != nil
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			detached := make(chan struct{})
+			var sigCh chan os.Signal
+			if watch {
+				sigCh = make(chan os.Signal, 1)
+				signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+				go func() {
+					<-sigCh
+					close(detached)
+					cancel()
+				}()
+				go func() {
+					_ = tailFile(ctx, run.LogPath, stream, "review: ")
+				}()
 			}
 
-			output.RenderReview(os.Stdout, summary)
-			return 0
+			result, err := waitForReviewResult(ctx, run.ResultPath)
+			cancel()
+			if watch && sigCh != nil {
+				signal.Stop(sigCh)
+			}
+			if isDetached(detached) {
+				return 0
+			}
+			if err != nil {
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "review_failed", fmt.Sprintf("review failed: %v", err), nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "review failed: %v\n", err)
+				}
+				return 1
+			}
+			if strings.TrimSpace(result.Error) != "" {
+				if *jsonOut {
+					_ = output.EncodeError(os.Stdout, "review_failed", result.Error, nil)
+				} else {
+					fmt.Fprintf(os.Stderr, "review failed: %s\n", result.Error)
+				}
+				return 1
+			}
+
+			return renderReviewResult(result, *jsonOut)
 		},
 	}
 }
 
-func runReviewWithStream(stream io.Writer) ([]client.Suggestion, output.ReviewSummary, error) {
+func isDetached(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+func runReviewInternalCommand(mode reviewMode, fromReviewID string, jsonOut bool) int {
+	started := time.Now().UTC()
+	result, err := runReviewInternal(mode, fromReviewID, os.Stdout)
+	result.Mode = mode
+	if result.StartedAt.IsZero() {
+		result.StartedAt = started
+	}
+	result.FinishedAt = time.Now().UTC()
+	if err != nil {
+		result.Error = err.Error()
+	}
+	if path := reviewResultPathEnv(); path != "" {
+		_ = writeReviewResult(path, result)
+		if err != nil {
+			return 1
+		}
+		return 0
+	}
+	if err != nil {
+		if jsonOut {
+			_ = output.EncodeError(os.Stdout, "review_failed", fmt.Sprintf("review failed: %v", err), nil)
+		} else {
+			fmt.Fprintf(os.Stderr, "review failed: %v\n", err)
+		}
+		return 1
+	}
+	return renderReviewResult(result, jsonOut)
+}
+
+func runReviewInternal(mode reviewMode, fromReviewID string, stream io.Writer) (reviewRunResult, error) {
+	if mode == "" {
+		mode = reviewModeSummary
+	}
+	if mode != reviewModeSuggest && strings.TrimSpace(fromReviewID) != "" {
+		return reviewRunResult{}, fmt.Errorf("--from requires --suggest")
+	}
 	baseSHA, changeID, err := reviewBase()
 	if err != nil {
-		return nil, output.ReviewSummary{}, err
+		return reviewRunResult{}, err
 	}
 
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
-		return nil, output.ReviewSummary{}, err
+		return reviewRunResult{}, err
 	}
 
 	worktree, err := agent.EnsureWorktree(repoRoot, baseSHA, agent.WorktreeOptions{})
 	if err != nil {
 		if errors.Is(err, agent.ErrMergeInProgress) {
-			return nil, output.ReviewSummary{}, fmt.Errorf("merge in progress; run 'jul merge' first")
+			return reviewRunResult{}, fmt.Errorf("merge in progress; run 'jul merge' first")
 		}
-		return nil, output.ReviewSummary{}, err
+		return reviewRunResult{}, err
 	}
 
 	diff := reviewDiff(baseSHA)
 	files := reviewFiles(baseSHA)
 
+	ctx := agent.ReviewContext{
+		Checkpoint: baseSHA,
+		ChangeID:   changeID,
+		Diff:       diff,
+		Files:      files,
+		CIResults:  reviewCIResults(baseSHA),
+	}
+	if mode == reviewModeSuggest && strings.TrimSpace(fromReviewID) != "" {
+		note, err := metadata.GetAgentReviewByID(strings.TrimSpace(fromReviewID))
+		if err != nil {
+			return reviewRunResult{}, err
+		}
+		if note == nil || strings.TrimSpace(note.Summary) == "" {
+			return reviewRunResult{}, fmt.Errorf("review %s not found", strings.TrimSpace(fromReviewID))
+		}
+		ctx.PriorSummary = strings.TrimSpace(note.Summary)
+	}
+
+	action := "review_summary"
+	if mode == reviewModeSuggest {
+		action = "review_suggest"
+	}
 	req := agent.ReviewRequest{
 		Version:       1,
-		Action:        "review",
+		Action:        action,
 		WorkspacePath: worktree,
-		Context: agent.ReviewContext{
-			Checkpoint: baseSHA,
-			ChangeID:   changeID,
-			Diff:       diff,
-			Files:      files,
-			CIResults:  reviewCIResults(baseSHA),
-		},
+		Context:       ctx,
 	}
 
 	provider, err := agent.ResolveProvider()
 	if err != nil {
-		return nil, output.ReviewSummary{}, err
+		return reviewRunResult{}, err
 	}
 
 	resp, err := agent.RunReviewWithStream(context.Background(), provider, req, stream)
 	if err != nil {
-		return nil, output.ReviewSummary{}, err
+		return reviewRunResult{}, err
+	}
+
+	status := strings.TrimSpace(resp.Status)
+	if status == "" {
+		status = "completed"
+	}
+	result := reviewRunResult{
+		Mode:     mode,
+		Status:   status,
+		BaseSHA:  baseSHA,
+		ChangeID: changeID,
+	}
+	if mode == reviewModeSummary {
+		result.Summary = strings.TrimSpace(resp.Summary)
+		note, err := writeReviewNote(baseSHA, changeID, resp)
+		if err != nil {
+			return result, err
+		}
+		result.ReviewID = note.ReviewID
+		return result, nil
 	}
 
 	seeds, err := collectReviewSuggestions(worktree, baseSHA, resp)
 	if err != nil {
-		return nil, output.ReviewSummary{}, err
+		return result, err
 	}
 
 	created, err := storeReviewSuggestions(baseSHA, changeID, seeds)
 	if err != nil {
-		return nil, output.ReviewSummary{}, err
+		return result, err
 	}
+	result.Suggestions = created
+	return result, nil
+}
 
-	if err := writeReviewNote(baseSHA, changeID, resp); err != nil {
-		return nil, output.ReviewSummary{}, err
-	}
-
-	summary := output.ReviewSummary{
-		Status:    strings.TrimSpace(resp.Status),
-		BaseSHA:   baseSHA,
-		ChangeID:  changeID,
-		Created:   len(created),
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-	}
-	if summary.Status == "" {
-		if len(created) == 0 {
-			summary.Status = "no_suggestions"
+func renderReviewResult(result reviewRunResult, jsonOut bool) int {
+	if jsonOut {
+		out := output.ReviewOutput{}
+		if result.Mode == reviewModeSummary {
+			out.Review = &output.ReviewSummary{
+				ReviewID:  strings.TrimSpace(result.ReviewID),
+				Status:    strings.TrimSpace(result.Status),
+				BaseSHA:   strings.TrimSpace(result.BaseSHA),
+				ChangeID:  strings.TrimSpace(result.ChangeID),
+				Summary:   strings.TrimSpace(result.Summary),
+				Timestamp: result.FinishedAt.UTC().Format(time.RFC3339),
+			}
 		} else {
-			summary.Status = "completed"
+			out.Suggestions = result.Suggestions
+			if len(result.Suggestions) > 0 {
+				out.NextActions = buildSuggestionActions(result.Suggestions)
+			}
 		}
+		return writeJSON(out)
 	}
-	return created, summary, nil
+
+	if result.Mode == reviewModeSummary {
+		summary := output.ReviewSummary{
+			ReviewID:  strings.TrimSpace(result.ReviewID),
+			Status:    strings.TrimSpace(result.Status),
+			BaseSHA:   strings.TrimSpace(result.BaseSHA),
+			ChangeID:  strings.TrimSpace(result.ChangeID),
+			Summary:   strings.TrimSpace(result.Summary),
+			Timestamp: result.FinishedAt.UTC().Format(time.RFC3339),
+		}
+		output.RenderReview(os.Stdout, summary)
+		return 0
+	}
+
+	if len(result.Suggestions) == 0 {
+		fmt.Fprintln(os.Stdout, "No suggestions created.")
+		return 0
+	}
+	fmt.Fprintf(os.Stdout, "%d suggestion(s) created.\n\n", len(result.Suggestions))
+	fmt.Fprintln(os.Stdout, "Run 'jul suggestions' to see details.")
+	return 0
 }
 
 func reviewBase() (string, string, error) {
@@ -209,22 +374,22 @@ func reviewCIResults(baseSHA string) json.RawMessage {
 	return json.RawMessage(att.SignalsJSON)
 }
 
-func writeReviewNote(baseSHA, changeID string, resp agent.ReviewResponse) error {
+func writeReviewNote(baseSHA, changeID string, resp agent.ReviewResponse) (metadata.AgentReviewNote, error) {
 	payload, err := json.Marshal(resp)
 	if err != nil {
-		return err
+		return metadata.AgentReviewNote{}, err
 	}
 	status := strings.TrimSpace(resp.Status)
 	if status == "" {
 		status = "completed"
 	}
-	_, err = metadata.WriteAgentReview(metadata.AgentReviewNote{
+	return metadata.WriteAgentReview(metadata.AgentReviewNote{
 		BaseCommitSHA: baseSHA,
 		ChangeID:      changeID,
 		Status:        status,
+		Summary:       strings.TrimSpace(resp.Summary),
 		Response:      payload,
 	})
-	return err
 }
 
 func storeReviewSuggestions(baseSHA, changeID string, suggestions []agent.ReviewSuggestion) ([]client.Suggestion, error) {

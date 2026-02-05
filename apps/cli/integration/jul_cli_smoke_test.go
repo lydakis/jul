@@ -102,7 +102,7 @@ printf '{"version":1,"status":"completed","suggestions":[{"commit":"%s","reason"
 		"JUL_AGENT_CMD": agentPath,
 	}
 
-	reviewOut := runCmd(t, repo, envAgent, julPath, "review", "--json")
+	reviewOut := runCmd(t, repo, envAgent, julPath, "review", "--suggest", "--json")
 	var reviewRes struct {
 		Suggestions []struct {
 			SuggestionID string `json:"suggestion_id"`

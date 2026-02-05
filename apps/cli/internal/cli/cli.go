@@ -49,7 +49,7 @@ func (a *App) Run(args []string) int {
 			if shouldAutoSync(cmd.Name) && config.SyncMode() == "on-command" {
 				if os.Getenv("JUL_NO_SYNC") == "" {
 					if _, err := gitutil.RepoTopLevel(); err == nil {
-						if _, err := syncer.Sync(); err != nil {
+						if err := startBackgroundSync(syncer.SyncOptions{}); err != nil {
 							fmt.Fprintf(os.Stderr, "sync warning: %v\n", err)
 						}
 					}

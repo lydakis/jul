@@ -12,6 +12,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/identity"
+	"github.com/lydakis/jul/cli/internal/metrics"
 	"github.com/lydakis/jul/cli/internal/notes"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
 	"github.com/lydakis/jul/cli/internal/restack"
@@ -31,6 +32,7 @@ type Result struct {
 	AutoMerged       bool
 	RemoteProblem    string
 	Warnings         []string
+	Timings          metrics.Timings `json:"timings_ms,omitempty"`
 }
 
 type CheckpointResult struct {
@@ -47,6 +49,7 @@ type CheckpointResult struct {
 	RemotePushed     bool
 	Diverged         bool
 	RemoteProblem    string
+	Timings          metrics.Timings `json:"timings_ms,omitempty"`
 }
 
 type SyncOptions struct {
@@ -57,13 +60,19 @@ func Sync() (Result, error) {
 	return SyncWithOptions(SyncOptions{})
 }
 
-func SyncWithOptions(opts SyncOptions) (Result, error) {
+func SyncWithOptions(opts SyncOptions) (res Result, err error) {
+	timings := metrics.NewTimings()
+	totalStart := time.Now()
+	defer func() {
+		res.Timings = timings
+		res.Timings.TotalMs = time.Since(totalStart).Milliseconds()
+	}()
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return Result{}, err
 	}
 
-	res := Result{}
+	res = Result{}
 	if has, err := hasSubmodules(repoRoot); err == nil && has {
 		res.Warnings = append(res.Warnings, "submodules detected; jul does not manage submodule state")
 	}
@@ -189,6 +198,7 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 			hasCheckpoint = true
 		}
 	}
+	snapshotStart := time.Now()
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
 		return Result{}, err
@@ -272,8 +282,10 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 	if err := gitutil.UpdateRef(syncRef, res.DraftSHA); err != nil {
 		return Result{}, err
 	}
+	timings.Add("snapshot", time.Since(snapshotStart))
 
 	if rerr == nil {
+		pushStart := time.Now()
 		if config.DraftSyncEnabled() {
 			allowSecrets := opts.AllowSecrets || config.AllowDraftSecrets()
 			ok, reason, err := DraftPushAllowed(repoRoot, parentSHA, res.DraftSHA, allowSecrets)
@@ -314,10 +326,13 @@ func SyncWithOptions(opts SyncOptions) (Result, error) {
 			if err := pushAnchorRefs(remote.Name); err != nil {
 				return res, err
 			}
+			notesStart := time.Now()
 			if err := pushJulNotes(remote.Name); err != nil {
 				return res, err
 			}
+			timings.Add("notes_merge", time.Since(notesStart))
 		}
+		timings.Add("push", time.Since(pushStart))
 	}
 
 	return finalizeSync(res, !res.Diverged)

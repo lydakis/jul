@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/lydakis/jul/cli/internal/metrics"
 )
 
 type Status struct {
@@ -15,6 +17,7 @@ type Status struct {
 	DraftSHA                 string              `json:"draft_sha"`
 	ChangeID                 string              `json:"change_id"`
 	SyncStatus               string              `json:"sync_status"`
+	SyncState                string              `json:"sync_state,omitempty"`
 	TrackRef                 string              `json:"track_ref,omitempty"`
 	TrackTip                 string              `json:"track_tip,omitempty"`
 	TrackTipCurrent          string              `json:"track_tip_current,omitempty"`
@@ -29,6 +32,7 @@ type Status struct {
 	WorkingTree              *WorkingTreeStatus  `json:"working_tree,omitempty"`
 	Checkpoints              []CheckpointSummary `json:"checkpoints,omitempty"`
 	PromoteStatus            *PromoteStatus      `json:"promote_status,omitempty"`
+	Timings                  metrics.Timings     `json:"timings_ms,omitempty"`
 }
 
 type CheckpointStatus struct {
@@ -114,6 +118,14 @@ func RenderStatus(w io.Writer, status Status, opts Options) {
 		draftLine = fmt.Sprintf("%s (clean)", draftLine)
 	}
 	fmt.Fprintf(w, "Draft: %s\n", draftLine)
+	if status.SyncState != "" {
+		switch strings.ToLower(strings.TrimSpace(status.SyncState)) {
+		case "running":
+			fmt.Fprintln(w, "Sync: running (background)")
+		default:
+			fmt.Fprintln(w, "Sync: idle")
+		}
+	}
 
 	if status.DraftCI != nil {
 		renderDraftCI(w, status.DraftCI, opts, draft.CommitSHA)

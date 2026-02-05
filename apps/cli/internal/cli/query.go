@@ -125,7 +125,7 @@ func firstLine(message string) string {
 }
 
 func localQuery(filters client.QueryFilters) ([]client.QueryResult, error) {
-	checkpoints, err := listCheckpoints()
+	checkpoints, err := listCheckpoints(0)
 	if err != nil {
 		return nil, err
 	}

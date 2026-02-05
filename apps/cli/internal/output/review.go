@@ -3,22 +3,24 @@ package output
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/lydakis/jul/cli/internal/client"
 )
 
 type ReviewOutput struct {
-	Review      ReviewSummary       `json:"review"`
+	Review      *ReviewSummary      `json:"review,omitempty"`
 	Suggestions []client.Suggestion `json:"suggestions,omitempty"`
 	NextActions []NextAction        `json:"next_actions,omitempty"`
 }
 
 type ReviewSummary struct {
-	Status    string `json:"status"`
+	ReviewID  string `json:"review_id,omitempty"`
+	Status    string `json:"status,omitempty"`
 	BaseSHA   string `json:"base_sha,omitempty"`
 	ChangeID  string `json:"change_id,omitempty"`
-	Created   int    `json:"suggestions_created"`
-	Timestamp string `json:"timestamp"`
+	Summary   string `json:"summary,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
 }
 
 type NextAction struct {
@@ -27,24 +29,17 @@ type NextAction struct {
 }
 
 func RenderReview(w io.Writer, summary ReviewSummary) {
-	opts := DefaultOptions()
 	if summary.BaseSHA != "" {
-		fmt.Fprintf(w, "Running review on %s...\n", summary.BaseSHA)
+		fmt.Fprintf(w, "Review for %s\n", summary.BaseSHA)
 	} else {
-		fmt.Fprintln(w, "Running review...")
+		fmt.Fprintln(w, "Review summary")
 	}
-	if summary.Created == 0 {
-		icon := statusIconColored("pass", opts)
-		if icon == "" {
-			icon = statusIcon("pass", opts)
-		}
-		fmt.Fprintf(w, "  %sNo suggestions created\n", icon)
-		return
+	if strings.TrimSpace(summary.Summary) == "" {
+		fmt.Fprintln(w, "No summary returned.")
+	} else {
+		fmt.Fprintln(w, strings.TrimSpace(summary.Summary))
 	}
-	warn := statusIconColored("warning", opts)
-	if warn == "" {
-		warn = statusIcon("warning", opts)
+	if summary.ReviewID != "" {
+		fmt.Fprintf(w, "\nReview ID: %s\n", summary.ReviewID)
 	}
-	fmt.Fprintf(w, "  %s%d suggestion(s) created\n\n", warn, summary.Created)
-	fmt.Fprintln(w, "Run 'jul suggestions' to see details.")
 }

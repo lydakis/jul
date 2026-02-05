@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/config"
@@ -86,6 +87,51 @@ func listKeepRefs(prefix string) ([]keepRefInfo, error) {
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	var refs []keepRefInfo
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		sha := fields[0]
+		ref := fields[1]
+		if !strings.HasPrefix(ref, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(ref, prefix)
+		parts := strings.Split(rest, "/")
+		if len(parts) < 2 {
+			continue
+		}
+		changeID := parts[0]
+		checkpoint := parts[1]
+		refs = append(refs, keepRefInfo{
+			Ref:           ref,
+			SHA:           sha,
+			ChangeID:      changeID,
+			CheckpointSHA: checkpoint,
+		})
+	}
+	return refs, nil
+}
+
+func listKeepRefsLimited(prefix string, limit int) ([]keepRefInfo, error) {
+	if strings.TrimSpace(prefix) == "" {
+		return nil, fmt.Errorf("keep ref prefix required")
+	}
+	args := []string{"for-each-ref", "--format=%(objectname) %(refname)", "--sort=-creatordate"}
+	if limit > 0 {
+		args = append(args, "--count="+strconv.Itoa(limit))
+	}
+	args = append(args, prefix)
+	out, err := gitutil.Git(args...)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) == 1 && strings.TrimSpace(lines[0]) == "" {
+		return []keepRefInfo{}, nil
+	}
+	refs := make([]keepRefInfo, 0, len(lines))
 	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {

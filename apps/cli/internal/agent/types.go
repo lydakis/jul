@@ -10,12 +10,13 @@ type ReviewRequest struct {
 }
 
 type ReviewContext struct {
-	Checkpoint string          `json:"checkpoint,omitempty"`
-	ChangeID   string          `json:"change_id,omitempty"`
-	Diff       string          `json:"diff,omitempty"`
-	Files      []ReviewFile    `json:"files,omitempty"`
-	Conflicts  []string        `json:"conflicts,omitempty"`
-	CIResults  json.RawMessage `json:"ci_results,omitempty"`
+	Checkpoint   string          `json:"checkpoint,omitempty"`
+	ChangeID     string          `json:"change_id,omitempty"`
+	Diff         string          `json:"diff,omitempty"`
+	Files        []ReviewFile    `json:"files,omitempty"`
+	Conflicts    []string        `json:"conflicts,omitempty"`
+	CIResults    json.RawMessage `json:"ci_results,omitempty"`
+	PriorSummary string          `json:"prior_summary,omitempty"`
 }
 
 type ReviewFile struct {
@@ -26,6 +27,7 @@ type ReviewFile struct {
 type ReviewResponse struct {
 	Version     int                `json:"version"`
 	Status      string             `json:"status"`
+	Summary     string             `json:"summary,omitempty"`
 	Suggestions []ReviewSuggestion `json:"suggestions,omitempty"`
 }
 

@@ -1,14 +1,20 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/agent"
 	"github.com/lydakis/jul/cli/internal/config"
+	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/metrics"
 	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/syncer"
 )
@@ -25,6 +31,7 @@ func newCheckpointCommand() Command {
 			ifConfigured := fs.Bool("if-configured", false, "Only adopt when configured")
 			noCI := fs.Bool("no-ci", false, "Skip CI run")
 			noReview := fs.Bool("no-review", false, "Skip review")
+			debugTimings := fs.Bool("debug-timings", false, "Print timing breakdown to stderr")
 			jsonRequested := hasJSONFlag(args)
 			if jsonRequested {
 				fs.SetOutput(io.Discard)
@@ -72,6 +79,9 @@ func newCheckpointCommand() Command {
 
 			var res syncer.CheckpointResult
 			var err error
+			timings := metrics.NewTimings()
+			totalStart := time.Now()
+			overheadStart := time.Now()
 			if *adopt {
 				if *message != "" && !hookMode {
 					fmt.Fprintln(os.Stderr, "warning: --message ignored when adopting HEAD")
@@ -80,6 +90,7 @@ func newCheckpointCommand() Command {
 			} else {
 				res, err = syncer.Checkpoint(*message)
 			}
+			timings.Add("overhead", time.Since(overheadStart))
 			if err != nil {
 				if *jsonOut {
 					_ = output.EncodeError(os.Stdout, "checkpoint_failed", fmt.Sprintf("checkpoint failed: %v", err), nil)
@@ -89,38 +100,114 @@ func newCheckpointCommand() Command {
 				return 1
 			}
 
-			ciExit := 0
+			res.Timings = timings
+
+			if repoRoot, err := gitutil.RepoTopLevel(); err == nil {
+				_, _ = refreshStatusCache(repoRoot)
+			}
+
+			var ciRun *ciRun
+			var reviewRun *reviewRun
 			if config.CIRunOnCheckpoint() && !skipCI {
-				out := io.Writer(os.Stdout)
-				errOut := io.Writer(os.Stderr)
-				if *jsonOut {
-					out = io.Discard
-					errOut = io.Discard
+				run, err := startBackgroundCI(res.CheckpointSHA, "checkpoint")
+				if err != nil {
+					if !*jsonOut {
+						fmt.Fprintf(os.Stderr, "failed to start CI: %v\n", err)
+					}
+				} else {
+					ciRun = run
 				}
-				ciExit = runCIRunWithStream([]string{}, nil, out, errOut, res.CheckpointSHA, "checkpoint")
 			}
 
 			if config.ReviewEnabled() && config.ReviewRunOnCheckpoint() && !skipReview {
-				stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
-				if _, _, err := runReviewWithStream(stream); err != nil {
+				run, err := startBackgroundReview(reviewModeSuggest, "")
+				if err != nil {
 					if !*jsonOut && !errors.Is(err, agent.ErrAgentNotConfigured) && !errors.Is(err, agent.ErrBundledMissing) {
-						fmt.Fprintf(os.Stderr, "review failed: %v\n", err)
+						fmt.Fprintf(os.Stderr, "failed to start review: %v\n", err)
 					}
+				} else {
+					reviewRun = run
 				}
 			}
 
+			stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
+			watch := stream != nil
+
+			ciExit := 0
+			if watch && (ciRun != nil || reviewRun != nil) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				detached := make(chan struct{})
+				sigCh := make(chan os.Signal, 1)
+				signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+				go func() {
+					<-sigCh
+					close(detached)
+					cancel()
+				}()
+				if ciRun != nil {
+					go func() {
+						_ = tailFile(ctx, ciRun.LogPath, stream, "ci: ")
+					}()
+				}
+				if reviewRun != nil {
+					go func() {
+						_ = tailFile(ctx, reviewRun.LogPath, stream, "review: ")
+					}()
+				}
+
+				if ciRun != nil {
+					if record, err := waitForCIRun(ctx, ciRun.ID); err == nil && record != nil {
+						if !record.StartedAt.IsZero() && !record.FinishedAt.IsZero() {
+							res.Timings.Add("ci_runtime", record.FinishedAt.Sub(record.StartedAt))
+						}
+						ciExit = exitCodeForStatus(record.Status)
+					}
+				}
+				if reviewRun != nil {
+					if reviewRes, err := waitForReviewResult(ctx, reviewRun.ResultPath); err == nil {
+						start := reviewRes.StartedAt
+						end := reviewRes.FinishedAt
+						if !start.IsZero() && !end.IsZero() {
+							res.Timings.Add("review_runtime", end.Sub(start))
+						}
+						if strings.TrimSpace(reviewRes.Error) != "" && !*jsonOut {
+							fmt.Fprintf(os.Stderr, "review failed: %s\n", strings.TrimSpace(reviewRes.Error))
+						}
+					}
+				}
+
+				cancel()
+				signal.Stop(sigCh)
+				if isDetached(detached) {
+					return 0
+				}
+			}
+
+			res.Timings.TotalMs = time.Since(totalStart).Milliseconds()
+
 			if *jsonOut {
+				if code := writeJSON(res); code != 0 {
+					return code
+				}
 				if ciExit != 0 {
-					_ = output.EncodeError(os.Stdout, "checkpoint_ci_failed", fmt.Sprintf("ci failed for checkpoint %s", res.CheckpointSHA), []output.NextAction{
-						{Action: "status", Command: "jul ci status --json"},
-						{Action: "rerun", Command: fmt.Sprintf("jul ci run --target %s --json", res.CheckpointSHA)},
-					})
 					return ciExit
 				}
-				return writeJSON(res)
+				return 0
 			}
 
 			output.RenderCheckpoint(os.Stdout, res)
+			if !watch {
+				if ciRun != nil {
+					fmt.Fprintln(os.Stdout, "  ⚡ CI running in background... (jul ci status)")
+				}
+				if reviewRun != nil {
+					fmt.Fprintln(os.Stdout, "  ⚡ Review running in background... (jul review --suggest)")
+				}
+			}
+			if *debugTimings {
+				printTimings("checkpoint", res.Timings)
+			}
 			if ciExit != 0 {
 				return ciExit
 			}

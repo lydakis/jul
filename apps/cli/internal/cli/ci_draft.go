@@ -41,7 +41,7 @@ func maybeRunDraftCI(res syncer.Result, jsonOut bool) int {
 	}
 
 	if !config.CIDraftBlocking() {
-		if err := startBackgroundCI(res.DraftSHA); err != nil {
+		if _, err := startBackgroundCI(res.DraftSHA, "draft"); err != nil {
 			if !jsonOut {
 				fmt.Fprintf(os.Stderr, "failed to start draft CI: %v\n", err)
 			}
@@ -76,36 +76,49 @@ func cancelRunningCI(running *cicmd.Running) error {
 	return cicmd.ClearRunning()
 }
 
-func startBackgroundCI(targetSHA string) error {
+type ciRun struct {
+	ID      string
+	LogPath string
+}
+
+func startBackgroundCI(targetSHA, mode string) (*ciRun, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	root, err := gitutil.RepoTopLevel()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	runID := cicmd.NewRunID()
 	logFile, logPath, err := openCILogFile(root, runID)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if strings.TrimSpace(mode) == "" {
+		mode = "draft"
 	}
 	cmd := exec.Command(exe, "ci", "run", "--target", targetSHA)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
-		"JUL_CI_MODE=draft",
+		"JUL_CI_MODE="+mode,
 		"JUL_CI_RUN_ID="+runID,
 		"JUL_CI_LOG_PATH="+logPath,
 		"JUL_CI_BACKGROUND=1",
+		"JUL_NO_SYNC=1",
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	setDetachedProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
-		return err
+		return nil, err
+	}
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
 	}
 	_ = logFile.Close()
-	return nil
+	return &ciRun{ID: runID, LogPath: logPath}, nil
 }
 
 func openCILogFile(root string, runID string) (*os.File, string, error) {

@@ -64,6 +64,7 @@ func newSyncCommand() Command {
 			fs, jsonOut := newFlagSet("sync")
 			allowSecrets := fs.Bool("allow-secrets", false, "Allow draft push even if secrets are detected")
 			daemon := fs.Bool("daemon", false, "Run sync continuously in the foreground")
+			debugTimings := fs.Bool("debug-timings", false, "Print timing breakdown to stderr")
 			jsonRequested := hasJSONFlag(args)
 			if jsonRequested {
 				fs.SetOutput(io.Discard)
@@ -79,8 +80,18 @@ func newSyncCommand() Command {
 				return runSyncDaemon(syncer.SyncOptions{AllowSecrets: *allowSecrets})
 			}
 
+			bgRunID := syncBackgroundEnv()
+			repoRoot, _ := gitutil.RepoTopLevel()
+			var bgErr error
+			defer func() {
+				if bgRunID != "" && repoRoot != "" {
+					markSyncCompleted(repoRoot, bgRunID, bgErr)
+				}
+			}()
+
 			res, err := syncer.SyncWithOptions(syncer.SyncOptions{AllowSecrets: *allowSecrets})
 			if err != nil {
+				bgErr = err
 				if *jsonOut {
 					_ = output.EncodeError(os.Stdout, "sync_failed", err.Error(), []output.NextAction{
 						{Action: "retry", Command: "jul sync --json"},
@@ -89,6 +100,12 @@ func newSyncCommand() Command {
 					fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
 				}
 				return 1
+			}
+			if repoRoot != "" {
+				_, _ = refreshStatusCache(repoRoot)
+			}
+			if *debugTimings && !*jsonOut {
+				printTimings("sync", res.Timings)
 			}
 
 			if *jsonOut {
@@ -119,8 +136,10 @@ func newStatusCommand() Command {
 		Run: func(args []string) int {
 			fs, jsonOut := newFlagSet("status")
 			porcelain := fs.Bool("porcelain", false, "Output git status porcelain")
+			debugTimings := fs.Bool("debug-timings", false, "Print timing breakdown to stderr")
 			_ = fs.Parse(args)
 
+			start := time.Now()
 			if *porcelain {
 				if *jsonOut {
 					_ = output.EncodeError(os.Stdout, "status_incompatible_flags", "cannot combine --json with --porcelain", nil)
@@ -146,12 +165,18 @@ func newStatusCommand() Command {
 				}
 				return 1
 			}
+			status.Timings.TotalMs = time.Since(start).Milliseconds()
 
 			if *jsonOut {
 				return writeJSON(status)
 			}
 
+			renderStart := time.Now()
 			output.RenderStatus(os.Stdout, status, output.DefaultOptions())
+			status.Timings.Add("render", time.Since(renderStart))
+			if *debugTimings {
+				printTimings("status", status.Timings)
+			}
 			return 0
 		},
 	}
@@ -954,7 +979,7 @@ func changeIDForCommit(sha string) string {
 }
 
 func checkpointForSHA(sha string) (*checkpointInfo, error) {
-	entries, err := listCheckpoints()
+	entries, err := listCheckpoints(0)
 	if err != nil {
 		return nil, err
 	}
@@ -970,7 +995,7 @@ func changeMetaFromCheckpoints(changeID string) (string, []metadata.ChangeCheckp
 	if strings.TrimSpace(changeID) == "" {
 		return "", nil, nil
 	}
-	entries, err := listCheckpoints()
+	entries, err := listCheckpoints(0)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1031,7 +1056,7 @@ func newChangesCommand() Command {
 }
 
 func localChanges() ([]client.Change, error) {
-	entries, err := listCheckpoints()
+	entries, err := listCheckpoints(0)
 	if err != nil {
 		return nil, err
 	}

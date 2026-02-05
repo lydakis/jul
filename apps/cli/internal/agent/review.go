@@ -563,11 +563,13 @@ func buildReviewPrompt(action, attachmentPath string) string {
 	var buf strings.Builder
 	action = strings.TrimSpace(action)
 	if action == "" {
-		action = "review"
+		action = "review_suggest"
 	}
 	switch action {
 	case "resolve_conflict":
 		buf.WriteString("You are the Jul internal merge agent.\n")
+	case "review_summary":
+		buf.WriteString("You are the Jul internal review agent.\n")
 	default:
 		buf.WriteString("You are the Jul internal review agent.\n")
 	}
@@ -577,6 +579,10 @@ func buildReviewPrompt(action, attachmentPath string) string {
 			buf.WriteString("Resolve merge conflicts using the context file at ")
 			buf.WriteString(attachmentPath)
 			buf.WriteString(". Fix conflicts in the workspace, ensure it builds, commit the resolution, and respond with JSON ONLY.\n")
+		case "review_summary":
+			buf.WriteString("Review the context file at ")
+			buf.WriteString(attachmentPath)
+			buf.WriteString(". Do not modify the workspace. Respond with JSON ONLY containing a concise summary of findings and recommendations.\n")
 		default:
 			buf.WriteString("Review the context file at ")
 			buf.WriteString(attachmentPath)
@@ -586,12 +592,19 @@ func buildReviewPrompt(action, attachmentPath string) string {
 		switch action {
 		case "resolve_conflict":
 			buf.WriteString("Resolve merge conflicts using the attached context file. Fix conflicts in the workspace, ensure it builds, commit the resolution, and respond with JSON ONLY.\n")
+		case "review_summary":
+			buf.WriteString("Review the attached context file. Do not modify the workspace. Respond with JSON ONLY containing a concise summary of findings and recommendations.\n")
 		default:
 			buf.WriteString("Review the attached context file, make fixes in the workspace, commit them, and respond with JSON ONLY.\n")
 		}
 	}
 	buf.WriteString("Response schema:\n")
-	buf.WriteString("{\"version\":1,\"status\":\"completed\",\"suggestions\":[{\"commit\":\"<sha>\",\"reason\":\"...\",\"description\":\"...\",\"confidence\":0.0}]}\n")
+	switch action {
+	case "review_summary":
+		buf.WriteString("{\"version\":1,\"status\":\"completed\",\"summary\":\"...\"}\n")
+	default:
+		buf.WriteString("{\"version\":1,\"status\":\"completed\",\"suggestions\":[{\"commit\":\"<sha>\",\"reason\":\"...\",\"description\":\"...\",\"confidence\":0.0}]}\n")
+	}
 	return buf.String()
 }
 
@@ -631,6 +644,11 @@ func buildReviewAttachment(req ReviewRequest) string {
 	if len(req.Context.CIResults) > 0 {
 		attachment.WriteString("\nCI results:\n")
 		attachment.Write(req.Context.CIResults)
+		attachment.WriteString("\n")
+	}
+	if strings.TrimSpace(req.Context.PriorSummary) != "" {
+		attachment.WriteString("\nPrior review summary:\n")
+		attachment.WriteString(strings.TrimSpace(req.Context.PriorSummary))
 		attachment.WriteString("\n")
 	}
 	return attachment.String()

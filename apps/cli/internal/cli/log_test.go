@@ -30,7 +30,7 @@ func TestListCheckpoints(t *testing.T) {
 	})
 	t.Setenv("JUL_WORKSPACE", "tester/@")
 
-	entries, err := listCheckpoints()
+	entries, err := listCheckpoints(0)
 	if err != nil {
 		t.Fatalf("listCheckpoints failed: %v", err)
 	}

@@ -18,13 +18,19 @@ type checkpointInfo struct {
 	TraceHead string
 }
 
-func listCheckpoints() ([]checkpointInfo, error) {
+func listCheckpoints(limit int) ([]checkpointInfo, error) {
 	user, workspace := workspaceParts()
 	if workspace == "" {
 		workspace = "@"
 	}
 	prefix := keepRefPrefix(user, workspace)
-	refs, err := listKeepRefs(prefix)
+	var refs []keepRefInfo
+	var err error
+	if limit > 0 {
+		refs, err = listKeepRefsLimited(prefix, limit)
+	} else {
+		refs, err = listKeepRefs(prefix)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +50,7 @@ func listCheckpoints() ([]checkpointInfo, error) {
 }
 
 func latestCheckpoint() (*checkpointInfo, error) {
-	entries, err := listCheckpoints()
+	entries, err := listCheckpoints(1)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +61,7 @@ func latestCheckpoint() (*checkpointInfo, error) {
 }
 
 func latestCheckpointForChange(changeID string) (*checkpointInfo, error) {
-	entries, err := listCheckpoints()
+	entries, err := listCheckpoints(0)
 	if err != nil {
 		return nil, err
 	}

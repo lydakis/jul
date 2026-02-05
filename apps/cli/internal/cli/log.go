@@ -21,7 +21,7 @@ func newLogCommand() Command {
 			showTraces := fs.Bool("traces", false, "Include trace history")
 			_ = fs.Parse(args)
 
-			entries, err := listCheckpoints()
+			entries, err := listCheckpoints(0)
 			if err != nil {
 				if *jsonOut {
 					_ = output.EncodeError(os.Stdout, "log_failed", fmt.Sprintf("failed to list checkpoints: %v", err), nil)

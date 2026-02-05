@@ -107,6 +107,34 @@ func ListSuggestions(changeID, status string, limit int) ([]client.Suggestion, e
 	return results[:limit], nil
 }
 
+func PendingSuggestionCounts() (map[string]int, error) {
+	entries, err := notes.List(notes.RefSuggestions)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int)
+	for _, entry := range entries {
+		var sug client.Suggestion
+		found, err := notes.ReadJSON(notes.RefSuggestions, entry.ObjectSHA, &sug)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		sug.Status = normalizeSuggestionStatus(sug.Status)
+		if sug.Status != "pending" {
+			continue
+		}
+		changeID := strings.TrimSpace(sug.ChangeID)
+		if changeID == "" {
+			continue
+		}
+		counts[changeID]++
+	}
+	return counts, nil
+}
+
 func UpdateSuggestionStatus(id, status, resolution string) (client.Suggestion, error) {
 	if strings.TrimSpace(id) == "" {
 		return client.Suggestion{}, errors.New("suggestion id required")

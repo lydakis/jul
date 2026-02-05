@@ -9,11 +9,13 @@ import (
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/metrics"
 	"github.com/lydakis/jul/cli/internal/output"
 	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
 func buildLocalStatus() (output.Status, error) {
+	timings := metrics.NewTimings()
 	info, err := gitutil.CurrentCommit()
 	if err != nil {
 		info, err = fallbackCommitInfo()
@@ -31,6 +33,7 @@ func buildLocalStatus() (output.Status, error) {
 		workspace = "@"
 	}
 	wsID := config.WorkspaceID()
+	repoRoot, _ := gitutil.RepoTopLevel()
 
 	draftSHA := ""
 	if ref, err := syncRef(user, workspace); err == nil && gitutil.RefExists(ref) {
@@ -44,19 +47,36 @@ func buildLocalStatus() (output.Status, error) {
 
 	var checkpoint *output.CheckpointStatus
 	var attView attestationView
-	last, err := latestCheckpoint()
-	if err != nil {
-		return output.Status{}, err
-	}
-	if last != nil {
-		checkpoint = &output.CheckpointStatus{
-			CommitSHA: last.SHA,
-			Message:   firstLine(last.Message),
-			Author:    last.Author,
-			When:      last.When.Format("2006-01-02 15:04:05"),
-			ChangeID:  last.ChangeID,
+	var cached *statusCache
+	if repoRoot != "" {
+		cacheStart := time.Now()
+		if cache, err := readStatusCache(repoRoot); err == nil && cache != nil {
+			if cacheMatchesWorkspace(cache, wsID, workspace) {
+				cached = cache
+			}
 		}
-		attView, _ = resolveAttestationView(last.SHA)
+		timings.Add("read_cache", time.Since(cacheStart))
+	}
+	if cached != nil && cached.LastCheckpoint != nil {
+		checkpoint = cached.LastCheckpoint
+		if checkpoint.CommitSHA != "" {
+			attView, _ = resolveAttestationView(checkpoint.CommitSHA)
+		}
+	} else {
+		last, err := latestCheckpoint()
+		if err != nil {
+			return output.Status{}, err
+		}
+		if last != nil {
+			checkpoint = &output.CheckpointStatus{
+				CommitSHA: last.SHA,
+				Message:   firstLine(last.Message),
+				Author:    last.Author,
+				When:      last.When.Format("2006-01-02 15:04:05"),
+				ChangeID:  last.ChangeID,
+			}
+			attView, _ = resolveAttestationView(last.SHA)
+		}
 	}
 	if attView.Attestation == nil && draftSHA != "" {
 		attView, _ = resolveAttestationView(draftSHA)
@@ -85,9 +105,15 @@ func buildLocalStatus() (output.Status, error) {
 		changeID = gitutil.FallbackChangeID(info.SHA)
 	}
 
-	suggestions, err := metadata.ListSuggestions(changeID, "pending", 1000)
-	if err != nil {
-		return output.Status{}, err
+	suggestionsPending := 0
+	if cached != nil && cached.SuggestionsPendingByChange != nil {
+		suggestionsPending = cached.SuggestionsPendingByChange[changeID]
+	} else {
+		suggestions, err := metadata.ListSuggestions(changeID, "pending", 1000)
+		if err != nil {
+			return output.Status{}, err
+		}
+		suggestionsPending = len(suggestions)
 	}
 
 	status := output.Status{
@@ -100,9 +126,9 @@ func buildLocalStatus() (output.Status, error) {
 		ChangeID:           changeID,
 		SyncStatus:         "local",
 		LastCheckpoint:     checkpoint,
-		SuggestionsPending: len(suggestions),
+		SuggestionsPending: suggestionsPending,
 	}
-	if repoRoot, err := gitutil.RepoTopLevel(); err == nil {
+	if repoRoot != "" {
 		if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err == nil && ok {
 			status.TrackRef = strings.TrimSpace(cfg.TrackRef)
 			status.TrackTip = strings.TrimSpace(cfg.TrackTip)
@@ -121,6 +147,13 @@ func buildLocalStatus() (output.Status, error) {
 		status.AttestationStale = attView.Stale
 		status.AttestationInheritedFrom = attView.InheritedFrom
 	}
+	if repoRoot != "" {
+		if run, ok := readSyncRunning(repoRoot); ok && run != nil && syncRunActive(*run) {
+			status.SyncState = "running"
+		} else {
+			status.SyncState = "idle"
+		}
+	}
 
 	filesChanged := draftFilesChanged(draftSHA)
 	status.Draft = &output.DraftStatus{
@@ -133,29 +166,55 @@ func buildLocalStatus() (output.Status, error) {
 		status.WorkingTree = tree
 	}
 
-	checkpoints, err := listCheckpoints()
-	if err != nil {
-		return output.Status{}, err
+	if cached != nil && len(cached.Checkpoints) > 0 {
+		status.Checkpoints = cached.Checkpoints
+		status.PromoteStatus = buildPromoteStatusFromSummaries(cached.Checkpoints)
+	} else {
+		fallbackStart := time.Now()
+		checkpoints, err := listCheckpoints(statusCacheLimit)
+		if err != nil {
+			return output.Status{}, err
+		}
+		pendingCounts, _ := metadata.PendingSuggestionCounts()
+		summaries := make([]output.CheckpointSummary, 0, len(checkpoints))
+		for _, cp := range checkpoints {
+			ciView, _ := resolveAttestationView(cp.SHA)
+			count := 0
+			if pendingCounts != nil {
+				count = pendingCounts[cp.ChangeID]
+			}
+			summaries = append(summaries, output.CheckpointSummary{
+				CommitSHA:          cp.SHA,
+				Message:            firstLine(cp.Message),
+				ChangeID:           cp.ChangeID,
+				When:               cp.When.Format("2006-01-02 15:04:05"),
+				CIStatus:           ciView.Status,
+				CIStale:            ciView.Stale,
+				CIInheritedFrom:    ciView.InheritedFrom,
+				SuggestionsPending: count,
+			})
+		}
+		status.Checkpoints = summaries
+		status.PromoteStatus = buildPromoteStatusFromSummaries(summaries)
+		timings.Add("fallback_scan", time.Since(fallbackStart))
 	}
-	summaries := make([]output.CheckpointSummary, 0, len(checkpoints))
+	status.Timings = timings
+	return status, nil
+}
+
+func buildPromoteStatusFromSummaries(checkpoints []output.CheckpointSummary) *output.PromoteStatus {
+	if len(checkpoints) == 0 {
+		return buildPromoteStatus(nil)
+	}
+	entries := make([]checkpointInfo, 0, len(checkpoints))
 	for _, cp := range checkpoints {
-		ciView, _ := resolveAttestationView(cp.SHA)
-		ciStatus := ciView.Status
-		suggestions, _ := metadata.ListSuggestions(cp.ChangeID, "pending", 1000)
-		summaries = append(summaries, output.CheckpointSummary{
-			CommitSHA:          cp.SHA,
-			Message:            firstLine(cp.Message),
-			ChangeID:           cp.ChangeID,
-			When:               cp.When.Format("2006-01-02 15:04:05"),
-			CIStatus:           ciStatus,
-			CIStale:            ciView.Stale,
-			CIInheritedFrom:    ciView.InheritedFrom,
-			SuggestionsPending: len(suggestions),
+		entries = append(entries, checkpointInfo{
+			SHA:      cp.CommitSHA,
+			Message:  cp.Message,
+			ChangeID: cp.ChangeID,
 		})
 	}
-	status.Checkpoints = summaries
-	status.PromoteStatus = buildPromoteStatus(checkpoints)
-	return status, nil
+	return buildPromoteStatus(entries)
 }
 
 func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
