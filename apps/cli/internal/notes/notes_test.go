@@ -110,6 +110,46 @@ func TestMissingNotesRefReturnsEmpty(t *testing.T) {
 	})
 }
 
+func TestNotesRefExistsRevalidatesAfterExternalRefCreate(t *testing.T) {
+	repo := initRepo(t)
+	commit := commitFile(t, repo, "README.md", "hello\n", "test commit")
+
+	withRepo(t, repo, func() {
+		resetNotesRefCacheForTest()
+
+		entries, err := List(RefSuggestions)
+		if err != nil {
+			t.Fatalf("initial List failed: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("expected no entries before ref exists, got %+v", entries)
+		}
+
+		payload := `{"status":"pass","when":"2026-02-06T00:00:00Z"}`
+		run(t, repo, "git", "notes", "--ref", RefSuggestions, "add", "-f", "-m", payload, commit)
+
+		entries, err = List(RefSuggestions)
+		if err != nil {
+			t.Fatalf("List after external ref create failed: %v", err)
+		}
+		if len(entries) != 1 || entries[0].ObjectSHA != commit {
+			t.Fatalf("expected one entry for %s, got %+v", commit, entries)
+		}
+
+		var out notePayload
+		found, err := ReadJSON(RefSuggestions, commit, &out)
+		if err != nil {
+			t.Fatalf("ReadJSON after external ref create failed: %v", err)
+		}
+		if !found {
+			t.Fatalf("expected note to be found after external ref create")
+		}
+		if out.Status != "pass" {
+			t.Fatalf("expected status pass, got %q", out.Status)
+		}
+	})
+}
+
 func initRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -152,4 +192,10 @@ func run(t *testing.T, dir, name string, args ...string) string {
 		t.Fatalf("command failed: %s %v\n%s", name, args, string(out))
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func resetNotesRefCacheForTest() {
+	notesRefCacheMu.Lock()
+	defer notesRefCacheMu.Unlock()
+	notesRefCache = map[string]bool{}
 }

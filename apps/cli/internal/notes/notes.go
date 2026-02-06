@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/lydakis/jul/cli/internal/gitutil"
 )
@@ -28,6 +29,11 @@ const MaxNoteSize = 16 * 1024
 
 var ErrNoteTooLarge = errors.New("note exceeds max size")
 var ErrRepoRequired = errors.New("jul repository required")
+
+var (
+	notesRefCacheMu sync.Mutex
+	notesRefCache   = map[string]bool{}
+)
 
 type Entry struct {
 	ObjectSHA string
@@ -58,6 +64,7 @@ func AddJSON(ref, objectSHA string, payload any) error {
 		}
 		return fmt.Errorf("jul failed to write note")
 	}
+	cacheNotesRefExists(repoRoot, ref, true)
 	return nil
 }
 
@@ -174,9 +181,13 @@ func notesRepoRoot() (string, error) {
 }
 
 func notesRefExists(repoRoot, ref string) (bool, error) {
+	if cached, ok := loadCachedNotesRefExists(repoRoot, ref); ok && cached {
+		return cached, nil
+	}
 	cmd := exec.Command("git", "-C", repoRoot, "show-ref", "--verify", "--quiet", ref)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
+		cacheNotesRefExists(repoRoot, ref, true)
 		return true, nil
 	}
 	var exitErr *exec.ExitError
@@ -198,4 +209,23 @@ func notesRefExists(repoRoot, ref string) (bool, error) {
 func isRepoFailure(output []byte) bool {
 	msg := strings.ToLower(strings.TrimSpace(string(output)))
 	return strings.Contains(msg, "not a git repository") || strings.Contains(msg, "unable to read current working directory")
+}
+
+func loadCachedNotesRefExists(repoRoot, ref string) (bool, bool) {
+	key := notesRefCacheKey(repoRoot, ref)
+	notesRefCacheMu.Lock()
+	defer notesRefCacheMu.Unlock()
+	exists, ok := notesRefCache[key]
+	return exists, ok
+}
+
+func cacheNotesRefExists(repoRoot, ref string, exists bool) {
+	key := notesRefCacheKey(repoRoot, ref)
+	notesRefCacheMu.Lock()
+	defer notesRefCacheMu.Unlock()
+	notesRefCache[key] = exists
+}
+
+func notesRefCacheKey(repoRoot, ref string) string {
+	return strings.TrimSpace(repoRoot) + "\x00" + strings.TrimSpace(ref)
 }

@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/lydakis/jul/cli/internal/syncignore"
 )
@@ -96,28 +95,11 @@ func updateIndexIncremental(repoRoot, indexPath, excludePath string) error {
 	env := map[string]string{
 		"GIT_INDEX_FILE": indexPath,
 	}
-	var diffOut string
-	var diffErr error
-	var untrackedOut string
-	var untrackedErr error
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		diffOut, diffErr = gitWithEnv(repoRoot, env, "-c", "core.excludesfile="+excludePath, "diff", "--name-only", "-z")
-	}()
-	go func() {
-		defer wg.Done()
-		untrackedOut, untrackedErr = gitWithEnv(repoRoot, env, "-c", "core.excludesfile="+excludePath, "ls-files", "--others", "--exclude-standard", "-z")
-	}()
-	wg.Wait()
-	if diffErr != nil {
-		return diffErr
+	statusOut, err := gitWithEnvRaw(repoRoot, env, "-c", "core.excludesfile="+excludePath, "status", "--porcelain", "-z", "-unormal")
+	if err != nil {
+		return err
 	}
-	if untrackedErr != nil {
-		return untrackedErr
-	}
-	paths := collectChangedPaths(diffOut, untrackedOut)
+	paths := collectChangedPathsFromStatus(statusOut)
 	if len(paths) == 0 {
 		return nil
 	}
@@ -125,19 +107,30 @@ func updateIndexIncremental(repoRoot, indexPath, excludePath string) error {
 	return runGitWithEnv(repoRoot, env, args...)
 }
 
-func collectChangedPaths(outputs ...string) []string {
+func collectChangedPathsFromStatus(statusOutput string) []string {
 	seen := map[string]struct{}{}
-	for _, out := range outputs {
-		if out == "" {
+	expectRenameTarget := false
+	for _, entry := range strings.Split(statusOutput, "\x00") {
+		if entry == "" {
 			continue
 		}
-		for _, entry := range strings.Split(out, "\x00") {
-			path := strings.TrimSpace(entry)
-			if path == "" {
-				continue
+		path := ""
+		if expectRenameTarget {
+			path = strings.TrimSpace(entry)
+			expectRenameTarget = false
+		} else if len(entry) > 3 && entry[2] == ' ' {
+			statusCode := entry[:2]
+			path = strings.TrimSpace(entry[3:])
+			if strings.Contains(statusCode, "R") || strings.Contains(statusCode, "C") {
+				expectRenameTarget = true
 			}
-			seen[path] = struct{}{}
+		} else {
+			path = strings.TrimSpace(entry)
 		}
+		if path == "" {
+			continue
+		}
+		seen[path] = struct{}{}
 	}
 	if len(seen) == 0 {
 		return nil
@@ -179,6 +172,14 @@ func commitTree(repoRoot, treeSHA, parentSHA, message string) (string, error) {
 }
 
 func gitWithEnv(dir string, env map[string]string, args ...string) (string, error) {
+	output, err := gitWithEnvRaw(dir, env, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+func gitWithEnvRaw(dir string, env map[string]string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), flattenEnv(env)...)
@@ -190,7 +191,7 @@ func gitWithEnv(dir string, env map[string]string, args ...string) (string, erro
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git -C %s %s failed: %s", dir, strings.Join(args, " "), strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(out.String()), nil
+	return out.String(), nil
 }
 
 func runGitWithEnv(dir string, env map[string]string, args ...string) error {
