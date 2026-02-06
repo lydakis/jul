@@ -61,6 +61,9 @@ func ReadJSON(ref, objectSHA string, target any) (bool, error) {
 	if strings.TrimSpace(ref) == "" || strings.TrimSpace(objectSHA) == "" {
 		return false, fmt.Errorf("note ref and object sha required")
 	}
+	if !gitutil.RefExists(ref) {
+		return false, nil
+	}
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return false, err
@@ -105,6 +108,9 @@ func Remove(ref, objectSHA string) error {
 func List(ref string) ([]Entry, error) {
 	if strings.TrimSpace(ref) == "" {
 		return nil, fmt.Errorf("note ref required")
+	}
+	if !gitutil.RefExists(ref) {
+		return []Entry{}, nil
 	}
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {

@@ -14,8 +14,25 @@ import (
 	wsconfig "github.com/lydakis/jul/cli/internal/workspace"
 )
 
+type workingTreeResult struct {
+	tree     *output.WorkingTreeStatus
+	err      error
+	duration time.Duration
+}
+
 func buildLocalStatus() (output.Status, error) {
 	timings := metrics.NewTimings()
+	workingTreeCh := make(chan workingTreeResult, 1)
+	go func() {
+		start := time.Now()
+		tree, err := readWorkingTreeStatus()
+		workingTreeCh <- workingTreeResult{
+			tree:     tree,
+			err:      err,
+			duration: time.Since(start),
+		}
+	}()
+
 	commitStart := time.Now()
 	info := gitutil.CommitInfo{}
 	head, err := gitutil.ReadHeadInfo()
@@ -222,11 +239,11 @@ func buildLocalStatus() (output.Status, error) {
 	draftCIStart := time.Now()
 	status.DraftCI = buildDraftCIStatus(draftSHA)
 	timings.Add("draft_ci", time.Since(draftCIStart))
-	workStart := time.Now()
-	if tree, err := readWorkingTreeStatus(); err == nil {
-		status.WorkingTree = tree
+	workRes := <-workingTreeCh
+	if workRes.err == nil {
+		status.WorkingTree = workRes.tree
 	}
-	timings.Add("working_tree", time.Since(workStart))
+	timings.Add("working_tree", workRes.duration)
 
 	if cached != nil && len(cached.Checkpoints) > 0 {
 		status.Checkpoints = cached.Checkpoints
@@ -456,7 +473,7 @@ func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
 }
 
 func readWorkingTreeStatus() (*output.WorkingTreeStatus, error) {
-	out, err := gitutil.Git("status", "--porcelain", "-uall")
+	out, err := gitutil.Git("status", "--porcelain", "-unormal")
 	if err != nil {
 		return nil, err
 	}
