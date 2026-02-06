@@ -456,41 +456,28 @@ func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
 }
 
 func readWorkingTreeStatus() (*output.WorkingTreeStatus, error) {
-	type cmdResult struct {
-		out string
-		err error
-	}
-	statusCh := make(chan cmdResult, 1)
-	untrackedCh := make(chan cmdResult, 1)
-	go func() {
-		out, err := gitutil.Git("status", "--porcelain", "-uno")
-		statusCh <- cmdResult{out: out, err: err}
-	}()
-	go func() {
-		out, err := gitutil.Git("ls-files", "--others", "--exclude-standard")
-		untrackedCh <- cmdResult{out: out, err: err}
-	}()
-
-	statusRes := <-statusCh
-	untrackedRes := <-untrackedCh
-	if statusRes.err != nil {
-		return nil, statusRes.err
-	}
-	if untrackedRes.err != nil {
-		return nil, untrackedRes.err
+	out, err := gitutil.Git("status", "--porcelain", "-uall")
+	if err != nil {
+		return nil, err
 	}
 
 	status := &output.WorkingTreeStatus{}
-	out := strings.TrimSpace(statusRes.out)
-	if out != "" {
-		lines := strings.Split(out, "\n")
-		for _, line := range lines {
-			if len(line) < 2 {
+	trimmed := strings.TrimSpace(out)
+	if trimmed != "" {
+		for _, line := range strings.Split(trimmed, "\n") {
+			if len(line) < 4 {
 				continue
 			}
 			code := line[:2]
-			path := strings.TrimSpace(line[2:])
+			path := strings.TrimSpace(line[3:])
 			if path == "" {
+				continue
+			}
+			if code == "??" {
+				status.Untracked = append(status.Untracked, output.WorkingTreeEntry{
+					Path:   path,
+					Status: "?",
+				})
 				continue
 			}
 			staged := code[0]
@@ -507,20 +494,6 @@ func readWorkingTreeStatus() (*output.WorkingTreeStatus, error) {
 					Status: string(unstaged),
 				})
 			}
-		}
-	}
-
-	untracked := strings.TrimSpace(untrackedRes.out)
-	if untracked != "" {
-		for _, line := range strings.Split(untracked, "\n") {
-			path := strings.TrimSpace(line)
-			if path == "" {
-				continue
-			}
-			status.Untracked = append(status.Untracked, output.WorkingTreeEntry{
-				Path:   path,
-				Status: "?",
-			})
 		}
 	}
 

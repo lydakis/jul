@@ -17,6 +17,7 @@ import (
 
 const (
 	perfStatusRuns     = 30
+	perfStatusColdRuns = 20
 	perfSyncRuns       = 20
 	perfCheckpointRuns = 10
 )
@@ -41,6 +42,30 @@ func TestPerfStatusSmoke(t *testing.T) {
 	budgetP50, budgetP95 := perfBudgetStatus()
 	t.Logf("PT-STATUS-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-STATUS-001", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-STATUS-001", p50, p95, 4.0)
+}
+
+func TestPerfStatusCacheColdSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	repo, env := setupPerfRepo(t, "perf-status-cold", 2000, 1024)
+	runCmd(t, repo, env, julPath, "checkpoint", "-m", "perf seed", "--no-ci", "--no-review")
+
+	samples := make([]time.Duration, 0, perfStatusColdRuns)
+	cachePath := filepath.Join(repo, ".jul", "status.json")
+	for i := 0; i < perfStatusColdRuns; i++ {
+		_ = os.Remove(cachePath)
+		_, duration := runTimedJSONCommand(t, repo, env, julPath, "status", "--json")
+		samples = append(samples, duration)
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP95 := perfBudgetStatusCacheColdP95()
+	t.Logf("PT-STATUS-002 p50=%s p95=%s budget95=%s", p50, p95, budgetP95)
+	assertPerfP95(t, "PT-STATUS-002", p95, budgetP95)
+	assertPerfRatio(t, "PT-STATUS-002", p50, p95, 4.0)
 }
 
 func TestPerfSyncSmoke(t *testing.T) {
@@ -64,6 +89,7 @@ func TestPerfSyncSmoke(t *testing.T) {
 	budgetP50, budgetP95 := perfBudgetSync()
 	t.Logf("PT-SYNC-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-SYNC-001", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-SYNC-001", p50, p95, 3.0)
 }
 
 func TestPerfCheckpointSmoke(t *testing.T) {
@@ -84,6 +110,7 @@ func TestPerfCheckpointSmoke(t *testing.T) {
 	budgetP50, budgetP95 := perfBudgetCheckpoint()
 	t.Logf("PT-CHECKPOINT-001 p50=%s p95=%s budget50=%s budgetP95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-CHECKPOINT-001", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-CHECKPOINT-001", p50, p95, 3.0)
 }
 
 func perfCLI(t *testing.T) string {
@@ -208,6 +235,11 @@ func perfBudgetStatus() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(25*time.Millisecond, 80*time.Millisecond)
 }
 
+func perfBudgetStatusCacheColdP95() time.Duration {
+	_, p95 := applyPerfMultiplier(0, 150*time.Millisecond)
+	return p95
+}
+
 func perfBudgetSync() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(300*time.Millisecond, 1*time.Second)
 }
@@ -251,6 +283,24 @@ func assertPerfBudget(t *testing.T, label string, p50, p95, budget50, budget95 t
 	t.Helper()
 	if p50 > budget50 || p95 > budget95 {
 		t.Fatalf("%s failed: p50=%s (budget %s), p95=%s (budget %s)", label, p50, budget50, p95, budget95)
+	}
+}
+
+func assertPerfP95(t *testing.T, label string, p95, budget95 time.Duration) {
+	t.Helper()
+	if p95 > budget95 {
+		t.Fatalf("%s failed: p95=%s (budget %s)", label, p95, budget95)
+	}
+}
+
+func assertPerfRatio(t *testing.T, label string, p50, p95 time.Duration, maxRatio float64) {
+	t.Helper()
+	if p50 <= 0 {
+		return
+	}
+	ratio := float64(p95) / float64(p50)
+	if ratio > maxRatio {
+		t.Fatalf("%s failed: p95/p50 ratio=%.2f (max %.2f)", label, ratio, maxRatio)
 	}
 }
 

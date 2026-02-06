@@ -77,13 +77,18 @@ func checkpointFromRef(ref keepRefInfo) (checkpointInfo, error) {
 	if ref.CheckpointSHA == "" {
 		return checkpointInfo{}, fmt.Errorf("checkpoint sha missing")
 	}
-	msg, err := gitutil.CommitMessage(ref.CheckpointSHA)
+	out, err := gitutil.Git("log", "-1", "--format=%an%x00%cI%x00%B", ref.CheckpointSHA)
 	if err != nil {
 		return checkpointInfo{}, err
 	}
+	parts := strings.SplitN(out, "\x00", 3)
+	if len(parts) < 3 {
+		return checkpointInfo{}, fmt.Errorf("unexpected checkpoint metadata")
+	}
+	author := strings.TrimSpace(parts[0])
+	whenStr := strings.TrimSpace(parts[1])
+	msg := parts[2]
 	traceHead := gitutil.ExtractTraceHead(msg)
-	author, _ := gitutil.Git("log", "-1", "--format=%an", ref.CheckpointSHA)
-	whenStr, _ := gitutil.Git("log", "-1", "--format=%cI", ref.CheckpointSHA)
 	when, _ := time.Parse(time.RFC3339, strings.TrimSpace(whenStr))
 	changeID := gitutil.ExtractChangeID(msg)
 	if changeID == "" {
