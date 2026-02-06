@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +46,66 @@ func TestNotesRoundTrip(t *testing.T) {
 		}
 		if len(entries) != 1 || entries[0].ObjectSHA != commit {
 			t.Fatalf("unexpected entries: %+v", entries)
+		}
+	})
+}
+
+func TestListOutsideRepoReturnsJulError(t *testing.T) {
+	dir := t.TempDir()
+	withRepo(t, dir, func() {
+		_, err := List(RefSuggestions)
+		if err == nil {
+			t.Fatalf("expected error outside repo")
+		}
+		if !errors.Is(err, ErrRepoRequired) {
+			t.Fatalf("expected ErrRepoRequired, got %v", err)
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "git") {
+			t.Fatalf("expected jul-scoped error, got %q", err.Error())
+		}
+	})
+}
+
+func TestReadJSONOutsideRepoReturnsJulError(t *testing.T) {
+	dir := t.TempDir()
+	withRepo(t, dir, func() {
+		var payload notePayload
+		found, err := ReadJSON(RefSuggestions, "deadbeef", &payload)
+		if err == nil {
+			t.Fatalf("expected error outside repo")
+		}
+		if found {
+			t.Fatalf("expected found=false outside repo")
+		}
+		if !errors.Is(err, ErrRepoRequired) {
+			t.Fatalf("expected ErrRepoRequired, got %v", err)
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "git") {
+			t.Fatalf("expected jul-scoped error, got %q", err.Error())
+		}
+	})
+}
+
+func TestMissingNotesRefReturnsEmpty(t *testing.T) {
+	repo := initRepo(t)
+	commit := commitFile(t, repo, "README.md", "hello\n", "test commit")
+
+	withRepo(t, repo, func() {
+		var payload notePayload
+		found, err := ReadJSON(RefSuggestions, commit, &payload)
+		if err != nil {
+			t.Fatalf("ReadJSON failed: %v", err)
+		}
+		if found {
+			t.Fatalf("expected no note for missing ref")
+		}
+
+		entries, err := List(RefSuggestions)
+		if err != nil {
+			t.Fatalf("List failed: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("expected no entries for missing ref, got %+v", entries)
 		}
 	})
 }
