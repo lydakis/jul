@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -309,26 +308,49 @@ func latestCheckpointForChange(user, workspace, changeID string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	type entry struct {
+	type candidate struct {
 		sha  string
 		when time.Time
 	}
-	entries := []entry{}
+	candidates := make([]candidate, 0, len(refs))
+	seen := map[string]struct{}{}
 	for _, ref := range refs {
 		if ref.ChangeID != changeID {
 			continue
 		}
+		sha := strings.TrimSpace(ref.CheckpointSHA)
+		if sha == "" {
+			continue
+		}
+		if _, ok := seen[sha]; ok {
+			continue
+		}
+		seen[sha] = struct{}{}
 		whenStr, _ := gitutil.Git("log", "-1", "--format=%cI", ref.CheckpointSHA)
 		when, _ := time.Parse(time.RFC3339, strings.TrimSpace(whenStr))
-		entries = append(entries, entry{sha: ref.CheckpointSHA, when: when})
+		candidates = append(candidates, candidate{sha: sha, when: when})
 	}
-	if len(entries) == 0 {
+	if len(candidates) == 0 {
 		return "", nil
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].when.After(entries[j].when)
-	})
-	return entries[0].sha, nil
+	latest := candidates[0]
+	for _, current := range candidates[1:] {
+		if gitutil.IsAncestor(latest.sha, current.sha) {
+			latest = current
+			continue
+		}
+		if gitutil.IsAncestor(current.sha, latest.sha) {
+			continue
+		}
+		if current.when.After(latest.when) {
+			latest = current
+			continue
+		}
+		if current.when.Equal(latest.when) && current.sha > latest.sha {
+			latest = current
+		}
+	}
+	return latest.sha, nil
 }
 
 func checkpointChain(latestSHA, changeID string) ([]string, error) {
