@@ -80,6 +80,17 @@ func newSyncCommand() Command {
 				return runSyncDaemon(syncer.SyncOptions{AllowSecrets: *allowSecrets})
 			}
 
+			stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
+			watch := stream != nil
+			stopProgress := func() {}
+			if !*jsonOut {
+				if watch {
+					stopProgress = startSyncWatchProgress(stream)
+				} else {
+					stopProgress = startSyncSpinner(os.Stderr)
+				}
+			}
+
 			bgRunID := syncBackgroundEnv()
 			repoRoot, _ := gitutil.RepoTopLevel()
 			var bgErr error
@@ -90,6 +101,7 @@ func newSyncCommand() Command {
 			}()
 
 			res, err := syncer.SyncWithOptions(syncer.SyncOptions{AllowSecrets: *allowSecrets})
+			stopProgress()
 			if err != nil {
 				bgErr = err
 				if *jsonOut {

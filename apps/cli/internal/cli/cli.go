@@ -134,7 +134,10 @@ func shouldAutoSync(command string) bool {
 
 var autoSyncSkip = map[string]bool{
 	"accept":      true,
+	"apply":       true,
+	"checkpoint":  true,
 	"clone":       true,
+	"draft":       true,
 	"doctor":      true,
 	"init":        true,
 	"merge":       true,
@@ -142,4 +145,5 @@ var autoSyncSkip = map[string]bool{
 	"suggestions": true,
 	"sync":        true,
 	"version":     true,
+	"ws":          true,
 }
