@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 )
 
@@ -298,6 +299,115 @@ func TestCheckpointUsesRemoteWorkspaceTip(t *testing.T) {
 	}
 	if strings.TrimSpace(out) == "" {
 		t.Fatalf("expected remote workspace ref to be created")
+	}
+}
+
+func TestSyncResolvesNamespaceFromRemoteBeforeWorkspaceRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "@")
+
+	seedDir := filepath.Join(tmp, "seed")
+	if err := os.MkdirAll(seedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "branch", "-M", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "config", "user.name", "remoteuser"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "config", "user.email", "remote@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "add", "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+
+	rootSHA, err := gitOut(seedDir, "git", "rev-list", "--max-parents=0", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const canonicalNamespace = "canonical-1234"
+	repoMeta := `{"repo_id":"jul:deadbeef","user_namespace":"` + canonicalNamespace + `"}`
+	if err := run(seedDir, "git", "notes", "--ref", "refs/notes/jul/repo-meta", "add", "-f", "-m", repoMeta, rootSHA); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteDir := filepath.Join(tmp, "remote.git")
+	if err := run(tmp, "git", "init", "--bare", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(remoteDir, "git", "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "remote", "add", "origin", remoteDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceRef := "refs/jul/workspaces/" + canonicalNamespace + "/@"
+	if err := run(seedDir, "git", "push", "origin", "HEAD:"+workspaceRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(seedDir, "git", "push", "origin", "refs/notes/jul/repo-meta:refs/notes/jul/repo-meta"); err != nil {
+		t.Fatal(err)
+	}
+
+	cloneDir := filepath.Join(tmp, "clone")
+	if err := run(tmp, "git", "clone", remoteDir, cloneDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(cloneDir, "git", "config", "user.name", "localuser"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(cloneDir, "git", "config", "user.email", "local@example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(cloneDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+	if got := strings.TrimSpace(config.UserNamespace()); got != "" {
+		t.Fatalf("expected no cached user namespace before sync, got %q", got)
+	}
+
+	res, err := Sync()
+	if err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	wantWorkspaceRef := "refs/jul/workspaces/" + canonicalNamespace + "/@"
+	if res.WorkspaceRef != wantWorkspaceRef {
+		t.Fatalf("expected workspace ref %q, got %q", wantWorkspaceRef, res.WorkspaceRef)
+	}
+	if !strings.HasPrefix(res.SyncRef, "refs/jul/sync/"+canonicalNamespace+"/") {
+		t.Fatalf("expected sync ref to use canonical namespace, got %q", res.SyncRef)
+	}
+
+	if got := strings.TrimSpace(config.UserNamespace()); got != canonicalNamespace {
+		t.Fatalf("expected cached namespace %q, got %q", canonicalNamespace, got)
 	}
 }
 

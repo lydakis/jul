@@ -99,6 +99,12 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 		}
 	}
 
+	if rerr == nil {
+		_, _ = identity.ResolveUserNamespace(remote.Name)
+	} else {
+		_, _ = identity.ResolveUserNamespace("")
+	}
+
 	user, workspace := workspaceParts()
 	if workspace == "" {
 		workspace = "@"
