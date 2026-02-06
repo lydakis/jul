@@ -142,6 +142,7 @@ func TestWorkspaceRestackRebasesCheckpointsAndUpdatesBase(t *testing.T) {
 	writeFilePath(t, repo, "base.txt", "base\n")
 	runGitCmd(t, repo, "add", "base.txt")
 	runGitCmd(t, repo, "commit", "-m", "base")
+	runGitCmd(t, repo, "branch", "-M", "main")
 
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
