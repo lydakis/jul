@@ -99,10 +99,12 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 		}
 	}
 
-	if rerr == nil {
-		_, _ = identity.ResolveUserNamespace(remote.Name)
-	} else {
-		_, _ = identity.ResolveUserNamespace("")
+	if workspaceNeedsNamespaceResolution() {
+		if rerr == nil {
+			_, _ = identity.ResolveUserNamespace(remote.Name)
+		} else {
+			_, _ = identity.ResolveUserNamespace("")
+		}
 	}
 
 	user, workspace := workspaceParts()
@@ -401,10 +403,12 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		}
 	}
 
-	if rerr == nil {
-		_, _ = identity.ResolveUserNamespace(remote.Name)
-	} else {
-		_, _ = identity.ResolveUserNamespace("")
+	if workspaceNeedsNamespaceResolution() {
+		if rerr == nil {
+			_, _ = identity.ResolveUserNamespace(remote.Name)
+		} else {
+			_, _ = identity.ResolveUserNamespace("")
+		}
 	}
 
 	user, workspace := workspaceParts()
@@ -807,6 +811,19 @@ func workspaceParts() (string, string) {
 		user = "user"
 	}
 	return user, id
+}
+
+func workspaceIDHasExplicitUser(workspaceID string) bool {
+	parts := strings.SplitN(strings.TrimSpace(workspaceID), "/", 2)
+	return len(parts) == 2 && strings.TrimSpace(parts[0]) != ""
+}
+
+func workspaceNeedsNamespaceResolution() bool {
+	rawWorkspace := strings.TrimSpace(os.Getenv(config.EnvWorkspace))
+	if rawWorkspace != "" {
+		return !workspaceIDHasExplicitUser(rawWorkspace)
+	}
+	return true
 }
 
 func pushKeepRefs(remoteName, user, workspace string) error {
