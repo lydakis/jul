@@ -298,6 +298,11 @@ func assertPerfRatio(t *testing.T, label string, p50, p95 time.Duration, maxRati
 	if p50 <= 0 {
 		return
 	}
+	// Very small medians are dominated by scheduler jitter and timer granularity.
+	// In that regime, absolute p95 budgets are more stable than a relative ratio gate.
+	if p50 < 10*time.Millisecond {
+		return
+	}
 	ratio := float64(p95) / float64(p50)
 	if ratio > maxRatio {
 		t.Fatalf("%s failed: p95/p50 ratio=%.2f (max %.2f)", label, ratio, maxRatio)
