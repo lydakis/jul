@@ -568,6 +568,8 @@ func buildReviewPrompt(action, attachmentPath string) string {
 	switch action {
 	case "resolve_conflict":
 		buf.WriteString("You are the Jul internal merge agent.\n")
+	case "generate_message":
+		buf.WriteString("You are the Jul internal checkpoint message agent.\n")
 	case "review_summary":
 		buf.WriteString("You are the Jul internal review agent.\n")
 	default:
@@ -579,6 +581,10 @@ func buildReviewPrompt(action, attachmentPath string) string {
 			buf.WriteString("Resolve merge conflicts using the context file at ")
 			buf.WriteString(attachmentPath)
 			buf.WriteString(". Fix conflicts in the workspace, ensure it builds, commit the resolution, and respond with JSON ONLY.\n")
+		case "generate_message":
+			buf.WriteString("Generate a concise checkpoint commit message using the context file at ")
+			buf.WriteString(attachmentPath)
+			buf.WriteString(". Do not modify the workspace. Respond with JSON ONLY. Put the full commit message text in summary. Do not include Change-Id or Trace trailers.\n")
 		case "review_summary":
 			buf.WriteString("Review the context file at ")
 			buf.WriteString(attachmentPath)
@@ -592,6 +598,8 @@ func buildReviewPrompt(action, attachmentPath string) string {
 		switch action {
 		case "resolve_conflict":
 			buf.WriteString("Resolve merge conflicts using the attached context file. Fix conflicts in the workspace, ensure it builds, commit the resolution, and respond with JSON ONLY.\n")
+		case "generate_message":
+			buf.WriteString("Generate a concise checkpoint commit message using the attached context file. Do not modify the workspace. Respond with JSON ONLY. Put the full commit message text in summary. Do not include Change-Id or Trace trailers.\n")
 		case "review_summary":
 			buf.WriteString("Review the attached context file. Do not modify the workspace. Respond with JSON ONLY containing a concise summary of findings and recommendations.\n")
 		default:
@@ -600,6 +608,8 @@ func buildReviewPrompt(action, attachmentPath string) string {
 	}
 	buf.WriteString("Response schema:\n")
 	switch action {
+	case "generate_message":
+		buf.WriteString("{\"version\":1,\"status\":\"completed\",\"summary\":\"feat: ...\"}\n")
 	case "review_summary":
 		buf.WriteString("{\"version\":1,\"status\":\"completed\",\"summary\":\"...\"}\n")
 	default:

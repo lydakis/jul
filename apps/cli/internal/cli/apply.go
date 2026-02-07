@@ -122,9 +122,11 @@ func newApplyCommand() Command {
 			}
 			res.Draft = buildApplyDraft(syncRes.DraftSHA)
 			if *checkpoint {
-				message := ""
-				if sug.Reason != "" {
-					message = "fix: " + sug.Reason
+				message := "fix: apply suggestion " + id
+				if reason := strings.TrimSpace(sug.Reason); reason != "" {
+					message = "fix: " + firstLine(reason)
+				} else if description := strings.TrimSpace(sug.Description); description != "" {
+					message = "fix: " + firstLine(description)
 				}
 				checkpointRes, err := syncer.Checkpoint(message)
 				if err != nil {

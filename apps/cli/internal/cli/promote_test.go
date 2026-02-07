@@ -163,7 +163,7 @@ func TestPromoteAutoLandsStack(t *testing.T) {
 		t.Fatalf("ws new failed with %d", code)
 	}
 	writeFilePath(t, repo, "parent.txt", "parent\n")
-	parentCheckpoint, err := syncer.Checkpoint("")
+	parentCheckpoint, err := syncer.Checkpoint("feat: parent")
 	if err != nil {
 		t.Fatalf("checkpoint failed: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestPromoteAutoLandsStack(t *testing.T) {
 		t.Fatalf("ws stack failed with %d", code)
 	}
 	writeFilePath(t, repo, "child.txt", "child\n")
-	childCheckpoint, err := syncer.Checkpoint("")
+	childCheckpoint, err := syncer.Checkpoint("feat: child")
 	if err != nil {
 		t.Fatalf("checkpoint failed: %v", err)
 	}

@@ -378,6 +378,11 @@ func ensureWorkspaceAligned(syncRes Result) error {
 }
 
 func Checkpoint(message string) (CheckpointResult, error) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return CheckpointResult{}, errors.New("checkpoint message required")
+	}
+
 	timings := metrics.NewTimings()
 	syncStart := time.Now()
 	repoRoot, err := gitutil.RepoTopLevel()
@@ -435,21 +440,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 
 	leaseBase, _ := readWorkspaceLease(repoRoot, workspace)
 	leaseBase = strings.TrimSpace(leaseBase)
-	if leaseBase != "" {
-		if msg, err := gitutil.CommitMessage(leaseBase); err == nil && isDraftMessage(msg) {
-			if parent, err := gitutil.ParentOf(leaseBase); err == nil && strings.TrimSpace(parent) != "" {
-				leaseBase = strings.TrimSpace(parent)
-			}
-		}
-	}
 	workspaceBase := strings.TrimSpace(workspaceTip)
-	if workspaceBase != "" {
-		if msg, err := gitutil.CommitMessage(workspaceBase); err == nil && isDraftMessage(msg) {
-			if parent, err := gitutil.ParentOf(workspaceBase); err == nil && strings.TrimSpace(parent) != "" {
-				workspaceBase = strings.TrimSpace(parent)
-			}
-		}
-	}
 
 	diverged := false
 	if leaseBase == "" && workspaceBase != "" {
@@ -463,27 +454,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 		}
 	}
 
-	parentSHA, changeID := resolveDraftBase(workspaceRef, syncRef)
-	if leaseBase != "" {
-		parentSHA = leaseBase
-	} else if workspaceTip != "" {
-		parentSHA = workspaceTip
-	}
-	if strings.TrimSpace(parentSHA) == "" {
-		if head, err := gitutil.ResolveRef("HEAD"); err == nil {
-			parentSHA = strings.TrimSpace(head)
-		}
-	}
-	if changeID == "" && parentSHA != "" {
-		if msg, err := gitutil.CommitMessage(parentSHA); err == nil {
-			changeID = gitutil.ExtractChangeID(msg)
-		}
-	}
-	if changeID == "" {
-		if generated, err := gitutil.NewChangeID(); err == nil {
-			changeID = generated
-		}
-	}
+	parentSHA, changeID := resolveCheckpointParentAndChangeID(syncRef, leaseBase, workspaceTip)
 
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
@@ -503,9 +474,6 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	}
 
 	commitStart := time.Now()
-	if strings.TrimSpace(message) == "" {
-		message = "checkpoint"
-	}
 	message = ensureChangeID(message, changeID)
 	if traceRes.CanonicalSHA != "" {
 		message = ensureTrailer(message, "Trace-Head", traceRes.CanonicalSHA)
@@ -1047,6 +1015,62 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 		if head, err := gitutil.ResolveRef("HEAD"); err == nil && strings.TrimSpace(head) != "" && head != parentSHA {
 			if headMsg, err := gitutil.CommitMessage(head); err == nil && !isDraftMessage(headMsg) {
 				parentSHA = head
+			}
+		}
+	}
+	if changeID == "" && parentSHA != "" {
+		changeID = gitutil.FallbackChangeID(parentSHA)
+	}
+	if changeID == "" {
+		if generated, err := gitutil.NewChangeID(); err == nil {
+			changeID = generated
+		}
+	}
+	return parentSHA, changeID
+}
+
+func resolveCheckpointParentAndChangeID(syncRef, leaseBase, workspaceTip string) (string, string) {
+	parentSHA := strings.TrimSpace(leaseBase)
+	if parentSHA == "" {
+		parentSHA = strings.TrimSpace(workspaceTip)
+	}
+
+	draftSHA := ""
+	draftChangeID := ""
+	if gitutil.RefExists(syncRef) {
+		if sha, err := gitutil.ResolveRef(syncRef); err == nil {
+			draftSHA = strings.TrimSpace(sha)
+			if draftSHA != "" {
+				if draftMsg, err := gitutil.CommitMessage(draftSHA); err == nil {
+					draftChangeID = gitutil.ExtractChangeID(draftMsg)
+					if parentSHA == "" && isDraftMessage(draftMsg) {
+						if parent, err := gitutil.ParentOf(draftSHA); err == nil && strings.TrimSpace(parent) != "" {
+							parentSHA = strings.TrimSpace(parent)
+						} else {
+							parentSHA = draftSHA
+						}
+					}
+				}
+				if parentSHA == "" {
+					parentSHA = draftSHA
+				}
+			}
+		}
+	}
+	if parentSHA == "" {
+		if head, err := gitutil.ResolveRef("HEAD"); err == nil {
+			parentSHA = strings.TrimSpace(head)
+		}
+	}
+
+	changeID := strings.TrimSpace(draftChangeID)
+	if changeID == "" && parentSHA != "" {
+		if msg, err := gitutil.CommitMessage(parentSHA); err == nil {
+			changeID = gitutil.ExtractChangeID(msg)
+			if isDraftMessage(msg) {
+				if parent, err := gitutil.ParentOf(parentSHA); err == nil && strings.TrimSpace(parent) != "" {
+					parentSHA = strings.TrimSpace(parent)
+				}
 			}
 		}
 	}

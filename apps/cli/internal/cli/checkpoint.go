@@ -77,6 +77,9 @@ func newCheckpointCommand() Command {
 				}
 			}
 
+			stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
+			watch := stream != nil
+
 			var res syncer.CheckpointResult
 			var err error
 			timings := metrics.NewTimings()
@@ -88,7 +91,12 @@ func newCheckpointCommand() Command {
 				}
 				res, err = syncer.AdoptCheckpoint()
 			} else {
-				res, err = syncer.Checkpoint(*message)
+				resolvedMessage, resolveErr := resolveCheckpointMessage(*message, stream)
+				if resolveErr != nil {
+					err = fmt.Errorf("failed to generate checkpoint message: %w", resolveErr)
+				} else {
+					res, err = syncer.Checkpoint(resolvedMessage)
+				}
 			}
 			timings.Add("overhead", time.Since(overheadStart))
 			if err != nil {
@@ -135,9 +143,6 @@ func newCheckpointCommand() Command {
 					reviewRun = run
 				}
 			}
-
-			stream := watchStream(*jsonOut, os.Stdout, os.Stderr)
-			watch := stream != nil
 
 			ciExit := 0
 			if watch && (ciRun != nil || reviewRun != nil) {

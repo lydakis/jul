@@ -139,31 +139,34 @@ func Trace(opts TraceOptions) (TraceResult, error) {
 	if opts.Implicit {
 		traceType = "sync"
 	}
-	note := metadata.TraceNote{
-		TraceSHA:  traceSHA,
-		TraceType: traceType,
-		Agent:     strings.TrimSpace(opts.Agent),
-		SessionID: strings.TrimSpace(opts.SessionID),
-		Turn:      opts.Turn,
-		Device:    deviceID,
-		CreatedAt: time.Now().UTC(),
-	}
-	if prompt != "" {
-		if config.TraceSyncPromptHash() {
-			note.PromptHash = promptHash
+	shouldWriteNote := prompt != "" || strings.TrimSpace(opts.Agent) != "" || strings.TrimSpace(opts.SessionID) != "" || opts.Turn > 0 || opts.Implicit
+	if shouldWriteNote {
+		note := metadata.TraceNote{
+			TraceSHA:  traceSHA,
+			TraceType: traceType,
+			Agent:     strings.TrimSpace(opts.Agent),
+			SessionID: strings.TrimSpace(opts.SessionID),
+			Turn:      opts.Turn,
+			Device:    deviceID,
+			CreatedAt: time.Now().UTC(),
 		}
-		if config.TraceSyncPromptSummary() {
-			summary := summarizePrompt(prompt)
-			if summary != "" {
-				note.PromptSummary = scrubSecrets(summary)
+		if prompt != "" {
+			if config.TraceSyncPromptHash() {
+				note.PromptHash = promptHash
+			}
+			if config.TraceSyncPromptSummary() {
+				summary := summarizePrompt(prompt)
+				if summary != "" {
+					note.PromptSummary = scrubSecrets(summary)
+				}
+			}
+			if config.TraceSyncPromptFull() {
+				note.PromptFull = prompt
 			}
 		}
-		if config.TraceSyncPromptFull() {
-			note.PromptFull = prompt
+		if err := metadata.WriteTrace(note); err != nil {
+			return res, err
 		}
-	}
-	if err := metadata.WriteTrace(note); err != nil {
-		return res, err
 	}
 
 	traceAttested := false

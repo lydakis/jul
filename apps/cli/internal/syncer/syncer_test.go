@@ -9,6 +9,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/metadata"
 )
 
 func TestKeepRefPathIncludesUser(t *testing.T) {
@@ -16,6 +17,14 @@ func TestKeepRefPathIncludesUser(t *testing.T) {
 	want := "refs/jul/keep/george/@/Iabc/def"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestCheckpointRequiresMessage(t *testing.T) {
+	if _, err := Checkpoint(""); err == nil {
+		t.Fatalf("expected checkpoint message error")
+	} else if !strings.Contains(err.Error(), "checkpoint message required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -755,6 +764,64 @@ func TestCheckpointUpdatesWorkspaceHead(t *testing.T) {
 	}
 	if strings.TrimSpace(headSHA) != strings.TrimSpace(res.CheckpointSHA) {
 		t.Fatalf("expected HEAD at checkpoint %s, got %s", strings.TrimSpace(res.CheckpointSHA), strings.TrimSpace(headSHA))
+	}
+}
+
+func TestCheckpointTraceSkipsMetadataWithoutPrompt(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	repoDir := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.name", "Test User"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "config", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "add", "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(repoDir, "git", "commit", "-m", "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	res, err := Checkpoint("feat: test")
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if strings.TrimSpace(res.TraceHead) == "" {
+		t.Fatalf("expected trace head")
+	}
+	note, err := metadata.GetTrace(res.TraceHead)
+	if err != nil {
+		t.Fatalf("failed to read trace note: %v", err)
+	}
+	if note != nil {
+		t.Fatalf("expected no trace metadata note for promptless checkpoint trace")
 	}
 }
 

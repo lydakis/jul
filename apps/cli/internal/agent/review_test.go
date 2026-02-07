@@ -87,3 +87,16 @@ func TestWriteReviewAttachmentOutsideWorktree(t *testing.T) {
 		t.Fatalf("expected attachment outside worktree, got %s", path)
 	}
 }
+
+func TestBuildReviewPromptGenerateMessage(t *testing.T) {
+	prompt := buildReviewPrompt("generate_message", "/tmp/checkpoint.txt")
+	if !strings.Contains(prompt, "checkpoint message") {
+		t.Fatalf("expected checkpoint message instructions")
+	}
+	if !strings.Contains(prompt, "\"summary\":\"feat: ...\"") {
+		t.Fatalf("expected summary schema for generated message")
+	}
+	if strings.Contains(prompt, "\"suggestions\"") {
+		t.Fatalf("did not expect suggestions schema in generate_message prompt")
+	}
+}
