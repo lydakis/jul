@@ -102,6 +102,11 @@ func runInit(args []string) int {
 		}
 		return 1
 	}
+	if err := runGit(repoRoot, "config", "core.untrackedCache", "true"); err != nil {
+		warnings = append(warnings, "could not enable git untracked cache; status may be slower")
+	} else if err := runGit(repoRoot, "update-index", "--untracked-cache"); err != nil {
+		warnings = append(warnings, "could not prime git untracked cache; status may be slower")
+	}
 	deviceID, err := config.DeviceID()
 	if err != nil {
 		if *jsonOut {

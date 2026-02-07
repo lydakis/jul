@@ -20,6 +20,8 @@ const (
 	perfStatusColdRuns = 20
 	perfSyncRuns       = 20
 	perfCheckpointRuns = 10
+	perfCheckpointCold = 5
+	perfStatusWarmups  = 5
 )
 
 func TestPerfStatusSmoke(t *testing.T) {
@@ -30,7 +32,15 @@ func TestPerfStatusSmoke(t *testing.T) {
 	repo, env := setupPerfRepo(t, "perf-status", 2000, 1024)
 	runCmd(t, repo, env, julPath, "checkpoint", "-m", "perf seed", "--no-ci", "--no-review")
 
-	warmUpCommand(t, repo, env, julPath, "status", "--json")
+	for i := 0; i < perfStatusWarmups; i++ {
+		warmUpCommand(t, repo, env, julPath, "status", "--json")
+	}
+	if os.Getenv("JUL_PERF_DEBUG") == "1" {
+		debug := runCmdTimed(t, repo, env, julPath, "status", "--json")
+		t.Logf("status sample: %s", debug)
+		gitP50, gitP95 := measureRawGitStatus(t, repo, env, 10)
+		t.Logf("raw git status p50=%s p95=%s", gitP50, gitP95)
+	}
 
 	samples := make([]time.Duration, 0, perfStatusRuns)
 	for i := 0; i < perfStatusRuns; i++ {
@@ -113,6 +123,26 @@ func TestPerfCheckpointSmoke(t *testing.T) {
 	assertPerfRatio(t, "PT-CHECKPOINT-001", p50, p95, 3.0)
 }
 
+func TestPerfCheckpointCloneColdSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	samples := make([]time.Duration, 0, perfCheckpointCold)
+	for i := 0; i < perfCheckpointCold; i++ {
+		repo, env := setupPerfRepo(t, fmt.Sprintf("perf-checkpoint-cold-%d", i), 2000, 1024)
+		appendFile(t, repo, "src/file-0002.txt", fmt.Sprintf("\ncold-change-%d\n", i))
+		_, duration := runTimedJSONCommand(t, repo, env, julPath, "checkpoint", "-m", fmt.Sprintf("perf-cold-%d", i), "--no-ci", "--no-review", "--json")
+		samples = append(samples, duration)
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP95 := perfBudgetCheckpointCloneColdP95()
+	t.Logf("PT-CHECKPOINT-002 p50=%s p95=%s budgetP95=%s", p50, p95, budgetP95)
+	assertPerfP95(t, "PT-CHECKPOINT-002", p95, budgetP95)
+	assertPerfRatio(t, "PT-CHECKPOINT-002", p50, p95, 4.0)
+}
+
 func perfCLI(t *testing.T) string {
 	t.Helper()
 	return buildCLI(t)
@@ -151,6 +181,7 @@ func setupPerfRepo(t *testing.T, name string, files int, bytesPerFile int) (stri
 		"HOME":          home,
 		"JUL_WORKSPACE": "perf/@",
 		"JUL_NO_SYNC":   "1",
+		"PATH":          perfPath(),
 	}
 	julPath := perfCLI(t)
 	runCmd(t, repo, env, julPath, "init", name)
@@ -167,9 +198,12 @@ func runTimedJSONCommand(t *testing.T, dir string, env map[string]string, name s
 	start := time.Now()
 	output := runCmdTimed(t, dir, env, name, args...)
 	wall := time.Since(start)
-	timings := parseTimings(t, output)
-	if timings > 0 {
-		return time.Duration(timings) * time.Millisecond, time.Duration(timings) * time.Millisecond
+	if timings, ok := parseTimings(t, output); ok {
+		if timings <= 0 {
+			timings = 1
+		}
+		d := time.Duration(timings) * time.Millisecond
+		return d, d
 	}
 	return wall, wall
 }
@@ -188,17 +222,28 @@ func runCmdTimed(t *testing.T, dir string, env map[string]string, name string, a
 
 type timingsPayload struct {
 	Timings struct {
-		Total int64 `json:"total"`
+		Total *int64           `json:"total"`
+		Phase map[string]int64 `json:"phase"`
 	} `json:"timings_ms"`
 }
 
-func parseTimings(t *testing.T, output string) int64 {
+func parseTimings(t *testing.T, output string) (int64, bool) {
 	t.Helper()
 	var payload timingsPayload
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
 		t.Fatalf("failed to decode timings: %v\n%s", err, output)
 	}
-	return payload.Timings.Total
+	if payload.Timings.Total != nil {
+		return *payload.Timings.Total, true
+	}
+	if len(payload.Timings.Phase) == 0 {
+		return 0, false
+	}
+	total := int64(0)
+	for _, value := range payload.Timings.Phase {
+		total += value
+	}
+	return total, true
 }
 
 func percentiles(samples []time.Duration, p50 float64, p95 float64) (time.Duration, time.Duration) {
@@ -248,6 +293,11 @@ func perfBudgetCheckpoint() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(250*time.Millisecond, 800*time.Millisecond)
 }
 
+func perfBudgetCheckpointCloneColdP95() time.Duration {
+	_, p95 := applyPerfMultiplier(0, 2*time.Second)
+	return p95
+}
+
 func applyPerfMultiplier(p50, p95 time.Duration) (time.Duration, time.Duration) {
 	mult := perfMultiplier()
 	return time.Duration(float64(p50) * mult), time.Duration(float64(p95) * mult)
@@ -266,6 +316,23 @@ func perfMultiplier() float64 {
 		return 1.5
 	}
 	return 1.0
+}
+
+func perfPath() string {
+	if runtime.GOOS == "windows" {
+		return os.Getenv("PATH")
+	}
+	candidates := []string{"/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"}
+	paths := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			paths = append(paths, candidate)
+		}
+	}
+	if len(paths) == 0 {
+		return os.Getenv("PATH")
+	}
+	return strings.Join(paths, ":")
 }
 
 func parseMultiplier(raw string) (float64, error) {
@@ -323,4 +390,18 @@ func appendFile(t *testing.T, repo, relPath, content string) {
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatalf("write file failed: %v", err)
 	}
+}
+
+func measureRawGitStatus(t *testing.T, repo string, env map[string]string, runs int) (time.Duration, time.Duration) {
+	t.Helper()
+	if runs < 1 {
+		runs = 1
+	}
+	samples := make([]time.Duration, 0, runs)
+	for i := 0; i < runs; i++ {
+		start := time.Now()
+		_ = runCmdTimed(t, repo, env, "git", "--no-optional-locks", "-c", "core.untrackedCache=true", "status", "--porcelain", "-z", "-unormal", "--no-renames")
+		samples = append(samples, time.Since(start))
+	}
+	return percentiles(samples, 0.50, 0.95)
 }

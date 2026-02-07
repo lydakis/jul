@@ -20,6 +20,10 @@ type statusCache struct {
 	WorkspaceID                string                     `json:"workspace_id,omitempty"`
 	Workspace                  string                     `json:"workspace,omitempty"`
 	GeneratedAt                time.Time                  `json:"generated_at"`
+	Repo                       string                     `json:"repo,omitempty"`
+	Branch                     string                     `json:"branch,omitempty"`
+	DraftSHA                   string                     `json:"draft_sha,omitempty"`
+	ChangeID                   string                     `json:"change_id,omitempty"`
 	LastCheckpoint             *output.CheckpointStatus   `json:"last_checkpoint,omitempty"`
 	Checkpoints                []output.CheckpointSummary `json:"checkpoints,omitempty"`
 	DraftFilesChanged          int                        `json:"draft_files_changed,omitempty"`
@@ -112,16 +116,38 @@ func refreshStatusCache(repoRoot string) (*statusCache, error) {
 			draftSHA = sha
 		}
 	}
+	changeID := ""
+	if draftSHA != "" {
+		if message, err := gitutil.CommitMessage(draftSHA); err == nil {
+			changeID = gitutil.ExtractChangeID(message)
+		}
+		if changeID == "" {
+			changeID = gitutil.FallbackChangeID(draftSHA)
+		}
+	}
 	baseSHA := ""
 	if last != nil {
 		baseSHA = last.CommitSHA
+		if changeID == "" {
+			changeID = last.ChangeID
+		}
 	}
+	head, _ := gitutil.ReadHeadInfo()
+	repo := config.RepoName()
+	if strings.TrimSpace(repo) == "" {
+		repo = repoNameFromPath(head.RepoRoot)
+	}
+	branch := strings.TrimSpace(head.Branch)
 	draftFilesChanged := draftFilesChangedFrom(baseSHA, draftSHA)
 
 	cache := statusCache{
 		WorkspaceID:                wsID,
 		Workspace:                  workspace,
 		GeneratedAt:                time.Now().UTC(),
+		Repo:                       strings.TrimSpace(repo),
+		Branch:                     branch,
+		DraftSHA:                   strings.TrimSpace(draftSHA),
+		ChangeID:                   strings.TrimSpace(changeID),
 		LastCheckpoint:             last,
 		Checkpoints:                summaries,
 		DraftFilesChanged:          draftFilesChanged,
@@ -186,6 +212,14 @@ func updateStatusCacheForCheckpoint(repoRoot string, res syncer.CheckpointResult
 	_, workspace := workspaceParts()
 	cache.Workspace = strings.TrimSpace(workspace)
 	cache.GeneratedAt = time.Now().UTC()
+	if head, err := gitutil.ReadHeadInfo(); err == nil {
+		cache.Branch = strings.TrimSpace(head.Branch)
+		if strings.TrimSpace(cache.Repo) == "" {
+			cache.Repo = repoNameFromPath(head.RepoRoot)
+		}
+	}
+	cache.DraftSHA = strings.TrimSpace(res.DraftSHA)
+	cache.ChangeID = strings.TrimSpace(res.ChangeID)
 	cache.LastCheckpoint = last
 	cache.Checkpoints = updated
 	cache.DraftFilesChanged = 0
@@ -206,6 +240,14 @@ func updateStatusCacheForCheckpoint(repoRoot string, res syncer.CheckpointResult
 		return nil, err
 	}
 	return cache, nil
+}
+
+func repoNameFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Base(path)
 }
 
 func cacheMatchesWorkspace(cache *statusCache, wsID, workspace string) bool {

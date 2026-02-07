@@ -95,7 +95,18 @@ func updateIndexIncremental(repoRoot, indexPath, excludePath string) error {
 	env := map[string]string{
 		"GIT_INDEX_FILE": indexPath,
 	}
-	statusOut, err := gitWithEnvRaw(repoRoot, env, "-c", "core.excludesfile="+excludePath, "status", "--porcelain", "-z", "-unormal")
+	statusOut, err := gitWithEnvRaw(
+		repoRoot,
+		env,
+		"--no-optional-locks",
+		"-c", "core.untrackedCache=true",
+		"-c", "core.excludesfile="+excludePath,
+		"status",
+		"--porcelain",
+		"-z",
+		"-unormal",
+		"--no-renames",
+	)
 	if err != nil {
 		return err
 	}

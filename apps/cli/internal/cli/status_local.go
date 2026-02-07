@@ -33,31 +33,6 @@ func buildLocalStatus() (output.Status, error) {
 		}
 	}()
 
-	commitStart := time.Now()
-	info := gitutil.CommitInfo{}
-	head, err := gitutil.ReadHeadInfo()
-	if err == nil {
-		info.SHA = head.SHA
-		info.Branch = head.Branch
-		info.TopLevel = head.RepoRoot
-	} else {
-		info, err = gitutil.CurrentCommit()
-		if err != nil {
-			info, err = fallbackCommitInfo()
-			if err != nil {
-				return output.Status{}, err
-			}
-		}
-	}
-	timings.Add("commit_info", time.Since(commitStart))
-	repoName := config.RepoName()
-	if repoName == "" && info.TopLevel != "" {
-		repoName = filepath.Base(info.TopLevel)
-	}
-	if repoName != "" {
-		info.RepoName = repoName
-	}
-
 	workspaceStart := time.Now()
 	user, workspace := workspaceParts()
 	if workspace == "" {
@@ -65,27 +40,12 @@ func buildLocalStatus() (output.Status, error) {
 	}
 	wsID := config.WorkspaceID()
 	timings.Add("workspace", time.Since(workspaceStart))
+
 	repoRootStart := time.Now()
-	repoRoot := strings.TrimSpace(info.TopLevel)
-	if repoRoot == "" {
-		repoRoot, _ = gitutil.RepoTopLevel()
-	}
+	repoRoot, _ := gitutil.RepoTopLevel()
+	repoRoot = strings.TrimSpace(repoRoot)
 	timings.Add("repo_root", time.Since(repoRootStart))
 
-	draftStart := time.Now()
-	draftSHA := ""
-	if ref, err := syncRef(user, workspace); err == nil {
-		if sha, err := gitutil.ResolveRef(ref); err == nil {
-			draftSHA = sha
-		}
-	}
-	if draftSHA == "" {
-		draftSHA = info.SHA
-	}
-	timings.Add("draft_sha", time.Since(draftStart))
-
-	var checkpoint *output.CheckpointStatus
-	var attView attestationView
 	var cached *statusCache
 	if repoRoot != "" {
 		cacheStart := time.Now()
@@ -94,8 +54,67 @@ func buildLocalStatus() (output.Status, error) {
 				cached = cache
 			}
 		}
+		if cached == nil {
+			if refreshed, err := refreshStatusCache(repoRoot); err == nil && refreshed != nil {
+				if cacheMatchesWorkspace(refreshed, wsID, workspace) {
+					cached = refreshed
+				}
+			}
+		}
 		timings.Add("read_cache", time.Since(cacheStart))
 	}
+
+	commitStart := time.Now()
+	info := gitutil.CommitInfo{}
+	if cached != nil && strings.TrimSpace(cached.Branch) != "" {
+		info.Branch = strings.TrimSpace(cached.Branch)
+		info.RepoName = strings.TrimSpace(cached.Repo)
+		info.TopLevel = repoRoot
+		info.SHA = strings.TrimSpace(cached.DraftSHA)
+		info.ChangeID = strings.TrimSpace(cached.ChangeID)
+	} else {
+		head, err := gitutil.ReadHeadInfo()
+		if err == nil {
+			info.SHA = head.SHA
+			info.Branch = head.Branch
+			info.TopLevel = head.RepoRoot
+		} else {
+			info, err = gitutil.CurrentCommit()
+			if err != nil {
+				info, err = fallbackCommitInfo()
+				if err != nil {
+					return output.Status{}, err
+				}
+			}
+		}
+	}
+	timings.Add("commit_info", time.Since(commitStart))
+
+	repoName := strings.TrimSpace(info.RepoName)
+	if repoName == "" {
+		repoName = config.RepoName()
+	}
+	if repoName == "" && repoRoot != "" {
+		repoName = filepath.Base(repoRoot)
+	}
+	info.RepoName = strings.TrimSpace(repoName)
+	if strings.TrimSpace(info.TopLevel) == "" {
+		info.TopLevel = repoRoot
+	}
+
+	draftStart := time.Now()
+	draftSHA := strings.TrimSpace(info.SHA)
+	if cached != nil && strings.TrimSpace(cached.DraftSHA) != "" {
+		draftSHA = strings.TrimSpace(cached.DraftSHA)
+	} else if ref, err := syncRef(user, workspace); err == nil {
+		if sha, err := gitutil.ResolveRef(ref); err == nil {
+			draftSHA = strings.TrimSpace(sha)
+		}
+	}
+	timings.Add("draft_sha", time.Since(draftStart))
+
+	var checkpoint *output.CheckpointStatus
+	var attView attestationView
 	attStart := time.Now()
 	attResolved := false
 	if cached != nil && cached.LastCheckpoint != nil {
@@ -139,6 +158,9 @@ func buildLocalStatus() (output.Status, error) {
 	timings.Add("attestation", time.Since(attStart))
 
 	changeID := ""
+	if cached != nil && strings.TrimSpace(cached.ChangeID) != "" {
+		changeID = strings.TrimSpace(cached.ChangeID)
+	}
 	if checkpoint != nil && checkpoint.ChangeID != "" {
 		changeID = checkpoint.ChangeID
 	}
@@ -195,7 +217,10 @@ func buildLocalStatus() (output.Status, error) {
 		if cfg, ok, err := wsconfig.ReadConfig(repoRoot, workspace); err == nil && ok {
 			status.TrackRef = strings.TrimSpace(cfg.TrackRef)
 			status.TrackTip = strings.TrimSpace(cfg.TrackTip)
-			if status.TrackRef != "" {
+			if status.TrackRef != "" && cached != nil {
+				status.TrackTipCurrent = status.TrackTip
+			}
+			if status.TrackRef != "" && cached == nil {
 				if tip, err := gitutil.ResolveRef(status.TrackRef); err == nil {
 					status.TrackTipCurrent = strings.TrimSpace(tip)
 					if status.TrackTip != "" && status.TrackTipCurrent != "" && status.TrackTipCurrent != status.TrackTip {
@@ -473,51 +498,51 @@ func buildPromoteStatus(checkpoints []checkpointInfo) *output.PromoteStatus {
 }
 
 func readWorkingTreeStatus() (*output.WorkingTreeStatus, error) {
-	out, err := gitutil.Git("status", "--porcelain", "-unormal")
+	out, err := gitutil.Git(
+		"--no-optional-locks",
+		"-c", "core.untrackedCache=true",
+		"status",
+		"--porcelain",
+		"-z",
+		"-unormal",
+		"--no-renames",
+	)
 	if err != nil {
 		return nil, err
 	}
+	return parseWorkingTreePorcelainZ(out), nil
+}
 
+func parseWorkingTreePorcelainZ(raw string) *output.WorkingTreeStatus {
 	status := &output.WorkingTreeStatus{}
-	trimmed := strings.TrimSpace(out)
-	if trimmed != "" {
-		for _, line := range strings.Split(trimmed, "\n") {
-			if len(line) < 4 {
+	if strings.TrimSpace(raw) != "" {
+		for _, entry := range strings.Split(raw, "\x00") {
+			if len(entry) < 4 || entry[2] != ' ' {
 				continue
 			}
-			code := line[:2]
-			path := strings.TrimSpace(line[3:])
+			code := entry[:2]
+			path := entry[3:]
 			if path == "" {
 				continue
 			}
 			if code == "??" {
-				status.Untracked = append(status.Untracked, output.WorkingTreeEntry{
-					Path:   path,
-					Status: "?",
-				})
+				status.Untracked = append(status.Untracked, output.WorkingTreeEntry{Path: path, Status: "?"})
 				continue
 			}
 			staged := code[0]
 			unstaged := code[1]
 			if staged != ' ' {
-				status.Staged = append(status.Staged, output.WorkingTreeEntry{
-					Path:   path,
-					Status: string(staged),
-				})
+				status.Staged = append(status.Staged, output.WorkingTreeEntry{Path: path, Status: string(staged)})
 			}
 			if unstaged != ' ' && unstaged != '?' {
-				status.Unstaged = append(status.Unstaged, output.WorkingTreeEntry{
-					Path:   path,
-					Status: string(unstaged),
-				})
+				status.Unstaged = append(status.Unstaged, output.WorkingTreeEntry{Path: path, Status: string(unstaged)})
 			}
 		}
 	}
-
 	if len(status.Staged) == 0 && len(status.Unstaged) == 0 && len(status.Untracked) == 0 {
 		status.Clean = true
 	}
-	return status, nil
+	return status
 }
 
 func fallbackCommitInfo() (gitutil.CommitInfo, error) {

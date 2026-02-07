@@ -24,6 +24,9 @@ func TestInitStartsDraftAndLease(t *testing.T) {
 	if code := runInit([]string{"demo"}); code != 0 {
 		t.Fatalf("init failed with %d", code)
 	}
+	if got := strings.TrimSpace(runGitCmd(t, repo, "config", "--get", "core.untrackedCache")); got != "true" {
+		t.Fatalf("expected core.untrackedCache=true, got %q", got)
+	}
 
 	deviceID, err := config.DeviceID()
 	if err != nil || deviceID == "" {
