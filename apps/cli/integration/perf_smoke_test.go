@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,6 +26,7 @@ const (
 	perfStatusWarmups  = 5
 	perfNotesRuns      = 5
 	perfPromoteRuns    = 5
+	perfDaemonEvents   = 1000
 )
 
 func TestPerfStatusSmoke(t *testing.T) {
@@ -209,6 +212,128 @@ func TestPerfPromoteWarmSmoke(t *testing.T) {
 	t.Logf("PT-PROMOTE-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-PROMOTE-001", p50, p95, budgetP50, budgetP95)
 	assertPerfRatio(t, "PT-PROMOTE-001", p50, p95, 3.0)
+}
+
+func TestPerfDaemonStormSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	repo, env := setupPerfRepo(t, "perf-daemon", 400, 256)
+
+	daemonCfg := "[sync]\ndebounce_seconds = 1\nmin_interval_seconds = 1\n"
+	if err := os.WriteFile(filepath.Join(repo, ".jul", "config.toml"), []byte(daemonCfg), 0o644); err != nil {
+		t.Fatalf("failed to write daemon config: %v", err)
+	}
+
+	cmd := exec.Command(julPath, "sync", "--daemon")
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(env)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start sync daemon: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(os.Interrupt)
+		_ = cmd.Wait()
+	}()
+
+	waitForDaemonOutput(t, &stdout, &stderr, "Sync daemon running", 4*time.Second)
+	deviceID := readDeviceIDFromHome(t, env["HOME"])
+	syncRef := fmt.Sprintf("refs/jul/sync/perf/%s/@", strings.TrimSpace(deviceID))
+
+	baselineSHA, ok := waitForRefSHA(repo, env, syncRef, 6*time.Second)
+	if !ok {
+		t.Fatalf("timed out waiting for daemon to create sync ref %s", syncRef)
+	}
+
+	type refTransition struct {
+		sha string
+		at  time.Time
+	}
+	var changesMu sync.Mutex
+	changes := make([]refTransition, 0, 16)
+	stopPoll := make(chan struct{})
+	donePoll := make(chan struct{})
+	go func(initial string) {
+		defer close(donePoll)
+		last := strings.TrimSpace(initial)
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPoll:
+				return
+			case <-ticker.C:
+				sha := strings.TrimSpace(resolveRefQuiet(repo, env, syncRef))
+				if sha == "" || sha == last {
+					continue
+				}
+				changesMu.Lock()
+				changes = append(changes, refTransition{sha: sha, at: time.Now()})
+				changesMu.Unlock()
+				last = sha
+			}
+		}
+	}(baselineSHA)
+
+	stormEnd := time.Time{}
+	for i := 0; i < perfDaemonEvents; i++ {
+		file := filepath.Join("storm", fmt.Sprintf("event-%04d.txt", i%200))
+		appendFile(t, repo, file, fmt.Sprintf("event-%d\n", i))
+	}
+	finalMarker := fmt.Sprintf("final-event-%d", perfDaemonEvents-1)
+	writeFile(t, repo, filepath.Join("storm", "sentinel.txt"), finalMarker+"\n")
+	stormEnd = time.Now()
+
+	settleDeadline := stormEnd.Add(10 * time.Second)
+	quietWindow := 2 * time.Second
+	var settledAt time.Time
+	for time.Now().Before(settleDeadline) {
+		current := strings.TrimSpace(resolveRefQuiet(repo, env, syncRef))
+		if current != "" && draftContainsMarker(repo, env, current, finalMarker) {
+			lastChange := stormEnd
+			changesMu.Lock()
+			if len(changes) > 0 {
+				lastChange = changes[len(changes)-1].at
+			}
+			changesMu.Unlock()
+			if time.Since(lastChange) >= quietWindow {
+				settledAt = time.Now()
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	close(stopPoll)
+	<-donePoll
+
+	if settledAt.IsZero() {
+		t.Fatalf("PT-DAEMON-002 failed: daemon did not settle within 10s after storm")
+	}
+	settle := settledAt.Sub(stormEnd)
+	if settle > 10*time.Second {
+		t.Fatalf("PT-DAEMON-002 failed: settle=%s exceeded 10s budget", settle)
+	}
+
+	changesMu.Lock()
+	recorded := append([]refTransition(nil), changes...)
+	changesMu.Unlock()
+	if len(recorded) == 0 {
+		t.Fatalf("PT-DAEMON-002 failed: no sync transitions recorded during file storm")
+	}
+	debounce := time.Second
+	for i := 1; i < len(recorded); i++ {
+		delta := recorded[i].at.Sub(recorded[i-1].at)
+		if delta < debounce {
+			t.Fatalf("PT-DAEMON-002 failed: sync transitions too close (%s < %s)", delta, debounce)
+		}
+	}
+
+	t.Logf("PT-DAEMON-002 transitions=%d settle=%s", len(recorded), settle)
 }
 
 func perfCLI(t *testing.T) string {
@@ -420,6 +545,67 @@ func parseMultiplier(raw string) (float64, error) {
 		return 0, fmt.Errorf("invalid multiplier")
 	}
 	return parsed, nil
+}
+
+func waitForDaemonOutput(t *testing.T, stdout, stderr *bytes.Buffer, needle string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		combined := stdout.String() + stderr.String()
+		if strings.Contains(combined, needle) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for daemon output %q, got %s", needle, stdout.String()+stderr.String())
+}
+
+func readDeviceIDFromHome(t *testing.T, home string) string {
+	t.Helper()
+	path := filepath.Join(home, ".config", "jul", "device")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read device id: %v", err)
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func waitForRefSHA(repo string, env map[string]string, ref string, timeout time.Duration) (string, bool) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		sha := strings.TrimSpace(resolveRefQuiet(repo, env, ref))
+		if sha != "" {
+			return sha, true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return "", false
+}
+
+func resolveRefQuiet(repo string, env map[string]string, ref string) string {
+	cmd := exec.Command("git", "rev-parse", ref)
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(env)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func draftContainsMarker(repo string, env map[string]string, draftSHA string, marker string) bool {
+	if strings.TrimSpace(draftSHA) == "" || strings.TrimSpace(marker) == "" {
+		return false
+	}
+	pathSpec := fmt.Sprintf("%s:%s", strings.TrimSpace(draftSHA), "storm/sentinel.txt")
+	cmd := exec.Command("git", "show", pathSpec)
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(env)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), marker)
 }
 
 func parsePhaseTiming(t *testing.T, output string, phase string) (time.Duration, bool) {

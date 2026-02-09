@@ -302,6 +302,63 @@ func TestIT_CP_004(t *testing.T) {
 	}
 }
 
+func TestIT_CP_005(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo, true)
+	julPath := buildCLI(t)
+	device := newDeviceEnv(t, "dev1")
+	device.Env["JUL_NO_SYNC"] = "1"
+
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+
+	writeFile(t, repo, "README.md", "change-id lifecycle one\n")
+	cp1Out := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: one", "--no-ci", "--no-review", "--json")
+	var cp1 checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cp1Out)).Decode(&cp1); err != nil {
+		t.Fatalf("failed to decode first checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(cp1.ChangeID) == "" {
+		t.Fatalf("expected first checkpoint change id, got %+v", cp1)
+	}
+
+	writeFile(t, repo, "README.md", "change-id lifecycle two\n")
+	cp2Out := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: two", "--no-ci", "--no-review", "--json")
+	var cp2 checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cp2Out)).Decode(&cp2); err != nil {
+		t.Fatalf("failed to decode second checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(cp2.ChangeID) == "" {
+		t.Fatalf("expected second checkpoint change id, got %+v", cp2)
+	}
+	if cp1.ChangeID != cp2.ChangeID {
+		t.Fatalf("expected pre-promote checkpoints to share change id %s, got %s", cp1.ChangeID, cp2.ChangeID)
+	}
+
+	promoteOut := runCmd(t, repo, device.Env, julPath, "promote", "--to", "main", "--no-policy", "--json")
+	var promote struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(strings.NewReader(promoteOut)).Decode(&promote); err != nil {
+		t.Fatalf("failed to decode promote output: %v", err)
+	}
+	if strings.TrimSpace(promote.Status) != "ok" {
+		t.Fatalf("expected promote status ok, got %s (%s)", promote.Status, promoteOut)
+	}
+
+	writeFile(t, repo, "README.md", "change-id lifecycle three\n")
+	cp3Out := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: three", "--no-ci", "--no-review", "--json")
+	var cp3 checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cp3Out)).Decode(&cp3); err != nil {
+		t.Fatalf("failed to decode third checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(cp3.ChangeID) == "" {
+		t.Fatalf("expected post-promote checkpoint change id, got %+v", cp3)
+	}
+	if cp3.ChangeID == cp2.ChangeID {
+		t.Fatalf("expected new change id after promote, got reused %s", cp3.ChangeID)
+	}
+}
+
 type ciRunRecord struct {
 	CommitSHA string `json:"commit_sha"`
 	Status    string `json:"status"`
