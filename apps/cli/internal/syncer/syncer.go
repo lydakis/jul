@@ -199,6 +199,17 @@ func SyncWithOptions(opts SyncOptions) (res Result, err error) {
 			}
 		}
 	}
+	changeID = normalizeChangeID(changeID)
+	if !isValidChangeID(changeID) {
+		if parentSHA != "" {
+			changeID = normalizeChangeID(gitutil.FallbackChangeID(parentSHA))
+		}
+		if !isValidChangeID(changeID) {
+			if generated, err := gitutil.NewChangeID(); err == nil {
+				changeID = normalizeChangeID(generated)
+			}
+		}
+	}
 	res.ChangeID = changeID
 	hasCheckpoint := false
 	if strings.TrimSpace(changeID) != "" {
@@ -455,6 +466,17 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	}
 
 	parentSHA, changeID := resolveCheckpointParentAndChangeID(syncRef, leaseBase, workspaceTip)
+	changeID = normalizeChangeID(changeID)
+	if !isValidChangeID(changeID) {
+		if parentSHA != "" {
+			changeID = normalizeChangeID(gitutil.FallbackChangeID(parentSHA))
+		}
+		if !isValidChangeID(changeID) {
+			if generated, err := gitutil.NewChangeID(); err == nil {
+				changeID = normalizeChangeID(generated)
+			}
+		}
+	}
 
 	treeSHA, err := gitutil.DraftTree()
 	if err != nil {
@@ -642,6 +664,12 @@ func AdoptCheckpoint() (CheckpointResult, error) {
 	changeID := gitutil.ExtractChangeID(headMsg)
 	if changeID == "" {
 		changeID = gitutil.FallbackChangeID(headSHA)
+	}
+	changeID = normalizeChangeID(changeID)
+	if !isValidChangeID(changeID) {
+		if generated, genErr := gitutil.NewChangeID(); genErr == nil {
+			changeID = normalizeChangeID(generated)
+		}
 	}
 
 	keepRef := keepRefPath(user, workspace, changeID, headSHA)
@@ -997,7 +1025,7 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 		if sha, err := gitutil.ResolveRef(baseRef); err == nil {
 			baseSHA = sha
 			if msg, err := gitutil.CommitMessage(sha); err == nil {
-				changeID = gitutil.ExtractChangeID(msg)
+				changeID = normalizeChangeID(gitutil.ExtractChangeID(msg))
 				if isDraftMessage(msg) {
 					baseWasDraft = true
 					if parent, err := gitutil.ParentOf(sha); err == nil {
@@ -1024,6 +1052,17 @@ func resolveDraftBase(workspaceRef, syncRef string) (string, string) {
 	if changeID == "" {
 		if generated, err := gitutil.NewChangeID(); err == nil {
 			changeID = generated
+		}
+	}
+	changeID = normalizeChangeID(changeID)
+	if !isValidChangeID(changeID) {
+		if parentSHA != "" {
+			changeID = normalizeChangeID(gitutil.FallbackChangeID(parentSHA))
+		}
+		if !isValidChangeID(changeID) {
+			if generated, err := gitutil.NewChangeID(); err == nil {
+				changeID = normalizeChangeID(generated)
+			}
 		}
 	}
 	return parentSHA, changeID
@@ -1063,10 +1102,10 @@ func resolveCheckpointParentAndChangeID(syncRef, leaseBase, workspaceTip string)
 		}
 	}
 
-	changeID := strings.TrimSpace(draftChangeID)
+	changeID := normalizeChangeID(draftChangeID)
 	if changeID == "" && parentSHA != "" {
 		if msg, err := gitutil.CommitMessage(parentSHA); err == nil {
-			changeID = gitutil.ExtractChangeID(msg)
+			changeID = normalizeChangeID(gitutil.ExtractChangeID(msg))
 			if isDraftMessage(msg) {
 				if parent, err := gitutil.ParentOf(parentSHA); err == nil && strings.TrimSpace(parent) != "" {
 					parentSHA = strings.TrimSpace(parent)
@@ -1080,6 +1119,17 @@ func resolveCheckpointParentAndChangeID(syncRef, leaseBase, workspaceTip string)
 	if changeID == "" {
 		if generated, err := gitutil.NewChangeID(); err == nil {
 			changeID = generated
+		}
+	}
+	changeID = normalizeChangeID(changeID)
+	if !isValidChangeID(changeID) {
+		if parentSHA != "" {
+			changeID = normalizeChangeID(gitutil.FallbackChangeID(parentSHA))
+		}
+		if !isValidChangeID(changeID) {
+			if generated, err := gitutil.NewChangeID(); err == nil {
+				changeID = normalizeChangeID(generated)
+			}
 		}
 	}
 	return parentSHA, changeID
@@ -1110,7 +1160,8 @@ func reuseOrCreateDraft(treeSHA, parentSHA, changeID, existingDraft string) (str
 }
 
 func ensureChangeID(message, changeID string) string {
-	if changeID == "" {
+	changeID = normalizeChangeID(changeID)
+	if !isValidChangeID(changeID) {
 		return message
 	}
 	if gitutil.ExtractChangeID(message) != "" {
@@ -1140,6 +1191,7 @@ func keepRefPath(user, workspace, changeID, checkpointSHA string) string {
 	if strings.TrimSpace(workspace) != "" {
 		parts = append(parts, workspace)
 	}
+	changeID = normalizeChangeID(changeID)
 	if strings.TrimSpace(changeID) != "" {
 		parts = append(parts, changeID)
 	}
@@ -1150,11 +1202,32 @@ func keepRefPath(user, workspace, changeID, checkpointSHA string) string {
 }
 
 func changeRefPath(changeID string) string {
-	return fmt.Sprintf("refs/jul/changes/%s", strings.TrimSpace(changeID))
+	return fmt.Sprintf("refs/jul/changes/%s", normalizeChangeID(changeID))
 }
 
 func anchorRefPath(changeID string) string {
-	return fmt.Sprintf("refs/jul/anchors/%s", strings.TrimSpace(changeID))
+	return fmt.Sprintf("refs/jul/anchors/%s", normalizeChangeID(changeID))
+}
+
+func normalizeChangeID(changeID string) string {
+	changeID = strings.TrimSpace(changeID)
+	changeID = strings.Trim(changeID, "/")
+	if strings.Contains(changeID, "/") {
+		parts := strings.Split(changeID, "/")
+		for i := len(parts) - 1; i >= 0; i-- {
+			part := strings.TrimSpace(parts[i])
+			if part != "" {
+				changeID = part
+				break
+			}
+		}
+	}
+	return strings.TrimSpace(changeID)
+}
+
+func isValidChangeID(changeID string) bool {
+	changeID = normalizeChangeID(changeID)
+	return strings.HasPrefix(changeID, "I") && len(changeID) == 41
 }
 
 func isDraftMessage(message string) bool {

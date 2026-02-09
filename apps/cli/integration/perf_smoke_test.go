@@ -23,6 +23,7 @@ const (
 	perfCheckpointCold = 5
 	perfStatusWarmups  = 5
 	perfNotesRuns      = 5
+	perfPromoteRuns    = 5
 )
 
 func TestPerfStatusSmoke(t *testing.T) {
@@ -172,6 +173,42 @@ func TestPerfCheckpointCloneColdSmoke(t *testing.T) {
 	t.Logf("PT-CHECKPOINT-002 p50=%s p95=%s budgetP95=%s", p50, p95, budgetP95)
 	assertPerfP95(t, "PT-CHECKPOINT-002", p95, budgetP95)
 	assertPerfRatio(t, "PT-CHECKPOINT-002", p50, p95, 4.0)
+}
+
+func TestPerfPromoteWarmSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	samples := make([]time.Duration, 0, perfPromoteRuns)
+
+	for i := 0; i < perfPromoteRuns; i++ {
+		repo, env := setupPerfRepo(t, fmt.Sprintf("perf-promote-%d", i), 1200, 768)
+		_ = setupPerfRemote(t, repo, env, julPath)
+
+		for cp := 0; cp < 3; cp++ {
+			appendFile(t, repo, "src/file-0003.txt", fmt.Sprintf("\npromote-change-%d-%d\n", i, cp))
+			runCmd(t, repo, env, julPath, "checkpoint", "-m", fmt.Sprintf("promote-%d-%d", i, cp), "--no-ci", "--no-review", "--json")
+		}
+
+		output := runCmdTimed(t, repo, env, julPath, "promote", "--to", "main", "--rebase", "--no-policy", "--json")
+		totalMs, ok := parseTimings(t, output)
+		if !ok {
+			t.Fatalf("expected promote timings in json output, got %s", output)
+		}
+		for _, phase := range []string{"fetch", "rewrite", "push"} {
+			if _, ok := parsePhaseTiming(t, output, phase); !ok {
+				t.Fatalf("expected promote phase %q in timings: %s", phase, output)
+			}
+		}
+		samples = append(samples, time.Duration(totalMs)*time.Millisecond)
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP50, budgetP95 := perfBudgetPromoteWarm()
+	t.Logf("PT-PROMOTE-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
+	assertPerfBudget(t, "PT-PROMOTE-001", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-PROMOTE-001", p50, p95, 3.0)
 }
 
 func perfCLI(t *testing.T) string {
@@ -331,6 +368,10 @@ func perfBudgetCheckpointCloneColdP95() time.Duration {
 
 func perfBudgetNotesMerge() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(500*time.Millisecond, 3*time.Second)
+}
+
+func perfBudgetPromoteWarm() (time.Duration, time.Duration) {
+	return applyPerfMultiplier(1500*time.Millisecond, 5*time.Second)
 }
 
 func applyPerfMultiplier(p50, p95 time.Duration) (time.Duration, time.Duration) {

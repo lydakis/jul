@@ -168,6 +168,19 @@ func TestListRefsFastAndRefExists(t *testing.T) {
 	if ok := RefExists("refs/jul/test/missing"); ok {
 		t.Fatalf("expected RefExists to be false for missing ref")
 	}
+
+	refsWithSlash, usedFast, err := ListRefsFast("refs/jul/test/")
+	if err != nil {
+		t.Fatalf("ListRefsFast with trailing slash failed: %v", err)
+	}
+	if !usedFast {
+		t.Fatalf("expected fast ref listing for trailing slash prefix")
+	}
+	for _, ref := range refsWithSlash {
+		if strings.Contains(ref, "//") {
+			t.Fatalf("expected normalized refs without double slashes, got %s", ref)
+		}
+	}
 }
 
 func TestUpdateRefs(t *testing.T) {

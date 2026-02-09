@@ -203,6 +203,10 @@ func ListRefsFast(prefix string) ([]string, bool, error) {
 	if prefix == "" || !strings.HasPrefix(prefix, "refs/") {
 		return nil, false, nil
 	}
+	normalizedPrefix := strings.TrimSuffix(prefix, "/")
+	if normalizedPrefix == "" {
+		return nil, false, nil
+	}
 	repoRoot, err := RepoTopLevel()
 	if err != nil || strings.TrimSpace(repoRoot) == "" {
 		return nil, false, nil
@@ -220,7 +224,7 @@ func ListRefsFast(prefix string) ([]string, bool, error) {
 		seen[ref] = struct{}{}
 	}
 
-	dirPath := filepath.Join(gitDir, filepath.FromSlash(prefix))
+	dirPath := filepath.Join(gitDir, filepath.FromSlash(normalizedPrefix))
 	if info, err := os.Stat(dirPath); err == nil {
 		if info.IsDir() {
 			_ = filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
@@ -234,15 +238,15 @@ func ListRefsFast(prefix string) ([]string, bool, error) {
 				if err != nil {
 					return nil
 				}
-				ref := prefix
+				ref := normalizedPrefix
 				if rel != "." {
-					ref = prefix + "/" + filepath.ToSlash(rel)
+					ref = normalizedPrefix + "/" + filepath.ToSlash(rel)
 				}
 				collect(ref)
 				return nil
 			})
 		} else {
-			collect(prefix)
+			collect(normalizedPrefix)
 		}
 	}
 
@@ -259,7 +263,7 @@ func ListRefsFast(prefix string) ([]string, bool, error) {
 			if len(fields) < 2 {
 				continue
 			}
-			if strings.HasPrefix(fields[1], prefix) {
+			if strings.HasPrefix(fields[1], normalizedPrefix) {
 				collect(fields[1])
 			}
 		}

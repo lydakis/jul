@@ -22,7 +22,8 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-SYNC-AUTORESTACK-002 | Aligned | Conflicts stop autorestack with merge guidance. |
 | IT-CP-001 | Aligned | Checkpoint refs/anchors/keep refs + new draft. |
 | IT-CP-002 | Aligned | Checkpoint stays durable when CI fails; failing attestation is recorded asynchronously. |
-| IT-CP-003 | Partial | Local checkpoint kept + divergence/promotion behavior covered; current run exposed a refspec bug (`refs/jul/changes//...`) during `jul sync`. |
+| IT-CP-003 | Aligned | Local checkpoint kept; divergence flagged; promote blocked. Regression fixed for malformed `refs/jul/changes//...` push path. |
+| IT-CP-004 | Aligned | Checkpoint flushes canonical trace head and trace tree matches checkpoint tree. |
 | IT-CI-002 | Aligned | Attestation note written and synced. |
 | IT-CI-005 | Aligned | Coverage gating + `--no-policy` bypass. |
 | IT-PROMOTE-REBASE-001 | Aligned | Main advances; base marker + notes; new draft. |
@@ -50,6 +51,7 @@ Status: Perf smoke coverage is opt-in (`JUL_PERF_SMOKE=1`) and records Tier S bu
 | PT-CHECKPOINT-001 | Implemented | Pending fresh run |
 | PT-CHECKPOINT-002 | Implemented | Pending fresh run |
 | PT-NOTES-001 | Implemented | p50=332ms, p95=352ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
+| PT-PROMOTE-001 | Implemented | p50=674ms, p95=718ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
 
 ### P0 — Repo Safety & Core Invariants (must‑fix before daily use)
 - [x] **Workspace base tracking**: persist `base_ref` + pinned `base_sha` per workspace (e.g., `.jul/workspaces/<ws>/config`) and use it for diffs, suggestions, CRs, status, and divergence checks.

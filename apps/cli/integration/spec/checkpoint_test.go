@@ -17,6 +17,7 @@ type checkpointResult struct {
 	CheckpointSHA string `json:"CheckpointSHA"`
 	DraftSHA      string `json:"DraftSHA"`
 	ChangeID      string `json:"ChangeID"`
+	TraceHead     string `json:"TraceHead"`
 	KeepRef       string `json:"KeepRef"`
 	WorkspaceRef  string `json:"WorkspaceRef"`
 	SyncRef       string `json:"SyncRef"`
@@ -198,6 +199,8 @@ func TestIT_CP_003(t *testing.T) {
 	julPath := buildCLI(t)
 	deviceA := newDeviceEnv(t, "devA")
 	deviceB := newDeviceEnv(t, "devB")
+	deviceA.Env["JUL_NO_SYNC"] = "1"
+	deviceB.Env["JUL_NO_SYNC"] = "1"
 
 	runCmd(t, repoA, deviceA.Env, julPath, "init", "demo")
 	runCmd(t, repoB, deviceB.Env, julPath, "init", "demo")
@@ -251,6 +254,51 @@ func TestIT_CP_003(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(promoteErr.Message), "checkout") && !strings.Contains(strings.ToLower(promoteErr.Message), "restack") {
 		t.Fatalf("expected promote to suggest checkout/restack, got %+v", promoteErr)
+	}
+}
+
+func TestIT_CP_004(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo, true)
+	julPath := buildCLI(t)
+	device := newDeviceEnv(t, "dev1")
+	device.Env["JUL_NO_SYNC"] = "1"
+
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+	writeFile(t, repo, "README.md", "trace base\n")
+	traceOut := runCmd(t, repo, device.Env, julPath, "trace", "--prompt", "seed trace", "--json")
+	var traceRes struct {
+		TraceSHA string `json:"trace_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(traceOut)).Decode(&traceRes); err != nil {
+		t.Fatalf("failed to decode trace output: %v", err)
+	}
+	if strings.TrimSpace(traceRes.TraceSHA) == "" {
+		t.Fatalf("expected trace sha from explicit trace, got %s", traceOut)
+	}
+
+	writeFile(t, repo, "README.md", "trace flush candidate\n")
+	cpOut := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: flush trace", "--no-ci", "--no-review", "--json")
+	var cp checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cpOut)).Decode(&cp); err != nil {
+		t.Fatalf("failed to decode checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(cp.CheckpointSHA) == "" {
+		t.Fatalf("expected checkpoint sha, got %+v", cp)
+	}
+	if strings.TrimSpace(cp.TraceHead) == "" {
+		t.Fatalf("expected trace head in checkpoint output, got %+v", cp)
+	}
+
+	checkpointTree := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", cp.CheckpointSHA+"^{tree}"))
+	traceTree := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", cp.TraceHead+"^{tree}"))
+	if checkpointTree != traceTree {
+		t.Fatalf("expected checkpoint tree %s to match trace tree %s", checkpointTree, traceTree)
+	}
+
+	message := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", cp.CheckpointSHA)
+	if !strings.Contains(message, "Trace-Head: "+cp.TraceHead) {
+		t.Fatalf("expected Trace-Head trailer %s in checkpoint message: %s", cp.TraceHead, message)
 	}
 }
 

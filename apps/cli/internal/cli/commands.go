@@ -14,6 +14,7 @@ import (
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/hooks"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/metrics"
 	"github.com/lydakis/jul/cli/internal/output"
 	"github.com/lydakis/jul/cli/internal/policy"
 	remotesel "github.com/lydakis/jul/cli/internal/remote"
@@ -222,14 +223,15 @@ func newReflogCommand() Command {
 }
 
 type promoteOutput struct {
-	Status      string   `json:"status"`
-	Branch      string   `json:"branch"`
-	CommitSHA   string   `json:"commit_sha"`
-	Strategy    string   `json:"strategy,omitempty"`
-	Published   []string `json:"published,omitempty"`
-	BaseMarker  string   `json:"base_marker_sha,omitempty"`
-	ForceTarget bool     `json:"force_target,omitempty"`
-	NoPolicy    bool     `json:"no_policy,omitempty"`
+	Status      string          `json:"status"`
+	Branch      string          `json:"branch"`
+	CommitSHA   string          `json:"commit_sha"`
+	Strategy    string          `json:"strategy,omitempty"`
+	Published   []string        `json:"published,omitempty"`
+	BaseMarker  string          `json:"base_marker_sha,omitempty"`
+	ForceTarget bool            `json:"force_target,omitempty"`
+	NoPolicy    bool            `json:"no_policy,omitempty"`
+	Timings     metrics.Timings `json:"timings_ms,omitempty"`
 }
 
 type promoteOptions struct {
@@ -239,6 +241,7 @@ type promoteOptions struct {
 	ForceTarget    bool
 	NoPolicy       bool
 	ConfirmRewrite bool
+	Timings        *metrics.Timings
 }
 
 type promoteResult struct {
@@ -250,6 +253,7 @@ type promoteResult struct {
 	BaseMarkerSHA string
 	ForceTarget   bool
 	NoPolicy      bool
+	Timings       metrics.Timings
 }
 
 type promoteError struct {
@@ -352,6 +356,8 @@ func newPromoteCommand() Command {
 				}
 				return 1
 			}
+			timings := metrics.NewTimings()
+			promoteStart := time.Now()
 			res, err := promoteWithStack(promoteOptions{
 				Branch:         *toBranch,
 				TargetSHA:      targetSHA,
@@ -359,6 +365,7 @@ func newPromoteCommand() Command {
 				ForceTarget:    *forceTarget,
 				NoPolicy:       *noPolicy,
 				ConfirmRewrite: *confirmRewrite,
+				Timings:        &timings,
 			})
 			if err != nil {
 				var perr promoteError
@@ -377,6 +384,10 @@ func newPromoteCommand() Command {
 				}
 				return 1
 			}
+			if res.Timings.PhaseMs == nil {
+				res.Timings = timings
+			}
+			res.Timings.TotalMs = time.Since(promoteStart).Milliseconds()
 
 			commitSHA := strings.TrimSpace(res.PublishedTip)
 			if commitSHA == "" && len(res.Published) > 0 {
@@ -394,6 +405,7 @@ func newPromoteCommand() Command {
 				BaseMarker:  res.BaseMarkerSHA,
 				ForceTarget: res.ForceTarget,
 				NoPolicy:    res.NoPolicy,
+				Timings:     res.Timings,
 			}
 			if *jsonOut {
 				return writeJSON(out)
@@ -425,6 +437,11 @@ func promoteLocal(opts promoteOptions) (promoteResult, error) {
 	branch := strings.TrimSpace(opts.Branch)
 	if branch == "" {
 		return promoteResult{}, fmt.Errorf("branch required")
+	}
+	timings := opts.Timings
+	if timings == nil {
+		local := metrics.NewTimings()
+		timings = &local
 	}
 	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
@@ -494,7 +511,9 @@ func promoteLocal(opts promoteOptions) (promoteResult, error) {
 		}
 	}
 
+	fetchStart := time.Now()
 	remoteTip, remoteName, err := fetchPublishTip(branch)
+	timings.Add("fetch", time.Since(fetchStart))
 	if err != nil {
 		return promoteResult{}, err
 	}
@@ -528,6 +547,7 @@ func promoteLocal(opts promoteOptions) (promoteResult, error) {
 	var mergeCommitSHA *string
 	var mainline *int
 
+	rewriteStart := time.Now()
 	switch strategy {
 	case "rebase":
 		if remoteTip == "" || gitutil.IsAncestor(remoteTip, sha) || opts.ForceTarget {
@@ -570,6 +590,7 @@ func promoteLocal(opts promoteOptions) (promoteResult, error) {
 			Message: fmt.Sprintf("unsupported promote strategy %q", strategy),
 		}
 	}
+	timings.Add("rewrite", time.Since(rewriteStart))
 
 	guardTip := strings.TrimSpace(remoteTip)
 	if guardTip == "" {
@@ -588,9 +609,11 @@ func promoteLocal(opts promoteOptions) (promoteResult, error) {
 	}
 
 	if remoteName != "" {
+		pushStart := time.Now()
 		if err := pushPublish(remoteName, publishedTip, branch, opts.ForceTarget); err != nil {
 			return promoteResult{}, err
 		}
+		timings.Add("push", time.Since(pushStart))
 	}
 	if err := gitutil.UpdateRef(ref, publishedTip); err != nil {
 		return promoteResult{}, err
@@ -632,6 +655,7 @@ func promoteLocal(opts promoteOptions) (promoteResult, error) {
 		BaseMarkerSHA: baseMarkerSHA,
 		ForceTarget:   opts.ForceTarget,
 		NoPolicy:      opts.NoPolicy,
+		Timings:       *timings,
 	}, nil
 }
 
