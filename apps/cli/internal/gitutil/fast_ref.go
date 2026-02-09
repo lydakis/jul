@@ -203,6 +203,7 @@ func ListRefsFast(prefix string) ([]string, bool, error) {
 	if prefix == "" || !strings.HasPrefix(prefix, "refs/") {
 		return nil, false, nil
 	}
+	hadTrailingSlash := strings.HasSuffix(prefix, "/")
 	normalizedPrefix := strings.TrimSuffix(prefix, "/")
 	if normalizedPrefix == "" {
 		return nil, false, nil
@@ -217,8 +218,23 @@ func ListRefsFast(prefix string) ([]string, bool, error) {
 	}
 
 	seen := map[string]struct{}{}
+	matchesPrefix := func(ref string) bool {
+		if !strings.HasPrefix(ref, normalizedPrefix) {
+			return false
+		}
+		if !hadTrailingSlash {
+			return true
+		}
+		if len(ref) <= len(normalizedPrefix) {
+			return false
+		}
+		return ref[len(normalizedPrefix)] == '/'
+	}
 	collect := func(ref string) {
 		if ref == "" {
+			return
+		}
+		if !matchesPrefix(ref) {
 			return
 		}
 		seen[ref] = struct{}{}
@@ -245,7 +261,7 @@ func ListRefsFast(prefix string) ([]string, bool, error) {
 				collect(ref)
 				return nil
 			})
-		} else {
+		} else if !hadTrailingSlash {
 			collect(normalizedPrefix)
 		}
 	}
@@ -263,9 +279,7 @@ func ListRefsFast(prefix string) ([]string, bool, error) {
 			if len(fields) < 2 {
 				continue
 			}
-			if strings.HasPrefix(fields[1], normalizedPrefix) {
-				collect(fields[1])
-			}
+			collect(fields[1])
 		}
 	}
 

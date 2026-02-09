@@ -134,6 +134,11 @@ func TestListRefsFastAndRefExists(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git update-ref two failed: %v", err)
 	}
+	cmd = exec.Command("git", "update-ref", "refs/jul/test_extra/other", "HEAD")
+	cmd.Dir = repo
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git update-ref test_extra failed: %v", err)
+	}
 	cmd = exec.Command("git", "pack-refs", "--all")
 	cmd.Dir = repo
 	_ = cmd.Run()
@@ -179,6 +184,9 @@ func TestListRefsFastAndRefExists(t *testing.T) {
 	for _, ref := range refsWithSlash {
 		if strings.Contains(ref, "//") {
 			t.Fatalf("expected normalized refs without double slashes, got %s", ref)
+		}
+		if strings.HasPrefix(ref, "refs/jul/test_extra/") {
+			t.Fatalf("expected trailing slash prefix to exclude sibling namespace, got %s", ref)
 		}
 	}
 }

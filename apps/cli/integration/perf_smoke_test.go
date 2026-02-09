@@ -464,6 +464,12 @@ func addNotesEntries(t *testing.T, workDir string, gitDir string, ref string, pr
 	scratch := t.TempDir()
 	keyPath := filepath.Join(scratch, "key.txt")
 	notePath := filepath.Join(scratch, "note.txt")
+	noteEnv := map[string]string{
+		"GIT_AUTHOR_NAME":     "Perf Notes",
+		"GIT_AUTHOR_EMAIL":    "perf-notes@example.com",
+		"GIT_COMMITTER_NAME":  "Perf Notes",
+		"GIT_COMMITTER_EMAIL": "perf-notes@example.com",
+	}
 
 	index := start
 	for i := 0; i < entries; i++ {
@@ -494,7 +500,7 @@ func addNotesEntries(t *testing.T, workDir string, gitDir string, ref string, pr
 		if strings.TrimSpace(gitDir) != "" {
 			noteArgs = append([]string{"--git-dir", gitDir}, noteArgs...)
 		}
-		_ = runCmdTimed(t, workDir, nil, "git", noteArgs...)
+		_ = runCmdTimed(t, workDir, noteEnv, "git", noteArgs...)
 	}
 
 	return start + entries
