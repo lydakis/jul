@@ -22,6 +22,7 @@ const (
 	perfCheckpointRuns = 10
 	perfCheckpointCold = 5
 	perfStatusWarmups  = 5
+	perfNotesRuns      = 5
 )
 
 func TestPerfStatusSmoke(t *testing.T) {
@@ -100,6 +101,36 @@ func TestPerfSyncSmoke(t *testing.T) {
 	t.Logf("PT-SYNC-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-SYNC-001", p50, p95, budgetP50, budgetP95)
 	assertPerfRatio(t, "PT-SYNC-001", p50, p95, 3.0)
+}
+
+func TestPerfNotesMergeSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+
+	samples := make([]time.Duration, 0, perfNotesRuns)
+	notesRef := "refs/notes/jul/suggestions"
+	for i := 0; i < perfNotesRuns; i++ {
+		repo, env := setupPerfRepo(t, fmt.Sprintf("perf-notes-%d", i), 500, 512)
+		remoteDir := setupPerfRemote(t, repo, env, julPath)
+
+		_ = addNotesEntries(t, filepath.Dir(remoteDir), remoteDir, notesRef, "remote-seed", 0, 100, 100) // 10k events preload
+		_ = addNotesEntries(t, repo, "", notesRef, "local-delta", 0, 10, 100)                            // +1k events before sync
+
+		output := runCmdTimed(t, repo, env, julPath, "sync", "--json")
+		notesMerge, ok := parsePhaseTiming(t, output, "notes_merge")
+		if !ok {
+			t.Fatalf("expected notes_merge phase timing in sync output, got %s", output)
+		}
+		samples = append(samples, notesMerge)
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP50, budgetP95 := perfBudgetNotesMerge()
+	t.Logf("PT-NOTES-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
+	assertPerfBudget(t, "PT-NOTES-001", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-NOTES-001", p50, p95, 3.0)
 }
 
 func TestPerfCheckpointSmoke(t *testing.T) {
@@ -298,6 +329,10 @@ func perfBudgetCheckpointCloneColdP95() time.Duration {
 	return p95
 }
 
+func perfBudgetNotesMerge() (time.Duration, time.Duration) {
+	return applyPerfMultiplier(500*time.Millisecond, 3*time.Second)
+}
+
 func applyPerfMultiplier(p50, p95 time.Duration) (time.Duration, time.Duration) {
 	mult := perfMultiplier()
 	return time.Duration(float64(p50) * mult), time.Duration(float64(p95) * mult)
@@ -344,6 +379,84 @@ func parseMultiplier(raw string) (float64, error) {
 		return 0, fmt.Errorf("invalid multiplier")
 	}
 	return parsed, nil
+}
+
+func parsePhaseTiming(t *testing.T, output string, phase string) (time.Duration, bool) {
+	t.Helper()
+	var payload timingsPayload
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("failed to decode timings payload: %v\n%s", err, output)
+	}
+	if payload.Timings.Phase == nil {
+		return 0, false
+	}
+	value, ok := payload.Timings.Phase[phase]
+	if !ok {
+		return 0, false
+	}
+	if value < 0 {
+		value = 0
+	}
+	return time.Duration(value) * time.Millisecond, true
+}
+
+func setupPerfRemote(t *testing.T, repo string, env map[string]string, julPath string) string {
+	t.Helper()
+	remoteRoot := t.TempDir()
+	remoteDir := filepath.Join(remoteRoot, "remote.git")
+	runCmd(t, remoteRoot, nil, "git", "init", "--bare", remoteDir)
+	runCmd(t, repo, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, repo, nil, "git", "push", "-u", "origin", "HEAD")
+	runCmd(t, repo, env, julPath, "remote", "set", "origin")
+	return remoteDir
+}
+
+func addNotesEntries(t *testing.T, workDir string, gitDir string, ref string, prefix string, start int, entries int, eventsPerEntry int) int {
+	t.Helper()
+	if entries <= 0 {
+		return start
+	}
+	if eventsPerEntry <= 0 {
+		eventsPerEntry = 1
+	}
+
+	scratch := t.TempDir()
+	keyPath := filepath.Join(scratch, "key.txt")
+	notePath := filepath.Join(scratch, "note.txt")
+
+	index := start
+	for i := 0; i < entries; i++ {
+		entryID := index + i
+		keyData := []byte(fmt.Sprintf("%s-key-%06d\n", prefix, entryID))
+		if err := os.WriteFile(keyPath, keyData, 0o644); err != nil {
+			t.Fatalf("failed to write key payload: %v", err)
+		}
+
+		hashArgs := []string{"hash-object", "-w", keyPath}
+		if strings.TrimSpace(gitDir) != "" {
+			hashArgs = append([]string{"--git-dir", gitDir}, hashArgs...)
+		}
+		objectSHA := strings.TrimSpace(runCmdTimed(t, workDir, nil, "git", hashArgs...))
+		if objectSHA == "" {
+			t.Fatalf("failed to create object for notes entry %d", entryID)
+		}
+
+		var payload strings.Builder
+		for line := 0; line < eventsPerEntry; line++ {
+			payload.WriteString(fmt.Sprintf("{\"event\":\"%s-%06d-%04d\"}\n", prefix, entryID, line))
+		}
+		if err := os.WriteFile(notePath, []byte(payload.String()), 0o644); err != nil {
+			t.Fatalf("failed to write note payload: %v", err)
+		}
+
+		noteArgs := []string{"notes", "--ref", ref, "add", "-f", "-F", notePath, objectSHA}
+		if strings.TrimSpace(gitDir) != "" {
+			noteArgs = append([]string{"--git-dir", gitDir}, noteArgs...)
+		}
+		_ = runCmdTimed(t, workDir, nil, "git", noteArgs...)
+	}
+
+	return start + entries
 }
 
 func assertPerfBudget(t *testing.T, label string, p50, p95, budget50, budget95 time.Duration) {

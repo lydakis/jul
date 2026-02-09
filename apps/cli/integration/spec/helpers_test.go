@@ -272,9 +272,15 @@ func copyDir(src, dst string) error {
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
-		info, err := os.Stat(srcPath)
+		info, err := os.Lstat(srcPath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			continue
 		}
 		if info.IsDir() {
 			if err := copyDir(srcPath, dstPath); err != nil {

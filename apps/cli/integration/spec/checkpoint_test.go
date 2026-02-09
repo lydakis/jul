@@ -4,9 +4,11 @@ package integration
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/output"
 )
@@ -98,6 +100,87 @@ func TestIT_CP_001(t *testing.T) {
 	}
 }
 
+func TestIT_CP_002(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo, true)
+	julPath := buildCLI(t)
+	device := newDeviceEnv(t, "dev1")
+
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+	writeFile(t, repo, ".jul/ci.toml", "[commands]\nfail = \"sleep 2; false\"\n")
+	writeFile(t, repo, "README.md", "checkpoint with failing checks\n")
+
+	out := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: failing checks", "--no-review", "--json")
+	var res checkpointResult
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&res); err != nil {
+		t.Fatalf("failed to decode checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(res.CheckpointSHA) == "" {
+		t.Fatalf("expected checkpoint sha, got %+v", res)
+	}
+	if strings.TrimSpace(res.KeepRef) == "" {
+		t.Fatalf("expected keep ref in checkpoint output, got %+v", res)
+	}
+	_ = runCmd(t, repo, nil, "git", "show-ref", res.KeepRef)
+
+	runPath := waitForCIRunFile(t, filepath.Join(repo, ".jul", "ci", "runs"), 5*time.Second)
+	initial := waitForCIRunStatus(t, runPath, 2*time.Second)
+	if initial.Status != "running" {
+		t.Fatalf("expected checkpoint to return before CI completion, got status %q", initial.Status)
+	}
+
+	run := waitForCIRunResult(t, runPath, 10*time.Second)
+	if run.Status != "fail" {
+		t.Fatalf("expected failing ci run status, got %+v", run)
+	}
+	if strings.TrimSpace(run.CommitSHA) != strings.TrimSpace(res.CheckpointSHA) {
+		t.Fatalf("expected ci run commit %s, got %s", res.CheckpointSHA, run.CommitSHA)
+	}
+
+	note := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", res.CheckpointSHA)
+	if !strings.Contains(note, `"status":"fail"`) {
+		t.Fatalf("expected failing checkpoint attestation note, got %s", note)
+	}
+}
+
+func TestIT_CP_002_Watch(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo, true)
+	julPath := buildCLI(t)
+	device := newDeviceEnv(t, "dev1")
+
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+	writeFile(t, repo, ".jul/ci.toml", "[commands]\nfail = \"false\"\n")
+	writeFile(t, repo, "README.md", "checkpoint with failing checks watch\n")
+
+	out, err := runCmdAllowFailure(t, repo, device.Env, julPath, "checkpoint", "-m", "feat: failing checks watch", "--no-review", "--watch", "--json")
+	if err == nil {
+		t.Fatalf("expected checkpoint --watch to exit non-zero on failing checks, got %s", out)
+	}
+
+	jsonStart := strings.Index(out, "{")
+	if jsonStart < 0 {
+		t.Fatalf("expected checkpoint --watch output to contain json payload, got %s", out)
+	}
+
+	var res checkpointResult
+	if err := json.NewDecoder(strings.NewReader(out[jsonStart:])).Decode(&res); err != nil {
+		t.Fatalf("failed to decode checkpoint --watch output: %v (%s)", err, out)
+	}
+	if strings.TrimSpace(res.CheckpointSHA) == "" {
+		t.Fatalf("expected checkpoint sha, got %+v", res)
+	}
+	if strings.TrimSpace(res.KeepRef) == "" {
+		t.Fatalf("expected keep ref in checkpoint output, got %+v", res)
+	}
+	_ = runCmd(t, repo, nil, "git", "show-ref", res.KeepRef)
+
+	note := runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", res.CheckpointSHA)
+	if !strings.Contains(note, `"status":"fail"`) {
+		t.Fatalf("expected failing checkpoint attestation note, got %s", note)
+	}
+}
+
 func TestIT_CP_003(t *testing.T) {
 	root := t.TempDir()
 	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteSelective, FFOnlyPrefixes: []string{"refs/jul/workspaces/"}})
@@ -169,4 +252,84 @@ func TestIT_CP_003(t *testing.T) {
 	if !strings.Contains(strings.ToLower(promoteErr.Message), "checkout") && !strings.Contains(strings.ToLower(promoteErr.Message), "restack") {
 		t.Fatalf("expected promote to suggest checkout/restack, got %+v", promoteErr)
 	}
+}
+
+type ciRunRecord struct {
+	CommitSHA string `json:"commit_sha"`
+	Status    string `json:"status"`
+}
+
+func waitForCIRunFile(t *testing.T, dir string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+					continue
+				}
+				return filepath.Join(dir, entry.Name())
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for ci run in %s", dir)
+	return ""
+}
+
+func waitForCIRunResult(t *testing.T, runPath string, timeout time.Duration) ciRunRecord {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastDecodeErr error
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(runPath)
+		if err != nil {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		var run ciRunRecord
+		if err := json.Unmarshal(data, &run); err != nil {
+			lastDecodeErr = err
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if strings.TrimSpace(run.Status) != "" && strings.TrimSpace(run.Status) != "running" {
+			return run
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastDecodeErr != nil {
+		t.Fatalf("timed out waiting for ci run completion at %s (last decode error: %v)", runPath, lastDecodeErr)
+	}
+	t.Fatalf("timed out waiting for ci run completion at %s", runPath)
+	return ciRunRecord{}
+}
+
+func waitForCIRunStatus(t *testing.T, runPath string, timeout time.Duration) ciRunRecord {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastDecodeErr error
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(runPath)
+		if err != nil {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		var run ciRunRecord
+		if err := json.Unmarshal(data, &run); err != nil {
+			lastDecodeErr = err
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if strings.TrimSpace(run.Status) != "" {
+			return run
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if lastDecodeErr != nil {
+		t.Fatalf("timed out waiting for ci run status at %s (last decode error: %v)", runPath, lastDecodeErr)
+	}
+	t.Fatalf("timed out waiting for ci run status at %s", runPath)
+	return ciRunRecord{}
 }

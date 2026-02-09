@@ -390,7 +390,7 @@ Each scenario is specified as:
 **Covers:** Checkpoint + checks behavior.  
 **Setup:** Failing tests.  
 **Steps:** `jul checkpoint`.  
-**Assertions:** Behavior matches the chosen policy (either refuse checkpoint or create checkpoint with failing attestation); must be consistent and explicit.
+**Assertions:** Checkpoint is created immediately and remains durable; CI failure is recorded as a failing attestation asynchronously (for `--watch`, command exit may be non-zero after streaming completion).
 
 ### IT-CP-003 — Checkpoint When Workspace Push Is Rejected (Non-FF)
 
