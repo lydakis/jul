@@ -137,6 +137,14 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	if len(cmds) == 0 {
 		cmds = cicmd.InferDefaultCommands(workdir)
 	}
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return writeErr("ci_device_id_failed", fmt.Sprintf("failed to resolve device id: %v", err))
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return writeErr("ci_device_id_failed", "failed to resolve device id: empty device id")
+	}
 
 	if *watch {
 		stream = out
@@ -203,11 +211,10 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	if *coverageBranch >= 0 {
 		coverageBranchPtr = coverageBranch
 	}
-	deviceID, _ := config.DeviceID()
 
 	created := client.Attestation{
 		CommitSHA:         info.SHA,
-		DeviceID:          strings.TrimSpace(deviceID),
+		DeviceID:          deviceID,
 		ChangeID:          changeID,
 		Type:              *attType,
 		Status:            result.Status,

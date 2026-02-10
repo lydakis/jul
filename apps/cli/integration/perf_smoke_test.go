@@ -487,10 +487,14 @@ func setupPerfSeedRepo(t *testing.T, root, name string, files int, bytesPerFile 
 
 func perfEnv(home string) map[string]string {
 	return map[string]string{
-		"HOME":          home,
-		"JUL_WORKSPACE": "perf/@",
-		"JUL_NO_SYNC":   "1",
-		"PATH":          perfPath(),
+		"HOME":                home,
+		"JUL_WORKSPACE":       "perf/@",
+		"JUL_NO_SYNC":         "1",
+		"GIT_AUTHOR_NAME":     "Perf User",
+		"GIT_AUTHOR_EMAIL":    "perf@example.com",
+		"GIT_COMMITTER_NAME":  "Perf User",
+		"GIT_COMMITTER_EMAIL": "perf@example.com",
+		"PATH":                perfPath(),
 	}
 }
 

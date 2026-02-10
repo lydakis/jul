@@ -2,8 +2,7 @@ package config
 
 import (
 	"crypto/rand"
-	"fmt"
-	"math/big"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,54 +40,10 @@ func devicePath() (string, error) {
 }
 
 func generateDeviceID() (string, error) {
-	adjective, err := randomWord(deviceAdjectives)
+	buf := make([]byte, 16)
+	_, err := rand.Read(buf)
 	if err != nil {
 		return "", err
 	}
-	noun, err := randomWord(deviceNouns)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s-%s", adjective, noun), nil
-}
-
-func randomWord(words []string) (string, error) {
-	if len(words) == 0 {
-		return "", fmt.Errorf("word list is empty")
-	}
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(words))))
-	if err != nil {
-		return "", err
-	}
-	return words[n.Int64()], nil
-}
-
-var deviceAdjectives = []string{
-	"quiet",
-	"swift",
-	"bright",
-	"gentle",
-	"brave",
-	"calm",
-	"bold",
-	"lucky",
-	"mighty",
-	"noble",
-	"rapid",
-	"solid",
-}
-
-var deviceNouns = []string{
-	"tiger",
-	"mountain",
-	"river",
-	"forest",
-	"eagle",
-	"fox",
-	"lion",
-	"hawk",
-	"ocean",
-	"valley",
-	"stone",
-	"ember",
+	return "dev-" + hex.EncodeToString(buf), nil
 }
