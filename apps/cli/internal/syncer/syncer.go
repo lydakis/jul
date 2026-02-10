@@ -945,14 +945,41 @@ func pushJulNotes(remoteName string) error {
 		notes.RefRepoMeta,
 		notes.RefChangeID,
 	}
+	remoteNotes, err := remoteRefsByPrefix(remoteName, "refs/notes/jul/")
+	if err != nil {
+		return err
+	}
 	for _, ref := range refs {
 		if !gitutil.RefExists(ref) {
 			continue
 		}
-		if err := syncNotesRef(remoteName, ref); err != nil {
+		localTip, err := gitutil.ResolveRef(ref)
+		if err != nil {
 			return err
 		}
-		if _, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", ref, ref)); err != nil {
+		localTip = strings.TrimSpace(localTip)
+		if localTip == "" {
+			continue
+		}
+		remoteTip := strings.TrimSpace(remoteNotes[ref])
+		remoteTip = strings.TrimSpace(remoteTip)
+		if remoteTip == localTip {
+			continue
+		}
+		if remoteTip != "" {
+			if err := syncNotesRef(remoteName, ref); err != nil {
+				return err
+			}
+			mergedTip, err := gitutil.ResolveRef(ref)
+			if err != nil {
+				return err
+			}
+			localTip = strings.TrimSpace(mergedTip)
+			if localTip == "" || localTip == remoteTip {
+				continue
+			}
+		}
+		if _, err := gitutil.Git("push", remoteName, fmt.Sprintf("%s:%s", localTip, ref)); err != nil {
 			return err
 		}
 	}
@@ -1350,6 +1377,32 @@ func remoteRefTip(remoteName, ref string) (string, error) {
 		return "", nil
 	}
 	return strings.TrimSpace(fields[0]), nil
+}
+
+func remoteRefsByPrefix(remoteName, prefix string) (map[string]string, error) {
+	refs := map[string]string{}
+	remoteName = strings.TrimSpace(remoteName)
+	prefix = strings.TrimSpace(prefix)
+	if remoteName == "" || prefix == "" {
+		return refs, nil
+	}
+	out, err := gitutil.Git("ls-remote", remoteName, prefix+"*")
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		sha := strings.TrimSpace(fields[0])
+		ref := strings.TrimSpace(fields[1])
+		if sha == "" || ref == "" || !strings.HasPrefix(ref, prefix) {
+			continue
+		}
+		refs[ref] = sha
+	}
+	return refs, nil
 }
 
 func readWorkspaceLease(repoRoot, workspace string) (string, error) {

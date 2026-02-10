@@ -28,6 +28,7 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-CP-006 | Aligned | `checkpoint --adopt` adopts manual `HEAD` as checkpoint, writes refs/metadata, and preserves commit identity (no rewrite). |
 | IT-CI-002 | Aligned | Attestation note written and synced. |
 | IT-CI-003 | Aligned | Promote policy rejects remote-synced checkpoint attestations unless CI was computed on the current device; rerun action is provided. |
+| IT-CI-004 | Aligned | Restack-inherited attestations are shown as stale and promote policy blocks until fresh CI is rerun on the new SHA. |
 | IT-CI-005 | Aligned | Coverage gating + `--no-policy` bypass. |
 | IT-PROMOTE-REBASE-001 | Aligned | Main advances; base marker + notes; new draft. |
 | IT-PROMOTE-REWRITE-001 | Aligned | Rewrite detected; confirm path succeeds. |
@@ -48,15 +49,16 @@ Status: Perf smoke coverage is opt-in (`JUL_PERF_SMOKE=1`) and records Tier S bu
 
 | ID | Status | Latest Result |
 | --- | --- | --- |
-| PT-STATUS-001 | Implemented | p50=16ms, p95=18ms (budget p50<=25ms, p95<=80ms) |
+| PT-STATUS-001 | Implemented | p50=15ms, p95=17ms (budget p50<=25ms, p95<=80ms) |
 | PT-STATUS-002 | Implemented | p50=128ms, p95=141ms (budget p95<=250ms), clone-cold 20-sample run passed |
-| PT-SYNC-001 | Implemented | p50=285ms, p95=308ms (budget p50<=300ms, p95<=1s) |
+| PT-SYNC-001 | Implemented | p50=253ms, p95=283ms (budget p50<=300ms, p95<=1s) |
 | PT-SYNC-002 | Implemented | p50=425ms, p95=457ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
-| PT-SYNC-003 | Implemented | p50=984ms, p95=1.058s (budget p50<=1.1s, p95<=1.15s), stability 5/5 passes |
-| PT-CHECKPOINT-001 | Implemented | p50=226ms, p95=340ms (budget p50<=250ms, p95<=800ms) |
+| PT-SYNC-003 | Implemented | p50=843ms, p95=932ms (budget p50<=1.1s, p95<=1.15s), stability 5/5 passes |
+| PT-SYNC-004 | Implemented | p50=521ms, p95=876ms (budget p95<=3.5s), stability 5/5 passes |
+| PT-CHECKPOINT-001 | Implemented | p50=202ms, p95=302ms (budget p50<=250ms, p95<=800ms) |
 | PT-CHECKPOINT-002 | Implemented | Pending fresh run |
-| PT-NOTES-001 | Implemented | p50=253ms, p95=260ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
-| PT-PROMOTE-001 | Implemented | p50=670ms, p95=731ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
+| PT-NOTES-001 | Implemented | p50=221ms, p95=230ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
+| PT-PROMOTE-001 | Implemented | p50=722ms, p95=788ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
 | PT-DAEMON-002 | Implemented | transitions=1, settle=3.45s (budget settle<=10s), stability 5/5 passes |
 
 ### P0 — Repo Safety & Core Invariants (must‑fix before daily use)

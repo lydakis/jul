@@ -194,3 +194,97 @@ func TestIT_CI_003(t *testing.T) {
 		t.Fatalf("expected rerun next_action for local CI, got %+v", promoteErr.NextActions)
 	}
 }
+
+func TestIT_CI_004(t *testing.T) {
+	root := t.TempDir()
+	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteFullCompat})
+
+	seed := filepath.Join(root, "seed")
+	initRepo(t, seed, true)
+	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "main")
+
+	repoA := filepath.Join(root, "repoA")
+	repoB := filepath.Join(root, "repoB")
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoA)
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoB)
+
+	julPath := buildCLI(t)
+	deviceA := newDeviceEnv(t, "devA")
+	deviceB := newDeviceEnv(t, "devB")
+	deviceA.Env["JUL_NO_SYNC"] = "1"
+	deviceB.Env["JUL_NO_SYNC"] = "1"
+
+	runCmd(t, repoA, deviceA.Env, julPath, "init", "demo")
+	runCmd(t, repoB, deviceB.Env, julPath, "init", "demo")
+	writeFile(t, repoB, ".jul/ci.toml", "[commands]\npass = \"true\"\n")
+	writeFile(t, repoB, ".jul/policy.toml", "[promote.main]\nrequired_checks = [\"ci\"]\n")
+
+	writeFile(t, repoB, "b.txt", "from B\n")
+	cpBOut := runCmd(t, repoB, deviceB.Env, julPath, "checkpoint", "-m", "feat: B", "--no-ci", "--no-review", "--json")
+	var cpB checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cpBOut)).Decode(&cpB); err != nil {
+		t.Fatalf("failed to decode checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(cpB.CheckpointSHA) == "" {
+		t.Fatalf("expected checkpoint sha from device B, got %+v", cpB)
+	}
+	runCmd(t, repoB, deviceB.Env, julPath, "ci", "run", "--cmd", "true", "--target", cpB.CheckpointSHA, "--json")
+
+	runCmd(t, repoA, deviceA.Env, julPath, "sync", "--json")
+	writeFile(t, repoA, "a.txt", "from A\n")
+	runCmd(t, repoA, deviceA.Env, julPath, "checkpoint", "-m", "feat: A", "--no-ci", "--no-review", "--json")
+
+	syncOut := runCmd(t, repoB, deviceB.Env, julPath, "sync", "--json")
+	var syncRes syncResult
+	if err := json.NewDecoder(strings.NewReader(syncOut)).Decode(&syncRes); err != nil {
+		t.Fatalf("failed to decode sync output: %v", err)
+	}
+	if syncRes.Diverged || syncRes.BaseAdvanced {
+		t.Fatalf("expected autorestack to resolve base advance, got %+v", syncRes)
+	}
+	if !syncRes.WorkspaceUpdated {
+		t.Fatalf("expected workspace update from autorestack")
+	}
+
+	statusOut := runCmd(t, repoB, deviceB.Env, julPath, "status", "--json")
+	var status output.Status
+	if err := json.NewDecoder(strings.NewReader(statusOut)).Decode(&status); err != nil {
+		t.Fatalf("failed to decode status output: %v (%s)", err, statusOut)
+	}
+	if status.LastCheckpoint == nil || strings.TrimSpace(status.LastCheckpoint.CommitSHA) == "" {
+		t.Fatalf("expected latest checkpoint after restack, got %+v", status)
+	}
+	if !status.AttestationStale {
+		t.Fatalf("expected inherited attestation to be stale after restack, got %+v", status)
+	}
+	if strings.TrimSpace(status.AttestationInheritedFrom) == "" {
+		t.Fatalf("expected inherited attestation source, got %+v", status)
+	}
+	if strings.ToLower(strings.TrimSpace(status.AttestationStatus)) != "pass" {
+		t.Fatalf("expected inherited pass status to be visible, got %+v", status)
+	}
+
+	restackedSHA := strings.TrimSpace(status.LastCheckpoint.CommitSHA)
+	promoteOut, err := runCmdAllowFailure(t, repoB, deviceB.Env, julPath, "promote", "--to", "main", restackedSHA, "--json")
+	if err == nil {
+		t.Fatalf("expected promote to block stale inherited attestation, got %s", promoteOut)
+	}
+	var promoteErr output.ErrorOutput
+	if err := json.NewDecoder(strings.NewReader(promoteOut)).Decode(&promoteErr); err != nil {
+		t.Fatalf("expected promote error json, got %v (%s)", err, promoteOut)
+	}
+	if !strings.Contains(strings.ToLower(promoteErr.Message), "stale") {
+		t.Fatalf("expected stale attestation failure, got %+v", promoteErr)
+	}
+	foundRerun := false
+	for _, action := range promoteErr.NextActions {
+		if strings.Contains(action.Command, "jul ci run --target "+restackedSHA) {
+			foundRerun = true
+			break
+		}
+	}
+	if !foundRerun {
+		t.Fatalf("expected rerun next_action for restacked checkpoint %s, got %+v", restackedSHA, promoteErr.NextActions)
+	}
+}

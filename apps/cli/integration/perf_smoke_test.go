@@ -22,6 +22,7 @@ const (
 	perfStatusColdRuns = 20
 	perfSyncRuns       = 20
 	perfSyncFullRuns   = 5
+	perfSyncCloneRuns  = 5
 	perfCheckpointRuns = 10
 	perfCheckpointCold = 5
 	perfStatusWarmups  = 5
@@ -185,6 +186,59 @@ func TestPerfSyncLocalTransportSmoke(t *testing.T) {
 	t.Logf("PT-SYNC-003 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-SYNC-003", p50, p95, budgetP50, budgetP95)
 	assertPerfRatio(t, "PT-SYNC-003", p50, p95, 3.0)
+}
+
+func TestPerfSyncCloneColdLocalTransportSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	root := t.TempDir()
+	seed := setupPerfSeedRepo(t, root, "perf-sync-clone-cold-seed", 2000, 1024)
+	remoteDir := filepath.Join(root, "origin.git")
+	runCmd(t, root, nil, "git", "init", "--bare", remoteDir)
+	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "main")
+
+	firstSamples := make([]time.Duration, 0, perfSyncCloneRuns)
+	for i := 0; i < perfSyncCloneRuns; i++ {
+		cloneDir := filepath.Join(root, fmt.Sprintf("sync-clone-%02d", i))
+		runCmd(t, root, nil, "git", "clone", "--quiet", remoteDir, cloneDir)
+
+		home := filepath.Join(root, fmt.Sprintf("home-sync-clone-%02d", i))
+		env := perfEnv(home)
+		runCmd(t, cloneDir, env, julPath, "init", fmt.Sprintf("perf-sync-clone-cold-%d", i))
+
+		firstOut := runCmdTimed(t, cloneDir, env, julPath, "sync", "--json")
+		if snapshot, ok := parsePhaseTiming(t, firstOut, "snapshot"); !ok || snapshot <= 0 {
+			t.Fatalf("expected snapshot phase timing in first clone-cold sync output, got %s", firstOut)
+		}
+		if push, ok := parsePhaseTiming(t, firstOut, "push"); !ok || push <= 0 {
+			t.Fatalf("expected push phase timing in first clone-cold sync output, got %s", firstOut)
+		}
+		firstTotalMs, ok := parseTimings(t, firstOut)
+		if !ok {
+			t.Fatalf("expected sync timings in first clone-cold sync output, got %s", firstOut)
+		}
+		firstDuration := time.Duration(firstTotalMs) * time.Millisecond
+		firstSamples = append(firstSamples, firstDuration)
+
+		secondOut := runCmdTimed(t, cloneDir, env, julPath, "sync", "--json")
+		secondTotalMs, ok := parseTimings(t, secondOut)
+		if !ok {
+			t.Fatalf("expected sync timings in second clone-cold sync output, got %s", secondOut)
+		}
+		secondDuration := time.Duration(secondTotalMs) * time.Millisecond
+		if firstDuration > 0 && secondDuration > firstDuration*2 {
+			t.Fatalf("PT-SYNC-004 failed: second sync %s was unexpectedly slower than first clone-cold sync %s", secondDuration, firstDuration)
+		}
+	}
+
+	p50, p95 := percentiles(firstSamples, 0.50, 0.95)
+	budgetP95 := perfBudgetSyncCloneColdLocalP95()
+	t.Logf("PT-SYNC-004 p50=%s p95=%s budget95=%s", p50, p95, budgetP95)
+	assertPerfP95(t, "PT-SYNC-004", p95, budgetP95)
+	assertPerfRatio(t, "PT-SYNC-004", p50, p95, 4.0)
 }
 
 func TestPerfNotesMergeSmoke(t *testing.T) {
@@ -739,6 +793,11 @@ func perfBudgetSyncFullRebuild() (time.Duration, time.Duration) {
 
 func perfBudgetSyncLocalTransport() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(1100*time.Millisecond, 1150*time.Millisecond)
+}
+
+func perfBudgetSyncCloneColdLocalP95() time.Duration {
+	_, p95 := applyPerfMultiplier(0, 3500*time.Millisecond)
+	return p95
 }
 
 func perfBudgetCheckpoint() (time.Duration, time.Duration) {
