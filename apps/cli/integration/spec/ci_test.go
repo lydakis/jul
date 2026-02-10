@@ -119,3 +119,78 @@ func TestIT_CI_005(t *testing.T) {
 		t.Fatalf("expected promote to succeed with --no-policy, got %s", outBypass)
 	}
 }
+
+func TestIT_CI_003(t *testing.T) {
+	root := t.TempDir()
+	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteFullCompat})
+
+	seed := filepath.Join(root, "seed")
+	initRepo(t, seed, true)
+	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "main")
+
+	repoA := filepath.Join(root, "repoA")
+	repoB := filepath.Join(root, "repoB")
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoA)
+	runCmd(t, root, nil, "git", "clone", remoteDir, repoB)
+
+	julPath := buildCLI(t)
+	deviceA := newDeviceEnv(t, "devA")
+	deviceB := newDeviceEnv(t, "devB")
+	deviceA.Env["JUL_NO_SYNC"] = "1"
+	deviceB.Env["JUL_NO_SYNC"] = "1"
+
+	runCmd(t, repoA, deviceA.Env, julPath, "init", "demo")
+	runCmd(t, repoB, deviceB.Env, julPath, "init", "demo")
+	writeFile(t, repoA, ".jul/ci.toml", "[commands]\npass = \"true\"\n")
+	writeFile(t, repoB, ".jul/ci.toml", "[commands]\npass = \"true\"\n")
+	writeFile(t, repoA, ".jul/policy.toml", "[promote.main]\nrequired_checks = [\"ci\"]\n")
+	writeFile(t, repoB, ".jul/policy.toml", "[promote.main]\nrequired_checks = [\"ci\"]\n")
+
+	writeFile(t, repoA, "README.md", "device a checkpoint\n")
+	cpOut := runCmd(t, repoA, deviceA.Env, julPath, "checkpoint", "-m", "ci trust setup", "--no-ci", "--no-review", "--json")
+	var cp checkpointResult
+	if err := json.NewDecoder(strings.NewReader(cpOut)).Decode(&cp); err != nil {
+		t.Fatalf("failed to decode checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(cp.CheckpointSHA) == "" {
+		t.Fatalf("expected checkpoint sha from device A, got %+v", cp)
+	}
+
+	runCmd(t, repoA, deviceA.Env, julPath, "ci", "run", "--cmd", "true", "--target", cp.CheckpointSHA, "--json")
+	runCmd(t, repoA, deviceA.Env, julPath, "sync", "--json")
+	remoteNote := runCmd(t, repoA, nil, "git", "--git-dir", remoteDir, "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", cp.CheckpointSHA)
+	if !strings.Contains(remoteNote, "\"status\"") {
+		t.Fatalf("expected checkpoint attestation note on remote, got %s", remoteNote)
+	}
+
+	runCmd(t, repoB, deviceB.Env, julPath, "sync", "--json")
+	runCmd(t, repoB, nil, "git", "fetch", "origin", "+refs/notes/jul/attestations/checkpoint:refs/notes/jul/attestations/checkpoint")
+	note := runCmd(t, repoB, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", cp.CheckpointSHA)
+	if !strings.Contains(note, "\"status\"") {
+		t.Fatalf("expected synced checkpoint attestation note on device B, got %s", note)
+	}
+
+	promoteOut, err := runCmdAllowFailure(t, repoB, deviceB.Env, julPath, "promote", "--to", "main", cp.CheckpointSHA, "--json")
+	if err == nil {
+		t.Fatalf("expected promote to reject remote-only attestation, got %s", promoteOut)
+	}
+	var promoteErr output.ErrorOutput
+	if err := json.NewDecoder(strings.NewReader(promoteOut)).Decode(&promoteErr); err != nil {
+		t.Fatalf("expected promote error json, got %v (%s)", err, promoteOut)
+	}
+	lower := strings.ToLower(promoteErr.Message)
+	if !strings.Contains(lower, "local") && !strings.Contains(lower, "rerun") {
+		t.Fatalf("expected promote to require local checks, got %+v", promoteErr)
+	}
+	foundRerun := false
+	for _, action := range promoteErr.NextActions {
+		if strings.Contains(action.Command, "jul ci run --target "+cp.CheckpointSHA) {
+			foundRerun = true
+			break
+		}
+	}
+	if !foundRerun {
+		t.Fatalf("expected rerun next_action for local CI, got %+v", promoteErr.NextActions)
+	}
+}

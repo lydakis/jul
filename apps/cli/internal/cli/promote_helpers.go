@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
 	"github.com/lydakis/jul/cli/internal/identity"
 	"github.com/lydakis/jul/cli/internal/metadata"
@@ -137,6 +138,19 @@ func enforcePromotePolicy(cfg policy.PromotePolicy, checkpointSHA, changeID stri
 		return promoteError{
 			Code:    "promote_policy_failed",
 			Message: "promote blocked: no CI results found for latest checkpoint",
+			Next: []output.NextAction{
+				{Action: "rerun", Command: fmt.Sprintf("jul ci run --target %s --json", checkpointSHA)},
+			},
+		}
+	}
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(att.DeviceID) == "" || strings.TrimSpace(att.DeviceID) != strings.TrimSpace(deviceID) {
+		return promoteError{
+			Code:    "promote_policy_failed",
+			Message: "promote blocked: CI results were not computed locally on this device; rerun CI on the latest checkpoint",
 			Next: []output.NextAction{
 				{Action: "rerun", Command: fmt.Sprintf("jul ci run --target %s --json", checkpointSHA)},
 			},

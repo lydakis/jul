@@ -152,6 +152,41 @@ func TestPerfSyncFullRebuildSmoke(t *testing.T) {
 	assertPerfRatio(t, "PT-SYNC-002", p50, p95, 4.0)
 }
 
+func TestPerfSyncLocalTransportSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	repo, env := setupPerfRepo(t, "perf-sync-local", 2000, 1024)
+	_ = setupPerfRemote(t, repo, env, julPath)
+
+	appendFile(t, repo, "src/file-0001.txt", "\nlocal-transport-warmup\n")
+	warmUpCommand(t, repo, env, julPath, "sync", "--json")
+
+	samples := make([]time.Duration, 0, perfSyncRuns)
+	for i := 0; i < perfSyncRuns; i++ {
+		appendFile(t, repo, "src/file-0001.txt", fmt.Sprintf("\nlocal-transport-%d\n", i))
+		output := runCmdTimed(t, repo, env, julPath, "sync", "--json")
+		if snapshot, ok := parsePhaseTiming(t, output, "snapshot"); !ok || snapshot <= 0 {
+			t.Fatalf("expected snapshot phase timing in sync output, got %s", output)
+		}
+		if push, ok := parsePhaseTiming(t, output, "push"); !ok || push <= 0 {
+			t.Fatalf("expected push phase timing in sync output, got %s", output)
+		}
+		totalMs, ok := parseTimings(t, output)
+		if !ok {
+			t.Fatalf("expected sync timings in json output, got %s", output)
+		}
+		samples = append(samples, time.Duration(totalMs)*time.Millisecond)
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP50, budgetP95 := perfBudgetSyncLocalTransport()
+	t.Logf("PT-SYNC-003 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
+	assertPerfBudget(t, "PT-SYNC-003", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-SYNC-003", p50, p95, 3.0)
+}
+
 func TestPerfNotesMergeSmoke(t *testing.T) {
 	if os.Getenv("JUL_PERF_SMOKE") != "1" {
 		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
@@ -696,6 +731,10 @@ func perfBudgetSync() (time.Duration, time.Duration) {
 
 func perfBudgetSyncFullRebuild() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(1500*time.Millisecond, 5*time.Second)
+}
+
+func perfBudgetSyncLocalTransport() (time.Duration, time.Duration) {
+	return applyPerfMultiplier(1100*time.Millisecond, 1150*time.Millisecond)
 }
 
 func perfBudgetCheckpoint() (time.Duration, time.Duration) {

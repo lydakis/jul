@@ -203,9 +203,11 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 	if *coverageBranch >= 0 {
 		coverageBranchPtr = coverageBranch
 	}
+	deviceID, _ := config.DeviceID()
 
 	created := client.Attestation{
 		CommitSHA:         info.SHA,
+		DeviceID:          strings.TrimSpace(deviceID),
 		ChangeID:          changeID,
 		Type:              *attType,
 		Status:            result.Status,

@@ -27,6 +27,7 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-CP-005 | Aligned | Pre-promote checkpoints keep one Change-Id; first post-promote checkpoint starts a new Change-Id. |
 | IT-CP-006 | Aligned | `checkpoint --adopt` adopts manual `HEAD` as checkpoint, writes refs/metadata, and preserves commit identity (no rewrite). |
 | IT-CI-002 | Aligned | Attestation note written and synced. |
+| IT-CI-003 | Aligned | Promote policy rejects remote-synced checkpoint attestations unless CI was computed on the current device; rerun action is provided. |
 | IT-CI-005 | Aligned | Coverage gating + `--no-policy` bypass. |
 | IT-PROMOTE-REBASE-001 | Aligned | Main advances; base marker + notes; new draft. |
 | IT-PROMOTE-REWRITE-001 | Aligned | Rewrite detected; confirm path succeeds. |
@@ -47,11 +48,12 @@ Status: Perf smoke coverage is opt-in (`JUL_PERF_SMOKE=1`) and records Tier S bu
 
 | ID | Status | Latest Result |
 | --- | --- | --- |
-| PT-STATUS-001 | Implemented | Pending fresh run |
+| PT-STATUS-001 | Implemented | p50=16ms, p95=18ms (budget p50<=25ms, p95<=80ms) |
 | PT-STATUS-002 | Implemented | p50=128ms, p95=141ms (budget p95<=250ms), clone-cold 20-sample run passed |
-| PT-SYNC-001 | Implemented | Pending fresh run |
+| PT-SYNC-001 | Implemented | p50=285ms, p95=308ms (budget p50<=300ms, p95<=1s) |
 | PT-SYNC-002 | Implemented | p50=425ms, p95=457ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
-| PT-CHECKPOINT-001 | Implemented | Pending fresh run |
+| PT-SYNC-003 | Implemented | p50=984ms, p95=1.058s (budget p50<=1.1s, p95<=1.15s), stability 5/5 passes |
+| PT-CHECKPOINT-001 | Implemented | p50=226ms, p95=340ms (budget p50<=250ms, p95<=800ms) |
 | PT-CHECKPOINT-002 | Implemented | Pending fresh run |
 | PT-NOTES-001 | Implemented | p50=253ms, p95=260ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
 | PT-PROMOTE-001 | Implemented | p50=670ms, p95=731ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |

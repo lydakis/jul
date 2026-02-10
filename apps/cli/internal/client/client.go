@@ -66,6 +66,7 @@ type Attestation struct {
 	AttestationID          string    `json:"attestation_id"`
 	CommitSHA              string    `json:"commit_sha"`
 	AttestationInheritFrom string    `json:"attestation_inherit_from,omitempty"`
+	DeviceID               string    `json:"device_id,omitempty"`
 	ChangeID               string    `json:"change_id"`
 	Type                   string    `json:"type"`
 	Status                 string    `json:"status"`
