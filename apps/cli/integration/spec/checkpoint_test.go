@@ -359,6 +359,89 @@ func TestIT_CP_005(t *testing.T) {
 	}
 }
 
+func TestIT_CP_006(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo, true)
+	julPath := buildCLI(t)
+	device := newDeviceEnv(t, "dev1")
+	device.Env["JUL_NO_SYNC"] = "1"
+
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+
+	writeFile(t, repo, "README.md", "manual adopt baseline\n")
+	runCmd(t, repo, nil, "git", "add", "README.md")
+	runCmd(t, repo, nil, "git", "commit", "-m", "manual commit without change id")
+
+	headBefore := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
+	if headBefore == "" {
+		t.Fatalf("expected manual head commit before adopt")
+	}
+	headParentBefore := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD^"))
+	headMessageBefore := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", "HEAD")
+
+	out := runCmd(t, repo, device.Env, julPath, "checkpoint", "--adopt", "--no-ci", "--no-review", "--json")
+	var res checkpointResult
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&res); err != nil {
+		t.Fatalf("failed to decode adopt checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(res.CheckpointSHA) == "" {
+		t.Fatalf("expected checkpoint sha from adopt, got %+v", res)
+	}
+	if res.CheckpointSHA != headBefore {
+		t.Fatalf("expected adopted checkpoint %s, got %s", headBefore, res.CheckpointSHA)
+	}
+	if strings.TrimSpace(res.ChangeID) == "" {
+		t.Fatalf("expected change id in adopt output, got %+v", res)
+	}
+	if strings.TrimSpace(res.KeepRef) == "" {
+		t.Fatalf("expected keep ref in adopt output, got %+v", res)
+	}
+
+	headAfter := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD"))
+	if headAfter != headBefore {
+		t.Fatalf("expected adopt to keep HEAD unchanged (%s), got %s", headBefore, headAfter)
+	}
+	headParentAfter := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", "HEAD^"))
+	if headParentAfter != headParentBefore {
+		t.Fatalf("expected adopt to avoid rewrite (parent %s), got %s", headParentBefore, headParentAfter)
+	}
+	headMessageAfter := runCmd(t, repo, nil, "git", "log", "-1", "--format=%B", "HEAD")
+	if headMessageAfter != headMessageBefore {
+		t.Fatalf("expected adopt to preserve commit message, got %q -> %q", headMessageBefore, headMessageAfter)
+	}
+
+	keepTip := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", res.KeepRef))
+	if keepTip != headBefore {
+		t.Fatalf("expected keep ref %s to point at %s, got %s", res.KeepRef, headBefore, keepTip)
+	}
+
+	changeRef := "refs/jul/changes/" + res.ChangeID
+	changeTip := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", changeRef))
+	if changeTip != headBefore {
+		t.Fatalf("expected change ref %s to point at %s, got %s", changeRef, headBefore, changeTip)
+	}
+
+	anchorRef := "refs/jul/anchors/" + res.ChangeID
+	anchorTip := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", anchorRef))
+	if anchorTip != headBefore {
+		t.Fatalf("expected anchor ref %s to point at %s, got %s", anchorRef, headBefore, anchorTip)
+	}
+
+	workspaceRef := "refs/jul/workspaces/tester/@"
+	workspaceTip := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", workspaceRef))
+	if workspaceTip != headBefore {
+		t.Fatalf("expected workspace ref to point at adopted checkpoint %s, got %s", headBefore, workspaceTip)
+	}
+
+	if strings.TrimSpace(res.DraftSHA) == "" {
+		t.Fatalf("expected new draft commit after adopt, got %+v", res)
+	}
+	draftParent := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", res.DraftSHA+"^"))
+	if draftParent != headBefore {
+		t.Fatalf("expected new draft parent %s, got %s", headBefore, draftParent)
+	}
+}
+
 type ciRunRecord struct {
 	CommitSHA string `json:"commit_sha"`
 	Status    string `json:"status"`

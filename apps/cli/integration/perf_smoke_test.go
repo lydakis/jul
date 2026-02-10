@@ -21,6 +21,7 @@ const (
 	perfStatusRuns     = 30
 	perfStatusColdRuns = 20
 	perfSyncRuns       = 20
+	perfSyncFullRuns   = 5
 	perfCheckpointRuns = 10
 	perfCheckpointCold = 5
 	perfStatusWarmups  = 5
@@ -105,6 +106,43 @@ func TestPerfSyncSmoke(t *testing.T) {
 	t.Logf("PT-SYNC-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-SYNC-001", p50, p95, budgetP50, budgetP95)
 	assertPerfRatio(t, "PT-SYNC-001", p50, p95, 3.0)
+}
+
+func TestPerfSyncFullRebuildSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	repo, env := setupPerfRepo(t, "perf-sync-full", 2000, 1024)
+
+	draftIndexPath := filepath.Join(repo, ".jul", "draft-index")
+	samples := make([]time.Duration, 0, perfSyncFullRuns)
+	for i := 0; i < perfSyncFullRuns; i++ {
+		appendFile(t, repo, "src/file-0001.txt", fmt.Sprintf("\nfull-rebuild-%d\n", i))
+		if err := os.Remove(draftIndexPath); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("failed to remove draft index: %v", err)
+		}
+
+		output := runCmdTimed(t, repo, env, julPath, "sync", "--json")
+		if snapshot, ok := parsePhaseTiming(t, output, "snapshot"); !ok || snapshot <= 0 {
+			t.Fatalf("expected snapshot phase timing in sync output, got %s", output)
+		}
+		if _, ok := parsePhaseTiming(t, output, "finalize"); !ok {
+			t.Fatalf("expected finalize phase timing in sync output, got %s", output)
+		}
+
+		totalMs, ok := parseTimings(t, output)
+		if !ok {
+			t.Fatalf("expected sync timings in json output, got %s", output)
+		}
+		samples = append(samples, time.Duration(totalMs)*time.Millisecond)
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP50, budgetP95 := perfBudgetSyncFullRebuild()
+	t.Logf("PT-SYNC-002 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
+	assertPerfBudget(t, "PT-SYNC-002", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-SYNC-002", p50, p95, 4.0)
 }
 
 func TestPerfNotesMergeSmoke(t *testing.T) {
@@ -503,6 +541,10 @@ func perfBudgetStatusCacheColdP95() time.Duration {
 
 func perfBudgetSync() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(300*time.Millisecond, 1*time.Second)
+}
+
+func perfBudgetSyncFullRebuild() (time.Duration, time.Duration) {
+	return applyPerfMultiplier(1500*time.Millisecond, 5*time.Second)
 }
 
 func perfBudgetCheckpoint() (time.Duration, time.Duration) {

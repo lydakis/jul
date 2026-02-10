@@ -25,6 +25,7 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-CP-003 | Aligned | Local checkpoint kept; divergence flagged; promote blocked. Regression fixed for malformed `refs/jul/changes//...` push path. |
 | IT-CP-004 | Aligned | Checkpoint flushes canonical trace head and trace tree matches checkpoint tree. |
 | IT-CP-005 | Aligned | Pre-promote checkpoints keep one Change-Id; first post-promote checkpoint starts a new Change-Id. |
+| IT-CP-006 | Aligned | `checkpoint --adopt` adopts manual `HEAD` as checkpoint, writes refs/metadata, and preserves commit identity (no rewrite). |
 | IT-CI-002 | Aligned | Attestation note written and synced. |
 | IT-CI-005 | Aligned | Coverage gating + `--no-policy` bypass. |
 | IT-PROMOTE-REBASE-001 | Aligned | Main advances; base marker + notes; new draft. |
@@ -49,6 +50,7 @@ Status: Perf smoke coverage is opt-in (`JUL_PERF_SMOKE=1`) and records Tier S bu
 | PT-STATUS-001 | Implemented | Pending fresh run |
 | PT-STATUS-002 | Implemented | Pending fresh run |
 | PT-SYNC-001 | Implemented | Pending fresh run |
+| PT-SYNC-002 | Implemented | p50=425ms, p95=457ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
 | PT-CHECKPOINT-001 | Implemented | Pending fresh run |
 | PT-CHECKPOINT-002 | Implemented | Pending fresh run |
 | PT-NOTES-001 | Implemented | p50=253ms, p95=260ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
