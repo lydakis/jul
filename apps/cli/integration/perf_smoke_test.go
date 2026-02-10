@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	perfStatusRuns     = 30
+	perfStatusRuns     = 50
 	perfStatusColdRuns = 20
 	perfSyncRuns       = 20
 	perfSyncFullRuns   = 5
@@ -28,6 +28,8 @@ const (
 	perfNotesRuns      = 5
 	perfPromoteRuns    = 5
 	perfDaemonEvents   = 1000
+
+	perfProgressVisibleDeadline = 250 * time.Millisecond
 )
 
 func TestPerfStatusSmoke(t *testing.T) {
@@ -61,24 +63,29 @@ func TestPerfStatusSmoke(t *testing.T) {
 	assertPerfRatio(t, "PT-STATUS-001", p50, p95, 4.0)
 }
 
-func TestPerfStatusCacheColdSmoke(t *testing.T) {
+func TestPerfStatusCloneColdSmoke(t *testing.T) {
 	if os.Getenv("JUL_PERF_SMOKE") != "1" {
 		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
 	}
 	julPath := perfCLI(t)
-	repo, env := setupPerfRepo(t, "perf-status-cold", 2000, 1024)
-	runCmd(t, repo, env, julPath, "checkpoint", "-m", "perf seed", "--no-ci", "--no-review")
+	root := t.TempDir()
+	seed := setupPerfSeedRepo(t, root, "perf-status-clone-cold-seed", 2000, 1024)
 
 	samples := make([]time.Duration, 0, perfStatusColdRuns)
-	cachePath := filepath.Join(repo, ".jul", "status.json")
 	for i := 0; i < perfStatusColdRuns; i++ {
-		_ = os.Remove(cachePath)
-		_, duration := runTimedJSONCommand(t, repo, env, julPath, "status", "--json")
+		cloneDir := filepath.Join(root, fmt.Sprintf("clone-%02d", i))
+		runCmd(t, root, nil, "git", "clone", "--quiet", seed, cloneDir)
+
+		home := filepath.Join(root, fmt.Sprintf("home-%02d", i))
+		env := perfEnv(home)
+		runCmd(t, cloneDir, env, julPath, "init", fmt.Sprintf("perf-status-clone-cold-%d", i))
+
+		_, duration := runTimedJSONCommand(t, cloneDir, env, julPath, "status", "--json")
 		samples = append(samples, duration)
 	}
 
 	p50, p95 := percentiles(samples, 0.50, 0.95)
-	budgetP95 := perfBudgetStatusCacheColdP95()
+	budgetP95 := perfBudgetStatusCloneColdP95()
 	t.Logf("PT-STATUS-002 p50=%s p95=%s budget95=%s", p50, p95, budgetP95)
 	assertPerfP95(t, "PT-STATUS-002", p95, budgetP95)
 	assertPerfRatio(t, "PT-STATUS-002", p50, p95, 4.0)
@@ -115,13 +122,13 @@ func TestPerfSyncFullRebuildSmoke(t *testing.T) {
 	julPath := perfCLI(t)
 	repo, env := setupPerfRepo(t, "perf-sync-full", 2000, 1024)
 
-	draftIndexPath := filepath.Join(repo, ".jul", "draft-index")
+	assertSyncProgressVisible(t, repo, env, julPath)
+	assertSyncCancellationSafe(t, julPath)
+
 	samples := make([]time.Duration, 0, perfSyncFullRuns)
 	for i := 0; i < perfSyncFullRuns; i++ {
 		appendFile(t, repo, "src/file-0001.txt", fmt.Sprintf("\nfull-rebuild-%d\n", i))
-		if err := os.Remove(draftIndexPath); err != nil && !os.IsNotExist(err) {
-			t.Fatalf("failed to remove draft index: %v", err)
-		}
+		invalidateDraftIndex(t, repo)
 
 		output := runCmdTimed(t, repo, env, julPath, "sync", "--json")
 		if snapshot, ok := parsePhaseTiming(t, output, "snapshot"); !ok || snapshot <= 0 {
@@ -405,6 +412,17 @@ func perfCLI(t *testing.T) string {
 func setupPerfRepo(t *testing.T, name string, files int, bytesPerFile int) (string, map[string]string) {
 	t.Helper()
 	root := t.TempDir()
+	repo := setupPerfSeedRepo(t, root, name, files, bytesPerFile)
+
+	home := filepath.Join(root, "home")
+	env := perfEnv(home)
+	julPath := perfCLI(t)
+	runCmd(t, repo, env, julPath, "init", name)
+	return repo, env
+}
+
+func setupPerfSeedRepo(t *testing.T, root, name string, files int, bytesPerFile int) string {
+	t.Helper()
 	repo := filepath.Join(root, name)
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatalf("failed to create repo dir: %v", err)
@@ -429,17 +447,150 @@ func setupPerfRepo(t *testing.T, name string, files int, bytesPerFile int) (stri
 	}
 	runCmd(t, repo, nil, "git", "add", ".")
 	runCmd(t, repo, nil, "git", "commit", "-m", "perf: base")
+	return repo
+}
 
-	home := filepath.Join(root, "home")
-	env := map[string]string{
+func perfEnv(home string) map[string]string {
+	return map[string]string{
 		"HOME":          home,
 		"JUL_WORKSPACE": "perf/@",
 		"JUL_NO_SYNC":   "1",
 		"PATH":          perfPath(),
 	}
-	julPath := perfCLI(t)
-	runCmd(t, repo, env, julPath, "init", name)
-	return repo, env
+}
+
+func perfWatchEnv(base map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+2)
+	for key, value := range base {
+		out[key] = value
+	}
+	out["JUL_WATCH"] = "1"
+	out["JUL_WATCH_STREAM"] = "stdout"
+	return out
+}
+
+func invalidateDraftIndex(t *testing.T, repo string) {
+	t.Helper()
+	draftIndexPath := filepath.Join(repo, ".jul", "draft-index")
+	if err := os.Remove(draftIndexPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("failed to remove draft index: %v", err)
+	}
+}
+
+func assertSyncProgressVisible(t *testing.T, repo string, env map[string]string, julPath string) {
+	t.Helper()
+	appendFile(t, repo, "src/file-0001.txt", fmt.Sprintf("\nfull-rebuild-progress-%d\n", time.Now().UnixNano()))
+	invalidateDraftIndex(t, repo)
+
+	cmd := exec.Command(julPath, "sync")
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(perfWatchEnv(env))
+	var stdout syncBuffer
+	var stderr syncBuffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start sync progress check: %v", err)
+	}
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	needle := "sync: running"
+	deadline := time.Now().Add(perfProgressVisibleDeadline)
+	for time.Now().Before(deadline) {
+		combined := stdout.String() + "\n" + stderr.String()
+		if strings.Contains(combined, needle) {
+			if err := <-waitCh; err != nil {
+				t.Fatalf("sync failed after progress output: %v\n%s", err, combined)
+			}
+			return
+		}
+		select {
+		case err := <-waitCh:
+			t.Fatalf("sync exited before progress output (%v): %s", err, combined)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	combined := stdout.String() + "\n" + stderr.String()
+	_ = cmd.Process.Signal(os.Interrupt)
+	select {
+	case <-waitCh:
+	case <-time.After(2 * time.Second):
+		_ = cmd.Process.Kill()
+		<-waitCh
+	}
+	t.Fatalf("expected progress output %q within %s, got %s", needle, perfProgressVisibleDeadline, combined)
+}
+
+func assertSyncCancellationSafe(t *testing.T, julPath string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Log("skipping interrupt-based cancellation check on windows")
+		return
+	}
+
+	repo, env := setupPerfRepo(t, "perf-sync-cancel", 10000, 1024)
+	appendFile(t, repo, "src/file-0001.txt", fmt.Sprintf("\nfull-rebuild-cancel-%d\n", time.Now().UnixNano()))
+	invalidateDraftIndex(t, repo)
+
+	cmd := exec.Command(julPath, "sync")
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(perfWatchEnv(env))
+	var stdout syncBuffer
+	var stderr syncBuffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start sync cancellation check: %v", err)
+	}
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	needle := "sync: running"
+	progressDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(progressDeadline) {
+		combined := stdout.String() + "\n" + stderr.String()
+		if strings.Contains(combined, needle) {
+			break
+		}
+		select {
+		case err := <-waitCh:
+			t.Fatalf("sync exited before cancellation signal (%v): %s", err, combined)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		combined := stdout.String() + "\n" + stderr.String()
+		t.Fatalf("failed to interrupt full rebuild sync: %v\n%s", err, combined)
+	}
+
+	select {
+	case <-waitCh:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		<-waitCh
+		t.Fatalf("sync did not exit promptly after interrupt")
+	}
+
+	lockPath := filepath.Join(repo, ".jul", "draft-index.lock")
+	if _, err := os.Stat(lockPath); err == nil {
+		t.Fatalf("expected draft index lock to be removed after interrupt")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("failed to stat draft index lock: %v", err)
+	}
+
+	output := runCmdTimed(t, repo, env, julPath, "sync", "--json")
+	if _, ok := parseTimings(t, output); !ok {
+		t.Fatalf("expected sync timings after interrupted run, got %s", output)
+	}
 }
 
 func warmUpCommand(t *testing.T, repo string, env map[string]string, julPath string, args ...string) {
@@ -534,8 +685,8 @@ func perfBudgetStatus() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(25*time.Millisecond, 80*time.Millisecond)
 }
 
-func perfBudgetStatusCacheColdP95() time.Duration {
-	_, p95 := applyPerfMultiplier(0, 150*time.Millisecond)
+func perfBudgetStatusCloneColdP95() time.Duration {
+	_, p95 := applyPerfMultiplier(0, 250*time.Millisecond)
 	return p95
 }
 

@@ -48,7 +48,7 @@ Status: Perf smoke coverage is opt-in (`JUL_PERF_SMOKE=1`) and records Tier S bu
 | ID | Status | Latest Result |
 | --- | --- | --- |
 | PT-STATUS-001 | Implemented | Pending fresh run |
-| PT-STATUS-002 | Implemented | Pending fresh run |
+| PT-STATUS-002 | Implemented | p50=128ms, p95=141ms (budget p95<=250ms), clone-cold 20-sample run passed |
 | PT-SYNC-001 | Implemented | Pending fresh run |
 | PT-SYNC-002 | Implemented | p50=425ms, p95=457ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
 | PT-CHECKPOINT-001 | Implemented | Pending fresh run |
