@@ -229,8 +229,8 @@ func TestPerfDaemonStormSmoke(t *testing.T) {
 	cmd := exec.Command(julPath, "sync", "--daemon")
 	cmd.Dir = repo
 	cmd.Env = mergeEnv(env)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	var stdout lockedBuffer
+	var stderr lockedBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
@@ -547,7 +547,24 @@ func parseMultiplier(raw string) (float64, error) {
 	return parsed, nil
 }
 
-func waitForDaemonOutput(t *testing.T, stdout, stderr *bytes.Buffer, needle string, timeout time.Duration) {
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (lb *lockedBuffer) Write(p []byte) (int, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.b.Write(p)
+}
+
+func (lb *lockedBuffer) String() string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.b.String()
+}
+
+func waitForDaemonOutput(t *testing.T, stdout, stderr *lockedBuffer, needle string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
