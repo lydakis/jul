@@ -198,7 +198,7 @@ func TestPerfSyncCloneColdLocalTransportSmoke(t *testing.T) {
 	remoteDir := filepath.Join(root, "origin.git")
 	runCmd(t, root, nil, "git", "init", "--bare", remoteDir)
 	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
-	runCmd(t, seed, nil, "git", "push", "-u", "origin", "main")
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "HEAD")
 
 	firstSamples := make([]time.Duration, 0, perfSyncCloneRuns)
 	for i := 0; i < perfSyncCloneRuns; i++ {

@@ -255,17 +255,20 @@ func TestIT_CI_004(t *testing.T) {
 	if status.LastCheckpoint == nil || strings.TrimSpace(status.LastCheckpoint.CommitSHA) == "" {
 		t.Fatalf("expected latest checkpoint after restack, got %+v", status)
 	}
+	restackedSHA := strings.TrimSpace(status.LastCheckpoint.CommitSHA)
+	if restackedSHA == strings.TrimSpace(cpB.CheckpointSHA) {
+		t.Fatalf("expected restack to rewrite checkpoint sha; still %s", restackedSHA)
+	}
 	if !status.AttestationStale {
 		t.Fatalf("expected inherited attestation to be stale after restack, got %+v", status)
 	}
-	if strings.TrimSpace(status.AttestationInheritedFrom) == "" {
-		t.Fatalf("expected inherited attestation source, got %+v", status)
+	if strings.TrimSpace(status.AttestationInheritedFrom) != strings.TrimSpace(cpB.CheckpointSHA) {
+		t.Fatalf("expected inherited attestation source %s, got %+v", cpB.CheckpointSHA, status)
 	}
 	if strings.ToLower(strings.TrimSpace(status.AttestationStatus)) != "pass" {
 		t.Fatalf("expected inherited pass status to be visible, got %+v", status)
 	}
 
-	restackedSHA := strings.TrimSpace(status.LastCheckpoint.CommitSHA)
 	promoteOut, err := runCmdAllowFailure(t, repoB, deviceB.Env, julPath, "promote", "--to", "main", restackedSHA, "--json")
 	if err == nil {
 		t.Fatalf("expected promote to block stale inherited attestation, got %s", promoteOut)
