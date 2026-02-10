@@ -18,6 +18,8 @@ type checkpointInfo struct {
 	TraceHead string
 }
 
+const latestCheckpointLookupLimit = 16
+
 func listCheckpoints(limit int) ([]checkpointInfo, error) {
 	user, workspace := workspaceParts()
 	if workspace == "" {
@@ -43,17 +45,29 @@ func listCheckpoints(limit int) ([]checkpointInfo, error) {
 		}
 		entries = append(entries, info)
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].When.After(entries[j].When)
-	})
+	sort.Slice(entries, func(i, j int) bool { return checkpointNewerFirst(entries[i], entries[j]) })
 	return entries, nil
 }
 
 func latestCheckpoint() (*checkpointInfo, error) {
-	entries, err := listCheckpoints(1)
+	user, workspace := workspaceParts()
+	if workspace == "" {
+		workspace = "@"
+	}
+	prefix := keepRefPrefix(user, workspace)
+	refs, err := listKeepRefsLimited(prefix, latestCheckpointLookupLimit)
 	if err != nil {
 		return nil, err
 	}
+	entries := make([]checkpointInfo, 0, len(refs))
+	for _, ref := range refs {
+		info, err := checkpointFromRef(ref)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, info)
+	}
+	sort.Slice(entries, func(i, j int) bool { return checkpointNewerFirst(entries[i], entries[j]) })
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -105,4 +119,27 @@ func checkpointFromRef(ref keepRefInfo) (checkpointInfo, error) {
 		When:      when,
 		TraceHead: strings.TrimSpace(traceHead),
 	}, nil
+}
+
+func checkpointNewerFirst(a, b checkpointInfo) bool {
+	shaA := strings.TrimSpace(a.SHA)
+	shaB := strings.TrimSpace(b.SHA)
+	if shaA == shaB {
+		if !a.When.Equal(b.When) {
+			return a.When.After(b.When)
+		}
+		return false
+	}
+	if shaA != "" && shaB != "" {
+		if gitutil.IsAncestor(shaA, shaB) {
+			return false
+		}
+		if gitutil.IsAncestor(shaB, shaA) {
+			return true
+		}
+	}
+	if !a.When.Equal(b.When) {
+		return a.When.After(b.When)
+	}
+	return shaA > shaB
 }

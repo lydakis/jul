@@ -1056,7 +1056,26 @@ func changeMetaFromCheckpoints(changeID string) (string, []metadata.ChangeCheckp
 		return "", nil, nil
 	}
 	sort.Slice(matched, func(i, j int) bool {
-		return matched[i].when.Before(matched[j].when)
+		shaI := strings.TrimSpace(matched[i].SHA)
+		shaJ := strings.TrimSpace(matched[j].SHA)
+		if shaI == shaJ {
+			if !matched[i].when.Equal(matched[j].when) {
+				return matched[i].when.Before(matched[j].when)
+			}
+			return false
+		}
+		if shaI != "" && shaJ != "" {
+			if gitutil.IsAncestor(shaI, shaJ) {
+				return true
+			}
+			if gitutil.IsAncestor(shaJ, shaI) {
+				return false
+			}
+		}
+		if !matched[i].when.Equal(matched[j].when) {
+			return matched[i].when.Before(matched[j].when)
+		}
+		return shaI < shaJ
 	})
 	checkpoints := make([]metadata.ChangeCheckpoint, 0, len(matched))
 	for _, cp := range matched {

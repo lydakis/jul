@@ -1,14 +1,17 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -71,17 +74,30 @@ func runSyncDaemon(opts syncer.SyncOptions) int {
 	syncCh := make(chan struct{}, 1)
 	var syncMu sync.Mutex
 	var lastSync time.Time
+	var syncInFlight int64
+	var attemptSeq int64
 
 	runSync := func() {
 		syncMu.Lock()
 		defer syncMu.Unlock()
+		attemptID := atomic.AddInt64(&attemptSeq, 1)
+		inFlight := atomic.AddInt64(&syncInFlight, 1)
+		startedAt := time.Now()
+		logDaemonSyncStart(attemptID, inFlight, startedAt)
+		var syncErr error
+		var res syncer.Result
+		defer func() {
+			inFlightDone := atomic.AddInt64(&syncInFlight, -1)
+			logDaemonSyncDone(attemptID, inFlightDone, startedAt, time.Now(), res, syncErr)
+		}()
 		if minInterval > 0 && !lastSync.IsZero() {
 			if since := time.Since(lastSync); since < minInterval {
 				time.Sleep(minInterval - since)
 			}
 		}
-		if _, err := syncer.SyncWithOptions(opts); err != nil {
-			fmt.Fprintf(os.Stderr, "sync failed: %v\n", err)
+		res, syncErr = syncer.SyncWithOptions(opts)
+		if syncErr != nil {
+			fmt.Fprintf(os.Stderr, "sync failed: %v\n", syncErr)
 		}
 		lastSync = time.Now()
 	}
@@ -202,4 +218,76 @@ func isJulPath(path string) bool {
 		}
 	}
 	return false
+}
+
+type daemonSyncLog struct {
+	Event      string           `json:"event"`
+	AttemptID  int64            `json:"attempt_id"`
+	AtUnixMs   int64            `json:"at_unix_ms"`
+	InFlight   int64            `json:"in_flight"`
+	Status     string           `json:"status,omitempty"`
+	Error      string           `json:"error,omitempty"`
+	DurationMs int64            `json:"duration_ms,omitempty"`
+	Timings    *daemonSyncPhase `json:"timings_ms,omitempty"`
+}
+
+type daemonSyncPhase struct {
+	Total int64            `json:"total,omitempty"`
+	Phase map[string]int64 `json:"phase,omitempty"`
+}
+
+func logDaemonSyncStart(attemptID int64, inFlight int64, at time.Time) {
+	logDaemonSyncEvent(daemonSyncLog{
+		Event:     "daemon_sync_start",
+		AttemptID: attemptID,
+		AtUnixMs:  at.UnixMilli(),
+		InFlight:  inFlight,
+	})
+}
+
+func logDaemonSyncDone(attemptID int64, inFlight int64, startedAt, finishedAt time.Time, res syncer.Result, err error) {
+	entry := daemonSyncLog{
+		Event:      "daemon_sync_done",
+		AttemptID:  attemptID,
+		AtUnixMs:   finishedAt.UnixMilli(),
+		InFlight:   inFlight,
+		DurationMs: finishedAt.Sub(startedAt).Milliseconds(),
+		Status:     "ok",
+	}
+	if err != nil {
+		entry.Status = "error"
+		entry.Error = err.Error()
+	}
+	entry.Timings = daemonTimingPayload(res.Timings.TotalMs, res.Timings.PhaseMs)
+	logDaemonSyncEvent(entry)
+}
+
+func daemonTimingPayload(total int64, phase map[string]int64) *daemonSyncPhase {
+	if total <= 0 && len(phase) == 0 {
+		return nil
+	}
+	out := &daemonSyncPhase{}
+	if total > 0 {
+		out.Total = total
+	}
+	if len(phase) > 0 {
+		out.Phase = make(map[string]int64, len(phase))
+		keys := make([]string, 0, len(phase))
+		for key := range phase {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			out.Phase[key] = phase[key]
+		}
+	}
+	return out
+}
+
+func logDaemonSyncEvent(entry daemonSyncLog) {
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(os.Stdout, string(data))
 }

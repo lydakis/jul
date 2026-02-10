@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -128,11 +129,12 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		theirsSHA = mergeHead
 		resumeFromWorktree = true
 	}
-
 	mergeBase, err := gitutil.MergeBase(oursSHA, theirsSHA)
 	if err != nil || strings.TrimSpace(mergeBase) == "" {
 		return output.MergeOutput{}, fmt.Errorf("failed to resolve merge base")
 	}
+	state, hasState := readMergeResumeState(repoRoot)
+	stateMatches := hasState && mergeResumeStateEquals(state, oursSHA, theirsSHA)
 
 	if !resumeFromWorktree {
 		if draftParentMismatch(oursSHA, mergeBase) {
@@ -153,13 +155,21 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 	if mergeInProgress {
 		mergeHead, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD")
 		headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
-		if strings.TrimSpace(mergeHead) == strings.TrimSpace(theirsSHA) && strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA) {
+		if strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA) {
+			if trimmed := strings.TrimSpace(mergeHead); trimmed != "" {
+				theirsSHA = trimmed
+			}
 			resumeMerge = true
 		}
 	}
 	if !resumeMerge && dirtyWorktree {
 		headSHA, _ := gitOutputDir(worktree, "rev-parse", "-q", "--verify", "HEAD")
-		if strings.TrimSpace(headSHA) == strings.TrimSpace(oursSHA) {
+		trimmedHead := strings.TrimSpace(headSHA)
+		trimmedOurs := strings.TrimSpace(oursSHA)
+		if trimmedHead == trimmedOurs {
+			resumeMerge = true
+		} else if stateMatches && trimmedHead != "" && trimmedOurs != "" && gitutil.IsAncestor(trimmedOurs, trimmedHead) {
+			// Preserve manual edits when the agent worktree is still based on our draft lineage.
 			resumeMerge = true
 		}
 	}
@@ -192,6 +202,7 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 			return output.MergeOutput{}, fmt.Errorf("merge failed: %s", strings.TrimSpace(mergeOutput))
 		}
 	}
+	writeMergeResumeState(repoRoot, mergeResumeState{OursSHA: oursSHA, TheirsSHA: theirsSHA})
 
 	conflicts := mergeConflictFiles(worktree)
 	if resumeMerge && len(conflicts) > 0 && !dirtyWorktree {
@@ -291,11 +302,61 @@ func runMerge(autoApply bool, stream io.Writer) (output.MergeOutput, error) {
 		if err := acceptMergeResolution(repoRoot, workspace, workspaceRef, syncRef, mergedDraftSHA, baseTarget, theirsSHA, remoteName); err != nil {
 			return out, err
 		}
+		clearMergeResumeState(repoRoot)
 		_, _ = metadata.UpdateSuggestionStatus(suggestion.SuggestionID, "applied", "merge accepted")
 		out.Merge.Applied = true
 	}
 
 	return out, nil
+}
+
+type mergeResumeState struct {
+	OursSHA   string `json:"ours_sha"`
+	TheirsSHA string `json:"theirs_sha"`
+}
+
+func mergeResumeStatePath(repoRoot string) string {
+	return filepath.Join(repoRoot, ".jul", "agent-workspace", "merge-state.json")
+}
+
+func readMergeResumeState(repoRoot string) (mergeResumeState, bool) {
+	path := mergeResumeStatePath(repoRoot)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return mergeResumeState{}, false
+	}
+	var state mergeResumeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return mergeResumeState{}, false
+	}
+	if strings.TrimSpace(state.OursSHA) == "" || strings.TrimSpace(state.TheirsSHA) == "" {
+		return mergeResumeState{}, false
+	}
+	return state, true
+}
+
+func writeMergeResumeState(repoRoot string, state mergeResumeState) {
+	if strings.TrimSpace(state.OursSHA) == "" || strings.TrimSpace(state.TheirsSHA) == "" {
+		return
+	}
+	path := mergeResumeStatePath(repoRoot)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0o644)
+}
+
+func clearMergeResumeState(repoRoot string) {
+	_ = os.Remove(mergeResumeStatePath(repoRoot))
+}
+
+func mergeResumeStateEquals(state mergeResumeState, oursSHA, theirsSHA string) bool {
+	return strings.TrimSpace(state.OursSHA) == strings.TrimSpace(oursSHA) &&
+		strings.TrimSpace(state.TheirsSHA) == strings.TrimSpace(theirsSHA)
 }
 
 func draftParentMismatch(draftSHA, mergeBase string) bool {

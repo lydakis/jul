@@ -5,8 +5,10 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/notes"
 	"github.com/lydakis/jul/cli/internal/output"
@@ -32,6 +34,15 @@ func TestIT_CI_002(t *testing.T) {
 	}
 	if res.CheckpointSHA == "" {
 		t.Fatalf("expected checkpoint sha")
+	}
+
+	runPath := waitForCIRunFile(t, filepath.Join(repo, ".jul", "ci", "runs"), 5*time.Second)
+	run := waitForCIRunResult(t, runPath, 10*time.Second)
+	if strings.TrimSpace(run.CommitSHA) != strings.TrimSpace(res.CheckpointSHA) {
+		t.Fatalf("expected ci run commit %s, got %s", res.CheckpointSHA, run.CommitSHA)
+	}
+	if strings.TrimSpace(run.Status) == "" {
+		t.Fatalf("expected ci run status, got %+v", run)
 	}
 
 	note := strings.TrimSpace(runCmd(t, repo, nil, "git", "notes", "--ref", "refs/notes/jul/attestations/checkpoint", "show", res.CheckpointSHA))
@@ -65,7 +76,7 @@ func TestIT_CI_005(t *testing.T) {
 	writeFile(t, repo, ".jul/policy.toml", "[promote.main]\nmin_coverage_pct = 80\n")
 	writeFile(t, repo, "README.md", "coverage\n")
 
-	out := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "ci: coverage", "--no-review", "--json")
+	out := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "ci: coverage", "--no-ci", "--no-review", "--json")
 	var res checkpointResult
 	if err := json.NewDecoder(strings.NewReader(out)).Decode(&res); err != nil {
 		t.Fatalf("failed to decode checkpoint output: %v", err)

@@ -117,9 +117,14 @@ func runCmdInput(t *testing.T, dir string, env map[string]string, input string, 
 
 func mergeEnv(extra map[string]string) []string {
 	if len(extra) == 0 {
-		return os.Environ()
+		return append(os.Environ(), "JUL_NO_SYNC=1")
 	}
 	env := os.Environ()
+	if _, ok := extra["JUL_NO_SYNC"]; !ok {
+		if _, hook := extra["JUL_HOOK_CMD"]; !hook {
+			env = append(env, "JUL_NO_SYNC=1")
+		}
+	}
 	for key, value := range extra {
 		env = append(env, key+"="+value)
 	}

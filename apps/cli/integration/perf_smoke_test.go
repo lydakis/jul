@@ -229,8 +229,8 @@ func TestPerfDaemonStormSmoke(t *testing.T) {
 	cmd := exec.Command(julPath, "sync", "--daemon")
 	cmd.Dir = repo
 	cmd.Env = mergeEnv(env)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	var stdout syncBuffer
+	var stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
@@ -250,90 +250,113 @@ func TestPerfDaemonStormSmoke(t *testing.T) {
 		t.Fatalf("timed out waiting for daemon to create sync ref %s", syncRef)
 	}
 
-	type refTransition struct {
-		sha string
-		at  time.Time
-	}
-	var changesMu sync.Mutex
-	changes := make([]refTransition, 0, 16)
-	stopPoll := make(chan struct{})
-	donePoll := make(chan struct{})
-	go func(initial string) {
-		defer close(donePoll)
-		last := strings.TrimSpace(initial)
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopPoll:
-				return
-			case <-ticker.C:
-				sha := strings.TrimSpace(resolveRefQuiet(repo, env, syncRef))
-				if sha == "" || sha == last {
-					continue
-				}
-				changesMu.Lock()
-				changes = append(changes, refTransition{sha: sha, at: time.Now()})
-				changesMu.Unlock()
-				last = sha
-			}
-		}
-	}(baselineSHA)
-
-	stormEnd := time.Time{}
+	stormStart := time.Now()
 	for i := 0; i < perfDaemonEvents; i++ {
 		file := filepath.Join("storm", fmt.Sprintf("event-%04d.txt", i%200))
 		appendFile(t, repo, file, fmt.Sprintf("event-%d\n", i))
 	}
 	finalMarker := fmt.Sprintf("final-event-%d", perfDaemonEvents-1)
 	writeFile(t, repo, filepath.Join("storm", "sentinel.txt"), finalMarker+"\n")
-	stormEnd = time.Now()
-
+	stormEnd := time.Now()
 	settleDeadline := stormEnd.Add(10 * time.Second)
-	quietWindow := 2 * time.Second
-	var settledAt time.Time
+
+	type cpuSample struct {
+		value float64
+		err   error
+	}
+	cpuResult := make(chan cpuSample, 1)
+	go func(pid int, sampleStart time.Time) {
+		if wait := time.Until(sampleStart); wait > 0 {
+			time.Sleep(wait)
+		}
+		value, err := averageProcessCPU(pid, 2*time.Second)
+		cpuResult <- cpuSample{value: value, err: err}
+	}(cmd.Process.Pid, stormEnd.Add(8*time.Second))
+
+	markerObserved := false
 	for time.Now().Before(settleDeadline) {
 		current := strings.TrimSpace(resolveRefQuiet(repo, env, syncRef))
 		if current != "" && draftContainsMarker(repo, env, current, finalMarker) {
-			lastChange := stormEnd
-			changesMu.Lock()
-			if len(changes) > 0 {
-				lastChange = changes[len(changes)-1].at
-			}
-			changesMu.Unlock()
-			if time.Since(lastChange) >= quietWindow {
-				settledAt = time.Now()
-				break
-			}
+			markerObserved = true
+			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	close(stopPoll)
-	<-donePoll
-
-	if settledAt.IsZero() {
-		t.Fatalf("PT-DAEMON-002 failed: daemon did not settle within 10s after storm")
+	if !markerObserved {
+		t.Fatalf("PT-DAEMON-002 failed: daemon did not include sentinel marker within 10s after storm")
 	}
-	settle := settledAt.Sub(stormEnd)
-	if settle > 10*time.Second {
-		t.Fatalf("PT-DAEMON-002 failed: settle=%s exceeded 10s budget", settle)
+	if wait := time.Until(settleDeadline); wait > 0 {
+		time.Sleep(wait)
 	}
 
-	changesMu.Lock()
-	recorded := append([]refTransition(nil), changes...)
-	changesMu.Unlock()
-	if len(recorded) == 0 {
-		t.Fatalf("PT-DAEMON-002 failed: no sync transitions recorded during file storm")
+	cpu := <-cpuResult
+	if cpu.err != nil {
+		t.Fatalf("PT-DAEMON-002 failed: cpu sample error: %v", cpu.err)
 	}
+	if cpu.value >= 1.0 {
+		t.Fatalf("PT-DAEMON-002 failed: idle cpu %.2f%% exceeded 1%% near settle deadline", cpu.value)
+	}
+
+	time.Sleep(2 * time.Second)
+
+	rawLogs := stdout.String() + "\n" + stderr.String()
+	attemptStarts, maxInFlight, err := daemonSyncAttemptStats(rawLogs)
+	if err != nil {
+		t.Fatalf("PT-DAEMON-002 failed: %v", err)
+	}
+	if maxInFlight > 1 {
+		t.Fatalf("PT-DAEMON-002 failed: expected at most one sync in flight, observed %d", maxInFlight)
+	}
+	stormAttempts := make([]time.Time, 0, len(attemptStarts))
+	for _, started := range attemptStarts {
+		if !started.Before(stormStart) {
+			stormAttempts = append(stormAttempts, started)
+		}
+	}
+	if len(stormAttempts) == 0 {
+		t.Fatalf("PT-DAEMON-002 failed: no daemon sync attempts recorded during file storm")
+	}
+	sort.Slice(stormAttempts, func(i, j int) bool { return stormAttempts[i].Before(stormAttempts[j]) })
 	debounce := time.Second
-	for i := 1; i < len(recorded); i++ {
-		delta := recorded[i].at.Sub(recorded[i-1].at)
+	for i := 1; i < len(stormAttempts); i++ {
+		delta := stormAttempts[i].Sub(stormAttempts[i-1])
 		if delta < debounce {
 			t.Fatalf("PT-DAEMON-002 failed: sync transitions too close (%s < %s)", delta, debounce)
 		}
 	}
+	for _, started := range stormAttempts {
+		if started.After(settleDeadline) {
+			t.Fatalf("PT-DAEMON-002 failed: observed sync attempt at %s after settle deadline %s without new events", started.Format(time.RFC3339Nano), settleDeadline.Format(time.RFC3339Nano))
+		}
+	}
 
-	t.Logf("PT-DAEMON-002 transitions=%d settle=%s", len(recorded), settle)
+	startsBeforeJul := len(attemptStarts)
+	syncBeforeJul := strings.TrimSpace(resolveRefQuiet(repo, env, syncRef))
+	for i := 0; i < 200; i++ {
+		file := filepath.Join(".jul", "noise", fmt.Sprintf("event-%04d.txt", i%20))
+		appendFile(t, repo, file, fmt.Sprintf("ignored-%d\n", i))
+	}
+	time.Sleep(2500 * time.Millisecond)
+
+	rawLogsAfterJul := stdout.String() + "\n" + stderr.String()
+	attemptStartsAfterJul, _, err := daemonSyncAttemptStats(rawLogsAfterJul)
+	if err != nil {
+		t.Fatalf("PT-DAEMON-002 failed: %v", err)
+	}
+	if len(attemptStartsAfterJul) != startsBeforeJul {
+		t.Fatalf("PT-DAEMON-002 failed: .jul writes triggered sync attempts (%d -> %d)", startsBeforeJul, len(attemptStartsAfterJul))
+	}
+	if syncBeforeJul != "" {
+		syncAfterJul := strings.TrimSpace(resolveRefQuiet(repo, env, syncRef))
+		if syncAfterJul != syncBeforeJul {
+			t.Fatalf("PT-DAEMON-002 failed: sync ref advanced after .jul-only writes (%s -> %s)", syncBeforeJul, syncAfterJul)
+		}
+	}
+	if latest := strings.TrimSpace(resolveRefQuiet(repo, env, syncRef)); latest == baselineSHA {
+		t.Fatalf("PT-DAEMON-002 failed: sync ref did not advance during file storm")
+	}
+
+	t.Logf("PT-DAEMON-002 attempts=%d cpu=%.2f%% settle=10s", len(stormAttempts), cpu.value)
 }
 
 func perfCLI(t *testing.T) string {
@@ -547,7 +570,24 @@ func parseMultiplier(raw string) (float64, error) {
 	return parsed, nil
 }
 
-func waitForDaemonOutput(t *testing.T, stdout, stderr *bytes.Buffer, needle string, timeout time.Duration) {
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func waitForDaemonOutput(t *testing.T, stdout, stderr *syncBuffer, needle string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -606,6 +646,141 @@ func draftContainsMarker(repo string, env map[string]string, draftSHA string, ma
 		return false
 	}
 	return strings.Contains(string(out), marker)
+}
+
+type daemonSyncLog struct {
+	Event     string `json:"event"`
+	AttemptID int64  `json:"attempt_id"`
+	AtUnixMs  int64  `json:"at_unix_ms"`
+	InFlight  int64  `json:"in_flight"`
+}
+
+func daemonSyncAttemptStats(raw string) ([]time.Time, int64, error) {
+	lines := strings.Split(raw, "\n")
+	starts := make([]time.Time, 0, 16)
+	maxInFlight := int64(0)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "\"event\":\"daemon_sync_") {
+			continue
+		}
+		var entry daemonSyncLog
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.InFlight > maxInFlight {
+			maxInFlight = entry.InFlight
+		}
+		if entry.Event == "daemon_sync_start" && entry.AtUnixMs > 0 {
+			starts = append(starts, time.UnixMilli(entry.AtUnixMs))
+		}
+	}
+	if len(starts) == 0 {
+		return nil, 0, fmt.Errorf("no daemon sync attempts found in output")
+	}
+	return starts, maxInFlight, nil
+}
+
+func averageProcessCPU(pid int, window time.Duration) (float64, error) {
+	if pid <= 0 {
+		return 0, fmt.Errorf("invalid pid %d", pid)
+	}
+	if window <= 0 {
+		return 0, fmt.Errorf("invalid cpu sample window %s", window)
+	}
+	startCPU, err := processCPUTime(pid)
+	if err != nil {
+		return 0, err
+	}
+	started := time.Now()
+	time.Sleep(window)
+	endCPU, err := processCPUTime(pid)
+	if err != nil {
+		return 0, err
+	}
+	elapsed := time.Since(started)
+	if elapsed <= 0 {
+		return 0, fmt.Errorf("invalid elapsed duration %s", elapsed)
+	}
+	used := endCPU - startCPU
+	if used < 0 {
+		used = 0
+	}
+	return (used.Seconds() / elapsed.Seconds()) * 100, nil
+}
+
+func processCPUTime(pid int) (time.Duration, error) {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "cputime=").Output()
+	if err != nil {
+		return 0, err
+	}
+	return parseProcessCPUTime(string(out))
+}
+
+func parseProcessCPUTime(raw string) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("empty cputime output")
+	}
+	days := 0
+	if dash := strings.Index(value, "-"); dash >= 0 {
+		parsedDays, err := strconv.Atoi(value[:dash])
+		if err != nil {
+			return 0, fmt.Errorf("invalid cputime days %q: %w", value[:dash], err)
+		}
+		days = parsedDays
+		value = value[dash+1:]
+	}
+	parts := strings.Split(value, ":")
+	parseSeconds := func(input string) (float64, error) {
+		return strconv.ParseFloat(strings.TrimSpace(input), 64)
+	}
+	hours := 0
+	minutes := 0
+	seconds := 0.0
+	switch len(parts) {
+	case 3:
+		parsedHours, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return 0, fmt.Errorf("invalid cputime hours %q: %w", parts[0], err)
+		}
+		hours = parsedHours
+		parsedMinutes, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return 0, fmt.Errorf("invalid cputime minutes %q: %w", parts[1], err)
+		}
+		minutes = parsedMinutes
+		parsedSeconds, err := parseSeconds(parts[2])
+		if err != nil {
+			return 0, fmt.Errorf("invalid cputime seconds %q: %w", parts[2], err)
+		}
+		seconds = parsedSeconds
+	case 2:
+		parsedMinutes, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return 0, fmt.Errorf("invalid cputime minutes %q: %w", parts[0], err)
+		}
+		minutes = parsedMinutes
+		parsedSeconds, err := parseSeconds(parts[1])
+		if err != nil {
+			return 0, fmt.Errorf("invalid cputime seconds %q: %w", parts[1], err)
+		}
+		seconds = parsedSeconds
+	case 1:
+		parsedSeconds, err := parseSeconds(parts[0])
+		if err != nil {
+			return 0, fmt.Errorf("invalid cputime seconds %q: %w", parts[0], err)
+		}
+		seconds = parsedSeconds
+	default:
+		return 0, fmt.Errorf("unsupported cputime format %q", raw)
+	}
+	totalSeconds := float64(days*24*60*60 + hours*60*60 + minutes*60)
+	totalSeconds += seconds
+	if totalSeconds < 0 {
+		totalSeconds = 0
+	}
+	return time.Duration(totalSeconds * float64(time.Second)), nil
 }
 
 func parsePhaseTiming(t *testing.T, output string, phase string) (time.Duration, bool) {

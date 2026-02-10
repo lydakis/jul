@@ -7,8 +7,10 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/output"
 )
@@ -24,26 +26,18 @@ func TestIT_AGENT_006(t *testing.T) {
 	writeFile(t, repo, ".jul/policy.toml", "[promote.main]\nrequired_checks = [\"test\"]\n")
 	writeFile(t, repo, "README.md", "fail ci\n")
 
-	cpOut, err := runCmdAllowFailure(t, repo, device.Env, julPath, "checkpoint", "-m", "fail ci", "--no-review", "--json")
-	if err == nil {
-		t.Fatalf("expected checkpoint to fail")
+	cpOut := runCmd(t, repo, device.Env, julPath, "checkpoint", "-m", "fail ci", "--no-review", "--json")
+	cpRes := decodeCheckpointJSON(t, cpOut)
+	if strings.TrimSpace(cpRes.CheckpointSHA) == "" {
+		t.Fatalf("expected checkpoint sha, got %+v", cpRes)
 	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		if exitErr.ExitCode() != 1 {
-			t.Fatalf("expected checkpoint exit code 1, got %d", exitErr.ExitCode())
-		}
-	} else {
-		t.Fatalf("expected exit error for checkpoint, got %v", err)
+	runPath := waitForCIRunFile(t, filepath.Join(repo, ".jul", "ci", "runs"), 5*time.Second)
+	run := waitForCIRunResult(t, runPath, 10*time.Second)
+	if strings.TrimSpace(run.Status) != "fail" {
+		t.Fatalf("expected failing ci status, got %+v", run)
 	}
-	cpRes := decodeErrorJSON(t, cpOut)
-	if cpRes.Code == "" || cpRes.Message == "" {
-		t.Fatalf("expected checkpoint error code/message, got %+v", cpRes)
-	}
-	if cpRes.Code != "checkpoint_ci_failed" {
-		t.Fatalf("expected checkpoint_ci_failed, got %+v", cpRes)
-	}
-	if len(cpRes.NextActions) == 0 {
-		t.Fatalf("expected checkpoint next_actions, got %+v", cpRes)
+	if strings.TrimSpace(run.CommitSHA) != strings.TrimSpace(cpRes.CheckpointSHA) {
+		t.Fatalf("expected ci run for checkpoint %s, got %s", cpRes.CheckpointSHA, run.CommitSHA)
 	}
 
 	promoteOut, err := runCmdAllowFailure(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
@@ -105,6 +99,21 @@ func decodeErrorJSON(t *testing.T, out string) output.ErrorOutput {
 		t.Fatalf("expected only json output, got trailing data (%s)", out)
 	} else if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected only json output, got trailing data (%s)", out)
+	}
+	return res
+}
+
+func decodeCheckpointJSON(t *testing.T, out string) checkpointResult {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(out))
+	var res checkpointResult
+	if err := dec.Decode(&res); err != nil {
+		t.Fatalf("expected checkpoint json output, got %v (%s)", err, out)
+	}
+	if err := dec.Decode(&struct{}{}); err == nil {
+		t.Fatalf("expected only checkpoint json output, got trailing data (%s)", out)
+	} else if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected only checkpoint json output, got trailing data (%s)", out)
 	}
 	return res
 }

@@ -318,3 +318,102 @@ func TestRunMergeRebasesDirtyWorktreeWhenRefsMatch(t *testing.T) {
 		t.Fatalf("expected extra changes to persist, got %s", extra)
 	}
 }
+
+func TestRunMergeResetsDirtyDescendantWhenTheirsChanges(t *testing.T) {
+	repo := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	runGitTestCmd(t, repo, "init")
+	runGitTestCmd(t, repo, "config", "user.name", "Test User")
+	runGitTestCmd(t, repo, "config", "user.email", "test@example.com")
+
+	if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base failed: %v", err)
+	}
+	runGitTestCmd(t, repo, "add", "conflict.txt")
+	runGitTestCmd(t, repo, "commit", "-m", "base")
+
+	baseSHA, err := gitWithDirTest(repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse failed: %v", err)
+	}
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	changeID, err := gitutil.NewChangeID()
+	if err != nil {
+		t.Fatalf("new Change-Id failed: %v", err)
+	}
+	baseSHA = strings.TrimSpace(baseSHA)
+
+	createDraft := func(content string) string {
+		runGitTestCmd(t, repo, "reset", "--hard", baseSHA)
+		runGitTestCmd(t, repo, "clean", "-fd")
+		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte(content+"\n"), 0o644); err != nil {
+			t.Fatalf("write draft content failed: %v", err)
+		}
+		sha, err := gitutil.CreateDraftCommit(baseSHA, changeID)
+		if err != nil {
+			t.Fatalf("create draft failed: %v", err)
+		}
+		return sha
+	}
+
+	ours := createDraft("ours")
+	theirsOne := createDraft("theirs-one")
+	theirsTwo := createDraft("theirs-two")
+
+	deviceID, err := config.DeviceID()
+	if err != nil {
+		t.Fatalf("device id failed: %v", err)
+	}
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	workspaceRef := "refs/jul/workspaces/tester/@"
+
+	if err := gitutil.UpdateRef(syncRef, ours); err != nil {
+		t.Fatalf("update sync ref failed: %v", err)
+	}
+	if err := gitutil.UpdateRef(workspaceRef, theirsOne); err != nil {
+		t.Fatalf("update workspace ref failed: %v", err)
+	}
+
+	var conflictErr MergeConflictError
+	if _, err := runMerge(false, nil); err == nil || !errors.As(err, &conflictErr) {
+		t.Fatalf("expected initial merge conflict, got %v", err)
+	}
+
+	worktree := filepath.Join(repo, ".jul", "agent-workspace", "worktree")
+	if err := os.WriteFile(filepath.Join(worktree, "conflict.txt"), []byte("stale committed\n"), 0o644); err != nil {
+		t.Fatalf("write stale committed failed: %v", err)
+	}
+	runGitTestCmd(t, worktree, "add", "conflict.txt")
+	runGitTestCmd(t, worktree, "commit", "-m", "stale merge resolution")
+	if err := os.WriteFile(filepath.Join(worktree, "conflict.txt"), []byte("manual dirty\n"), 0o644); err != nil {
+		t.Fatalf("write manual dirty failed: %v", err)
+	}
+
+	if err := gitutil.UpdateRef(workspaceRef, theirsTwo); err != nil {
+		t.Fatalf("update workspace ref failed: %v", err)
+	}
+
+	if _, err := runMerge(true, nil); err == nil || !errors.As(err, &conflictErr) {
+		resolved, _ := gitWithDirTest(repo, "show", syncRef+":conflict.txt")
+		t.Fatalf("expected merge conflict after theirs changed, got %v with sync content %q", err, strings.TrimSpace(resolved))
+	}
+
+	contents, err := os.ReadFile(filepath.Join(worktree, "conflict.txt"))
+	if err != nil {
+		t.Fatalf("read conflict file failed: %v", err)
+	}
+	text := string(contents)
+	if strings.Contains(text, "manual dirty") || strings.Contains(text, "stale committed") {
+		t.Fatalf("expected stale/manual descendant state to be reset, got %s", text)
+	}
+	if !strings.Contains(text, "theirs-two") {
+		t.Fatalf("expected conflicts to reflect updated theirs, got %s", text)
+	}
+}
