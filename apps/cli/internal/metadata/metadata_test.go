@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lydakis/jul/cli/internal/ci"
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/config"
 	"github.com/lydakis/jul/cli/internal/gitutil"
+	"github.com/lydakis/jul/cli/internal/notes"
 )
 
 func TestAttestationRoundTrip(t *testing.T) {
@@ -213,6 +215,60 @@ func TestSuggestionLifecycle(t *testing.T) {
 	})
 }
 
+func TestListSuggestionsPagedRespectsCreatedAtOrder(t *testing.T) {
+	repo := initRepo(t)
+	changeID := "I2222222222222222222222222222222222222222"
+
+	withRepo(t, repo, func() {
+		shaA := hashObject(t, repo, "object-a\n")
+		shaB := hashObject(t, repo, "object-b\n")
+		lowSHA := shaA
+		highSHA := shaB
+		if strings.Compare(lowSHA, highSHA) > 0 {
+			lowSHA, highSHA = highSHA, lowSHA
+		}
+
+		older := client.Suggestion{
+			SuggestionID:       "old-suggestion",
+			ChangeID:           changeID,
+			BaseCommitSHA:      highSHA,
+			SuggestedCommitSHA: highSHA,
+			CreatedBy:          "tester",
+			Reason:             "old",
+			Status:             "pending",
+			CreatedAt:          time.Unix(100, 0).UTC(),
+		}
+		newer := client.Suggestion{
+			SuggestionID:       "new-suggestion",
+			ChangeID:           changeID,
+			BaseCommitSHA:      lowSHA,
+			SuggestedCommitSHA: lowSHA,
+			CreatedBy:          "tester",
+			Reason:             "new",
+			Status:             "pending",
+			CreatedAt:          time.Unix(200, 0).UTC(),
+		}
+
+		if err := notes.AddJSON(notes.RefSuggestions, highSHA, older); err != nil {
+			t.Fatalf("failed to write older suggestion note: %v", err)
+		}
+		if err := notes.AddJSON(notes.RefSuggestions, lowSHA, newer); err != nil {
+			t.Fatalf("failed to write newer suggestion note: %v", err)
+		}
+
+		got, err := ListSuggestions(changeID, "pending", 1)
+		if err != nil {
+			t.Fatalf("ListSuggestions failed: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 suggestion, got %d", len(got))
+		}
+		if got[0].SuggestionID != newer.SuggestionID {
+			t.Fatalf("expected newest suggestion %q, got %q", newer.SuggestionID, got[0].SuggestionID)
+		}
+	})
+}
+
 func TestTraceNoteRoundTrip(t *testing.T) {
 	repo := initRepo(t)
 	traceSHA := commitFile(t, repo, "README.md", "hello\n", "trace commit")
@@ -304,4 +360,13 @@ func run(t *testing.T, dir, name string, args ...string) string {
 		t.Fatalf("command failed: %s %v\n%s", name, args, string(out))
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func hashObject(t *testing.T, repo, content string) string {
+	t.Helper()
+	path := filepath.Join(repo, "object.txt")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write object payload failed: %v", err)
+	}
+	return run(t, repo, "git", "hash-object", "-w", path)
 }

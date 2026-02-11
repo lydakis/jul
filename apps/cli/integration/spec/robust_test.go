@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ func TestIT_ROBUST_002(t *testing.T) {
 	syncBefore := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", syncRef))
 	keepBefore := runCmd(t, repo, nil, "git", "for-each-ref", "--format=%(refname)", "refs/jul/keep/tester/@/")
 	changeBefore := runCmd(t, repo, nil, "git", "for-each-ref", "--format=%(refname)", "refs/jul/changes/")
+	pauseMarker := filepath.Join(repo, ".jul", "checkpoint-pause-marker")
 
 	cmd := exec.Command(julPath, "checkpoint", "-m", "interrupted checkpoint", "--no-ci", "--no-review", "--json")
 	cmd.Dir = repo
@@ -38,6 +40,7 @@ func TestIT_ROBUST_002(t *testing.T) {
 		"JUL_WORKSPACE":       "tester/@",
 		"OPENCODE_PERMISSION": `{"*":"allow"}`,
 		"JUL_TEST_CHECKPOINT_PAUSE_BEFORE_REFS_MS": "5000",
+		"JUL_TEST_CHECKPOINT_PAUSE_MARKER":         pauseMarker,
 	})
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -45,10 +48,7 @@ func TestIT_ROBUST_002(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start checkpoint command: %v", err)
 	}
-	time.Sleep(150 * time.Millisecond)
-	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-		t.Fatalf("expected checkpoint process to still be running before interrupt, got: %s", out.String())
-	}
+	waitForFile(t, pauseMarker, 10*time.Second)
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatalf("failed to interrupt checkpoint command: %v", err)
 	}

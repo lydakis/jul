@@ -76,7 +76,7 @@ func newSuggestionsCommand() Command {
 				}
 			}
 
-			needLiveContext := (needStaleFilter && (strings.TrimSpace(draftSHA) == "" || strings.TrimSpace(parentSHA) == "")) ||
+			needLiveContext := needStaleFilter ||
 				currentChangeID == "" ||
 				(!*jsonOut && (strings.TrimSpace(baseSHA) == "" || currentMessage == ""))
 			if needLiveContext {

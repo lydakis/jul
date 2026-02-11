@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -71,16 +73,19 @@ func CreateSuggestion(req SuggestionCreate) (client.Suggestion, error) {
 
 func ListSuggestions(changeID, status string, limit int) ([]client.Suggestion, error) {
 	status = normalizeSuggestionStatus(status)
-	if limit > 0 {
-		return listSuggestionsPaged(changeID, status, limit)
-	}
-	entries, err := loadSuggestionEntries()
+	sorted, err := listSuggestionsSorted()
 	if err != nil {
 		return nil, err
 	}
-	results := make([]client.Suggestion, 0, len(entries))
-	for _, entry := range entries {
-		sug := entry.Suggestion
+	if len(sorted) == 0 {
+		return []client.Suggestion{}, nil
+	}
+	capHint := len(sorted)
+	if limit > 0 && limit < capHint {
+		capHint = limit
+	}
+	results := make([]client.Suggestion, 0, capHint)
+	for _, sug := range sorted {
 		if changeID != "" && sug.ChangeID != changeID {
 			continue
 		}
@@ -88,36 +93,11 @@ func ListSuggestions(changeID, status string, limit int) ([]client.Suggestion, e
 			continue
 		}
 		results = append(results, sug)
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].CreatedAt.After(results[j].CreatedAt)
-	})
-
-	if limit <= 0 || len(results) <= limit {
-		return results, nil
-	}
-	return results[:limit], nil
-}
-
-func PendingSuggestionCounts() (map[string]int, error) {
-	entries, err := loadSuggestionEntries()
-	if err != nil {
-		return nil, err
-	}
-	counts := make(map[string]int)
-	for _, entry := range entries {
-		sug := entry.Suggestion
-		if sug.Status != "pending" {
-			continue
+		if limit > 0 && len(results) >= limit {
+			return results, nil
 		}
-		changeID := strings.TrimSpace(sug.ChangeID)
-		if changeID == "" {
-			continue
-		}
-		counts[changeID]++
 	}
-	return counts, nil
+	return results, nil
 }
 
 func UpdateSuggestionStatus(id, status, resolution string) (client.Suggestion, error) {
@@ -173,6 +153,26 @@ func GetSuggestionByID(id string) (client.Suggestion, bool, error) {
 	return client.Suggestion{}, false, nil
 }
 
+func PendingSuggestionCounts() (map[string]int, error) {
+	entries, err := loadSuggestionEntries()
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int)
+	for _, entry := range entries {
+		sug := entry.Suggestion
+		if sug.Status != "pending" {
+			continue
+		}
+		changeID := strings.TrimSpace(sug.ChangeID)
+		if changeID == "" {
+			continue
+		}
+		counts[changeID]++
+	}
+	return counts, nil
+}
+
 func normalizeSuggestionStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "open":
@@ -187,6 +187,14 @@ func normalizeSuggestionStatus(status string) string {
 type suggestionEntry struct {
 	ObjectSHA  string
 	Suggestion client.Suggestion
+}
+
+const suggestionsCacheVersion = 1
+
+type suggestionsCache struct {
+	Version     int                 `json:"version"`
+	Suggestions []client.Suggestion `json:"suggestions"`
+	RefTip      string              `json:"ref_tip"`
 }
 
 func loadSuggestionEntries() ([]suggestionEntry, error) {
@@ -208,48 +216,33 @@ func loadSuggestionEntries() ([]suggestionEntry, error) {
 	return results, nil
 }
 
-func listSuggestionsPaged(changeID, status string, limit int) ([]client.Suggestion, error) {
-	noteEntries, err := notes.List(notes.RefSuggestions)
+func listSuggestionsSorted() ([]client.Suggestion, error) {
+	repoRoot, err := gitutil.RepoTopLevel()
 	if err != nil {
 		return nil, err
 	}
-	if len(noteEntries) == 0 {
-		return []client.Suggestion{}, nil
+	refTip := ""
+	if resolved, err := gitutil.ResolveRef(notes.RefSuggestions); err == nil {
+		refTip = strings.TrimSpace(resolved)
 	}
-
-	chunkSize := limit
-	if chunkSize < 16 {
-		chunkSize = 16
+	if refTip != "" {
+		if cached, ok := readSuggestionsCache(repoRoot, refTip); ok {
+			return cached, nil
+		}
 	}
-	results := make([]client.Suggestion, 0, limit)
-
-	for end := len(noteEntries); end > 0; {
-		start := end - chunkSize
-		if start < 0 {
-			start = 0
-		}
-		chunk := noteEntries[start:end]
-		jsonChunk, err := notes.ReadJSONEntriesFor(notes.RefSuggestions, chunk)
-		if err != nil {
-			return nil, err
-		}
-		for i := len(jsonChunk) - 1; i >= 0; i-- {
-			sug, err := suggestionFromJSONEntry(jsonChunk[i])
-			if err != nil {
-				return nil, err
-			}
-			if changeID != "" && sug.ChangeID != changeID {
-				continue
-			}
-			if status != "" && sug.Status != status {
-				continue
-			}
-			results = append(results, sug)
-			if len(results) >= limit {
-				return results[:limit], nil
-			}
-		}
-		end = start
+	entries, err := loadSuggestionEntries()
+	if err != nil {
+		return nil, err
+	}
+	results := make([]client.Suggestion, 0, len(entries))
+	for _, entry := range entries {
+		results = append(results, entry.Suggestion)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].CreatedAt.After(results[j].CreatedAt)
+	})
+	if refTip != "" {
+		writeSuggestionsCache(repoRoot, refTip, results)
 	}
 	return results, nil
 }
@@ -264,4 +257,48 @@ func suggestionFromJSONEntry(entry notes.JSONEntry) (client.Suggestion, error) {
 		sug.SuggestedCommitSHA = entry.ObjectSHA
 	}
 	return sug, nil
+}
+
+func suggestionsCachePath(repoRoot string) string {
+	return filepath.Join(repoRoot, ".jul", "cache", "suggestions.json")
+}
+
+func readSuggestionsCache(repoRoot, refTip string) ([]client.Suggestion, bool) {
+	path := suggestionsCachePath(strings.TrimSpace(repoRoot))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var cache suggestionsCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, false
+	}
+	if cache.Version != suggestionsCacheVersion {
+		return nil, false
+	}
+	if strings.TrimSpace(cache.RefTip) != strings.TrimSpace(refTip) {
+		return nil, false
+	}
+	return cache.Suggestions, true
+}
+
+func writeSuggestionsCache(repoRoot, refTip string, suggestions []client.Suggestion) {
+	cache := suggestionsCache{
+		Version:     suggestionsCacheVersion,
+		Suggestions: suggestions,
+		RefTip:      strings.TrimSpace(refTip),
+	}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		return
+	}
+	path := suggestionsCachePath(strings.TrimSpace(repoRoot))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, path)
 }

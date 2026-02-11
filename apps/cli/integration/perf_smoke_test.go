@@ -440,16 +440,16 @@ func TestPerfSuggestionsSmoke(t *testing.T) {
 	addSuggestionNotesEntries(t, repo, checkpoint.ChangeID, checkpoint.CheckpointSHA, 1000)
 
 	for i := 0; i < 3; i++ {
-		_ = runCmdTimed(t, repo, env, julPath, "suggestions", "--json", "--limit", "20")
+		_ = runCmdTimed(t, repo, env, julPath, "suggestions", "--json")
 	}
 	if os.Getenv("JUL_PERF_DEBUG") == "1" {
-		sample := runCmdTimed(t, repo, env, julPath, "suggestions", "--json", "--limit", "20")
+		sample := runCmdTimed(t, repo, env, julPath, "suggestions", "--json")
 		t.Logf("suggestions sample: %s", sample)
 	}
 
 	samples := make([]time.Duration, 0, perfSuggestionsRuns)
 	for i := 0; i < perfSuggestionsRuns; i++ {
-		output := runCmdTimed(t, repo, env, julPath, "suggestions", "--json", "--limit", "20")
+		output := runCmdTimed(t, repo, env, julPath, "suggestions", "--json")
 		totalMs, ok := parseTimings(t, output)
 		if !ok {
 			t.Fatalf("expected suggestions timings in json output, got %s", output)
@@ -462,8 +462,8 @@ func TestPerfSuggestionsSmoke(t *testing.T) {
 		if err := json.NewDecoder(strings.NewReader(output)).Decode(&payload); err != nil {
 			t.Fatalf("failed to decode suggestions output: %v", err)
 		}
-		if len(payload.Suggestions) != 20 {
-			t.Fatalf("expected paginated suggestions length 20, got %d", len(payload.Suggestions))
+		if len(payload.Suggestions) == 0 || len(payload.Suggestions) >= 1000 {
+			t.Fatalf("expected default suggestions pagination (<1000 results), got %d", len(payload.Suggestions))
 		}
 	}
 

@@ -1445,5 +1445,9 @@ func pauseCheckpointBeforeRefsForTest() {
 	if err != nil || ms <= 0 {
 		return
 	}
+	if marker := strings.TrimSpace(os.Getenv("JUL_TEST_CHECKPOINT_PAUSE_MARKER")); marker != "" {
+		_ = os.MkdirAll(filepath.Dir(marker), 0o755)
+		_ = os.WriteFile(marker, []byte(strconv.FormatInt(time.Now().UnixNano(), 10)+"\n"), 0o644)
+	}
 	time.Sleep(time.Duration(ms) * time.Millisecond)
 }
