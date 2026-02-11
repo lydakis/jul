@@ -328,3 +328,61 @@ func TestIT_SYNC_AUTORESTACK_002(t *testing.T) {
 	}
 
 }
+
+func TestIT_SYNC_FAIL_001(t *testing.T) {
+	root := t.TempDir()
+	remoteDir := newRemoteSimulator(t, remoteConfig{Mode: remoteFlaky, FlakyEvery: 2})
+
+	seed := filepath.Join(root, "seed")
+	initRepo(t, seed, true)
+	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "main")
+
+	repo := filepath.Join(root, "repo")
+	runCmd(t, root, nil, "git", "clone", remoteDir, repo)
+
+	device := newDeviceEnv(t, "dev1")
+	julPath := buildCLI(t)
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+	writeFile(t, repo, ".jul/config.toml", "[remote]\ncheckpoint_sync = false\n")
+
+	writeFile(t, repo, "draft.txt", "v1\n")
+	firstOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
+	var first syncResult
+	if err := json.NewDecoder(strings.NewReader(firstOut)).Decode(&first); err != nil {
+		t.Fatalf("failed to decode first sync output: %v", err)
+	}
+	if first.DraftSHA == "" {
+		t.Fatalf("expected local draft sha after failed push")
+	}
+	if !strings.Contains(first.RemoteProblem, "flaky remote failure") {
+		t.Fatalf("expected flaky remote failure in first sync, got %+v", first)
+	}
+
+	deviceID := readDeviceID(t, device.Home)
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	localSyncSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", syncRef))
+	if localSyncSHA != first.DraftSHA {
+		t.Fatalf("expected local sync ref to keep draft %s, got %s", first.DraftSHA, localSyncSHA)
+	}
+	ensureRemoteRefMissing(t, remoteDir, syncRef)
+
+	secondOut := runCmd(t, repo, device.Env, julPath, "sync", "--json")
+	var second syncResult
+	if err := json.NewDecoder(strings.NewReader(secondOut)).Decode(&second); err != nil {
+		t.Fatalf("failed to decode second sync output: %v", err)
+	}
+	if second.DraftSHA == "" {
+		t.Fatalf("expected draft sha on retry")
+	}
+	if second.DraftSHA != first.DraftSHA {
+		t.Fatalf("expected retry to preserve local draft, got %s vs %s", second.DraftSHA, first.DraftSHA)
+	}
+	if strings.TrimSpace(second.RemoteProblem) != "" {
+		t.Fatalf("expected retry sync to clear remote problem, got %+v", second)
+	}
+	remoteSyncSHA := strings.TrimSpace(runCmd(t, remoteDir, nil, "git", "--git-dir", remoteDir, "rev-parse", syncRef))
+	if remoteSyncSHA != second.DraftSHA {
+		t.Fatalf("expected retry to push draft %s, got remote %s", second.DraftSHA, remoteSyncSHA)
+	}
+}

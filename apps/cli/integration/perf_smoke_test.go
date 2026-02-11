@@ -348,6 +348,52 @@ func TestPerfPromoteWarmSmoke(t *testing.T) {
 	assertPerfRatio(t, "PT-PROMOTE-001", p50, p95, 3.0)
 }
 
+func TestPerfPromoteCloneColdSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	root := t.TempDir()
+	seed := setupPerfSeedRepo(t, root, "perf-promote-clone-cold-seed", 1200, 768)
+	remoteDir := filepath.Join(root, "origin.git")
+	runCmd(t, root, nil, "git", "init", "--bare", remoteDir)
+	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "HEAD")
+
+	samples := make([]time.Duration, 0, perfPromoteRuns)
+	for i := 0; i < perfPromoteRuns; i++ {
+		cloneDir := filepath.Join(root, fmt.Sprintf("promote-clone-%02d", i))
+		runCmd(t, root, nil, "git", "clone", "--quiet", remoteDir, cloneDir)
+
+		home := filepath.Join(root, fmt.Sprintf("home-promote-clone-%02d", i))
+		env := perfEnv(home)
+		runCmd(t, cloneDir, env, julPath, "init", fmt.Sprintf("perf-promote-clone-cold-%d", i))
+
+		for cp := 0; cp < 3; cp++ {
+			appendFile(t, cloneDir, "src/file-0003.txt", fmt.Sprintf("\npromote-clone-cold-%d-%d\n", i, cp))
+			runCmd(t, cloneDir, env, julPath, "checkpoint", "-m", fmt.Sprintf("promote-clone-cold-%d-%d", i, cp), "--no-ci", "--no-review", "--json")
+		}
+
+		output := runCmdTimed(t, cloneDir, env, julPath, "promote", "--to", "main", "--rebase", "--no-policy", "--json")
+		totalMs, ok := parseTimings(t, output)
+		if !ok {
+			t.Fatalf("expected promote timings in json output, got %s", output)
+		}
+		for _, phase := range []string{"fetch", "rewrite", "push"} {
+			if _, ok := parsePhaseTiming(t, output, phase); !ok {
+				t.Fatalf("expected promote phase %q in timings: %s", phase, output)
+			}
+		}
+		samples = append(samples, time.Duration(totalMs)*time.Millisecond)
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP95 := perfBudgetPromoteCloneColdP95()
+	t.Logf("PT-PROMOTE-002 p50=%s p95=%s budget95=%s", p50, p95, budgetP95)
+	assertPerfP95(t, "PT-PROMOTE-002", p95, budgetP95)
+	assertPerfRatio(t, "PT-PROMOTE-002", p50, p95, 4.0)
+}
+
 func TestPerfDaemonStormSmoke(t *testing.T) {
 	if os.Getenv("JUL_PERF_SMOKE") != "1" {
 		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
@@ -815,6 +861,11 @@ func perfBudgetNotesMerge() (time.Duration, time.Duration) {
 
 func perfBudgetPromoteWarm() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(1500*time.Millisecond, 5*time.Second)
+}
+
+func perfBudgetPromoteCloneColdP95() time.Duration {
+	_, p95 := applyPerfMultiplier(0, 8*time.Second)
+	return p95
 }
 
 func applyPerfMultiplier(p50, p95 time.Duration) (time.Duration, time.Duration) {
