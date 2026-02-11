@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose an improvement to Jul
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the problem first, then the proposed solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user or workflow pain does this solve?
+      placeholder: As an agent user, I want ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Concrete behavior, commands, and expected output
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    id: spec
+    attributes:
+      label: Spec / tracker linkage
+      description: Reference `docs/jul-spec.md` and/or `docs/tracker.md` if relevant

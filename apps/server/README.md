@@ -1,5 +1,10 @@
 # Jul Server
 
+## Licensing status
+
+`apps/server/` is currently source-visible but not licensed for reuse.
+See `LICENSES.md` in the repository root for the canonical licensing statement.
+
 ## Requirements
 - Go 1.24+
 

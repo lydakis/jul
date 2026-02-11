@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a reproducible bug in Jul
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please include enough detail to reproduce quickly.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-line description of the problem
+      placeholder: jul suggestions returns stale entries after restack
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Exact steps and commands
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Paste relevant CLI output, stack traces, or screenshots
+
+  - type: input
+    id: version
+    attributes:
+      label: Jul version
+      description: Output of `jul --version` (or commit SHA if from source)
+      placeholder: be9098b
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go version, Git version
+      placeholder: macOS 14.6, go1.24.x, git 2.48.x

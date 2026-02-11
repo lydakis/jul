@@ -1,0 +1,9 @@
+# Default ownership
+* @lydakis
+
+# App-specific ownership (kept explicit for future expansion)
+/apps/cli/ @lydakis
+/apps/server/ @lydakis
+/apps/web/ @lydakis
+/infra/ @lydakis
+/docs/ @lydakis
