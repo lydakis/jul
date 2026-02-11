@@ -18,17 +18,18 @@ import (
 )
 
 const (
-	perfStatusRuns     = 50
-	perfStatusColdRuns = 20
-	perfSyncRuns       = 20
-	perfSyncFullRuns   = 5
-	perfSyncCloneRuns  = 5
-	perfCheckpointRuns = 10
-	perfCheckpointCold = 5
-	perfStatusWarmups  = 5
-	perfNotesRuns      = 5
-	perfPromoteRuns    = 5
-	perfDaemonEvents   = 1000
+	perfStatusRuns      = 50
+	perfStatusColdRuns  = 20
+	perfSyncRuns        = 20
+	perfSyncFullRuns    = 5
+	perfSyncCloneRuns   = 5
+	perfCheckpointRuns  = 10
+	perfCheckpointCold  = 5
+	perfStatusWarmups   = 5
+	perfNotesRuns       = 5
+	perfPromoteRuns     = 5
+	perfSuggestionsRuns = 10
+	perfDaemonEvents    = 1000
 
 	perfProgressVisibleDeadline = 250 * time.Millisecond
 )
@@ -414,6 +415,63 @@ func TestPerfPromoteCloneColdSmoke(t *testing.T) {
 	t.Logf("PT-PROMOTE-002 p50=%s p95=%s budget95=%s", p50, p95, budgetP95)
 	assertPerfP95(t, "PT-PROMOTE-002", p95, budgetP95)
 	assertPerfRatio(t, "PT-PROMOTE-002", p50, p95, 4.0)
+}
+
+func TestPerfSuggestionsSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	repo, env := setupPerfRepo(t, "perf-suggestions", 800, 512)
+
+	appendFile(t, repo, "src/file-0004.txt", "\nseed-suggestions\n")
+	checkpointOut := runCmdTimed(t, repo, env, julPath, "checkpoint", "-m", "perf suggestions seed", "--no-ci", "--no-review", "--json")
+	var checkpoint struct {
+		CheckpointSHA string `json:"CheckpointSHA"`
+		ChangeID      string `json:"ChangeID"`
+	}
+	if err := json.NewDecoder(strings.NewReader(checkpointOut)).Decode(&checkpoint); err != nil {
+		t.Fatalf("failed to decode checkpoint output: %v", err)
+	}
+	if strings.TrimSpace(checkpoint.CheckpointSHA) == "" || strings.TrimSpace(checkpoint.ChangeID) == "" {
+		t.Fatalf("expected checkpoint sha and change id, got %s", checkpointOut)
+	}
+
+	addSuggestionNotesEntries(t, repo, checkpoint.ChangeID, checkpoint.CheckpointSHA, 1000)
+
+	for i := 0; i < 3; i++ {
+		_ = runCmdTimed(t, repo, env, julPath, "suggestions", "--json", "--limit", "20")
+	}
+	if os.Getenv("JUL_PERF_DEBUG") == "1" {
+		sample := runCmdTimed(t, repo, env, julPath, "suggestions", "--json", "--limit", "20")
+		t.Logf("suggestions sample: %s", sample)
+	}
+
+	samples := make([]time.Duration, 0, perfSuggestionsRuns)
+	for i := 0; i < perfSuggestionsRuns; i++ {
+		output := runCmdTimed(t, repo, env, julPath, "suggestions", "--json", "--limit", "20")
+		totalMs, ok := parseTimings(t, output)
+		if !ok {
+			t.Fatalf("expected suggestions timings in json output, got %s", output)
+		}
+		samples = append(samples, time.Duration(totalMs)*time.Millisecond)
+
+		var payload struct {
+			Suggestions []json.RawMessage `json:"suggestions"`
+		}
+		if err := json.NewDecoder(strings.NewReader(output)).Decode(&payload); err != nil {
+			t.Fatalf("failed to decode suggestions output: %v", err)
+		}
+		if len(payload.Suggestions) != 20 {
+			t.Fatalf("expected paginated suggestions length 20, got %d", len(payload.Suggestions))
+		}
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP50, budgetP95 := perfBudgetSuggestions()
+	t.Logf("PT-SUGGESTIONS-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
+	assertPerfBudget(t, "PT-SUGGESTIONS-001", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-SUGGESTIONS-001", p50, p95, 3.0)
 }
 
 func TestPerfDaemonStormSmoke(t *testing.T) {
@@ -896,6 +954,10 @@ func perfBudgetPromoteCloneColdP95() time.Duration {
 	return p95
 }
 
+func perfBudgetSuggestions() (time.Duration, time.Duration) {
+	return applyPerfMultiplier(50*time.Millisecond, 200*time.Millisecond)
+}
+
 func applyPerfMultiplier(p50, p95 time.Duration) (time.Duration, time.Duration) {
 	mult := perfMultiplier()
 	return time.Duration(float64(p50) * mult), time.Duration(float64(p95) * mult)
@@ -1270,6 +1332,55 @@ func addNotesEntries(t *testing.T, workDir string, gitDir string, ref string, pr
 	}
 
 	return start + entries
+}
+
+func addSuggestionNotesEntries(t *testing.T, repo string, changeID string, baseSHA string, total int) {
+	t.Helper()
+	if total <= 0 {
+		return
+	}
+
+	scratch := t.TempDir()
+	keyPath := filepath.Join(scratch, "key.txt")
+	notePath := filepath.Join(scratch, "note.json")
+	noteEnv := map[string]string{
+		"GIT_AUTHOR_NAME":     "Perf Suggestions",
+		"GIT_AUTHOR_EMAIL":    "perf-suggestions@example.com",
+		"GIT_COMMITTER_NAME":  "Perf Suggestions",
+		"GIT_COMMITTER_EMAIL": "perf-suggestions@example.com",
+	}
+
+	for i := 0; i < total; i++ {
+		keyData := []byte(fmt.Sprintf("suggestion-key-%06d\n", i))
+		if err := os.WriteFile(keyPath, keyData, 0o644); err != nil {
+			t.Fatalf("failed to write suggestion key payload: %v", err)
+		}
+		objectSHA := strings.TrimSpace(runCmdTimed(t, repo, nil, "git", "hash-object", "-w", keyPath))
+		if objectSHA == "" {
+			t.Fatalf("failed to create suggestion object for index %d", i)
+		}
+
+		payload := map[string]any{
+			"suggestion_id":        fmt.Sprintf("sug-%06d", i),
+			"change_id":            changeID,
+			"base_commit_sha":      baseSHA,
+			"suggested_commit_sha": baseSHA,
+			"created_by":           "perf",
+			"reason":               "perf",
+			"description":          "perf suggestion",
+			"confidence":           0.5,
+			"status":               "pending",
+			"created_at":           time.Unix(1700000000+int64(i), 0).UTC().Format(time.RFC3339Nano),
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("failed to marshal suggestion payload: %v", err)
+		}
+		if err := os.WriteFile(notePath, data, 0o644); err != nil {
+			t.Fatalf("failed to write suggestion payload: %v", err)
+		}
+		_ = runCmdTimed(t, repo, noteEnv, "git", "notes", "--ref", "refs/notes/jul/suggestions", "add", "-f", "-F", notePath, objectSHA)
+	}
 }
 
 func assertPerfBudget(t *testing.T, label string, p50, p95, budget50, budget95 time.Duration) {

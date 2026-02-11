@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -516,6 +517,7 @@ func Checkpoint(message string) (CheckpointResult, error) {
 	if err != nil {
 		return CheckpointResult{}, err
 	}
+	pauseCheckpointBeforeRefsForTest()
 	updates := []gitutil.RefUpdate{
 		{Ref: keepRef, SHA: checkpointSHA},
 		{Ref: changeRef, SHA: checkpointSHA},
@@ -1432,4 +1434,16 @@ func workspaceLeasePath(repoRoot, workspace string) string {
 func ensureWorkspaceHead(repoRoot, workspace, sha string) error {
 	ref := fmt.Sprintf("refs/heads/jul/%s", workspace)
 	return gitutil.EnsureHeadRef(repoRoot, ref, sha)
+}
+
+func pauseCheckpointBeforeRefsForTest() {
+	raw := strings.TrimSpace(os.Getenv("JUL_TEST_CHECKPOINT_PAUSE_BEFORE_REFS_MS"))
+	if raw == "" {
+		return
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		return
+	}
+	time.Sleep(time.Duration(ms) * time.Millisecond)
 }

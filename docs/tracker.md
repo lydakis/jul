@@ -43,6 +43,7 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-AGENT-006 | Aligned | JSON-only output, `next_actions`, and exit codes asserted. |
 | IT-UNSUPPORTED-001 | Aligned | Submodule warning; sync still produces draft. |
 | IT-SEC-001 | Aligned | Secret scan blocks draft push. |
+| IT-ROBUST-002 | Aligned | Interrupt during checkpoint pre-ref update leaves workspace/sync/change/keep refs unchanged; no half-baked checkpoint metadata is exposed. |
 
 ## Performance Spec Coverage (Perf Smoke)
 
@@ -50,18 +51,19 @@ Status: Perf smoke coverage is opt-in (`JUL_PERF_SMOKE=1`) and records Tier S bu
 
 | ID | Status | Latest Result |
 | --- | --- | --- |
-| PT-STATUS-001 | Implemented | p50=16ms, p95=19ms (budget p50<=25ms, p95<=80ms) |
-| PT-STATUS-002 | Implemented | p50=128ms, p95=141ms (budget p95<=250ms), clone-cold 20-sample run passed |
-| PT-SYNC-001 | Implemented | p50=277ms, p95=303ms (budget p50<=300ms, p95<=1s) |
+| PT-STATUS-001 | Implemented | p50=12ms, p95=14ms (budget p50<=25ms, p95<=80ms) |
+| PT-STATUS-002 | Implemented | p50=97ms, p95=101ms (budget p95<=250ms), clone-cold 20-sample run passed |
+| PT-SYNC-001 | Implemented | p50=199ms, p95=211ms (budget p50<=300ms, p95<=1s) |
 | PT-SYNC-002 | Implemented | p50=425ms, p95=457ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
-| PT-SYNC-003 | Implemented | p50=843ms, p95=932ms (budget p50<=1.1s, p95<=1.15s), stability 5/5 passes |
-| PT-SYNC-004 | Implemented | p50=521ms, p95=876ms (budget p95<=3.5s), stability 5/5 passes |
-| PT-CHECKPOINT-001 | Implemented | p50=218ms, p95=313ms (budget p50<=250ms, p95<=800ms) |
+| PT-SYNC-003 | Implemented | p50=610ms, p95=641ms (budget p50<=1.1s, p95<=1.15s), stability 5/5 passes |
+| PT-SYNC-004 | Implemented | p50=415ms, p95=610ms (budget p95<=3.5s), stability 5/5 passes |
+| PT-CHECKPOINT-001 | Implemented | p50=171ms, p95=265ms (budget p50<=250ms, p95<=800ms) |
 | PT-CHECKPOINT-002 | Implemented | Pending fresh run |
-| PT-NOTES-001 | Implemented | p50=224ms, p95=235ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
-| PT-PROMOTE-001 | Implemented | p50=703ms, p95=745ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
-| PT-PROMOTE-002 | Implemented | p50=878ms, p95=924ms (budget p95<=8s), stability 5/5 passes |
+| PT-NOTES-001 | Implemented | p50=189ms, p95=192ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
+| PT-PROMOTE-001 | Implemented | p50=596ms, p95=674ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
+| PT-PROMOTE-002 | Implemented | p50=641ms, p95=664ms (budget p95<=8s), stability 5/5 passes |
 | PT-DAEMON-002 | Implemented | transitions=1, settle=3.45s (budget settle<=10s), stability 5/5 passes |
+| PT-SUGGESTIONS-001 | Implemented | p50=37ms, p95=47ms (budget p50<=50ms, p95<=200ms), stability 5/5 passes |
 
 ### P0 — Repo Safety & Core Invariants (must‑fix before daily use)
 - [x] **Workspace base tracking**: persist `base_ref` + pinned `base_sha` per workspace (e.g., `.jul/workspaces/<ws>/config`) and use it for diffs, suggestions, CRs, status, and divergence checks.

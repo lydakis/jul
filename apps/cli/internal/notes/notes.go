@@ -1,11 +1,14 @@
 package notes
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -38,6 +41,12 @@ var (
 type Entry struct {
 	ObjectSHA string
 	NoteSHA   string
+}
+
+type JSONEntry struct {
+	ObjectSHA string
+	NoteSHA   string
+	Payload   []byte
 }
 
 func AddJSON(ref, objectSHA string, payload any) error {
@@ -167,6 +176,63 @@ func List(ref string) ([]Entry, error) {
 	return entries, nil
 }
 
+func ReadJSONEntries(ref string) ([]JSONEntry, error) {
+	entries, err := List(ref)
+	if err != nil {
+		return nil, err
+	}
+	return ReadJSONEntriesFor(ref, entries)
+}
+
+func ReadJSONEntriesFor(ref string, entries []Entry) ([]JSONEntry, error) {
+	if strings.TrimSpace(ref) == "" {
+		return nil, fmt.Errorf("note ref required")
+	}
+	if len(entries) == 0 {
+		return []JSONEntry{}, nil
+	}
+	repoRoot, err := notesRepoRoot()
+	if err != nil {
+		return nil, err
+	}
+	exists, err := notesRefExists(repoRoot, ref)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return []JSONEntry{}, nil
+	}
+	return readJSONEntriesForEntries(repoRoot, entries)
+}
+
+func readJSONEntriesForEntries(repoRoot string, entries []Entry) ([]JSONEntry, error) {
+	noteSHAs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.NoteSHA) == "" {
+			continue
+		}
+		noteSHAs = append(noteSHAs, strings.TrimSpace(entry.NoteSHA))
+	}
+	contents, err := readObjectsBatch(repoRoot, noteSHAs)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]JSONEntry, 0, len(entries))
+	for _, entry := range entries {
+		sha := strings.TrimSpace(entry.NoteSHA)
+		payload, ok := contents[sha]
+		if !ok || len(payload) == 0 {
+			continue
+		}
+		results = append(results, JSONEntry{
+			ObjectSHA: strings.TrimSpace(entry.ObjectSHA),
+			NoteSHA:   sha,
+			Payload:   payload,
+		})
+	}
+	return results, nil
+}
+
 func isNoteMissing(output []byte) bool {
 	msg := strings.ToLower(string(output))
 	return strings.Contains(msg, "no note found") || strings.Contains(msg, "no notes")
@@ -228,4 +294,80 @@ func cacheNotesRefExists(repoRoot, ref string, exists bool) {
 
 func notesRefCacheKey(repoRoot, ref string) string {
 	return strings.TrimSpace(repoRoot) + "\x00" + strings.TrimSpace(ref)
+}
+
+func readObjectsBatch(repoRoot string, objectSHAs []string) (map[string][]byte, error) {
+	results := make(map[string][]byte, len(objectSHAs))
+	if strings.TrimSpace(repoRoot) == "" || len(objectSHAs) == 0 {
+		return results, nil
+	}
+
+	cmd := exec.Command("git", "-C", repoRoot, "cat-file", "--batch")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("jul failed to read notes")
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("jul failed to read notes")
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		if isRepoFailure(stderr.Bytes()) {
+			return nil, ErrRepoRequired
+		}
+		return nil, fmt.Errorf("jul failed to read notes")
+	}
+
+	go func() {
+		defer stdin.Close()
+		for _, sha := range objectSHAs {
+			_, _ = io.WriteString(stdin, strings.TrimSpace(sha)+"\n")
+		}
+	}()
+
+	reader := bufio.NewReader(stdout)
+	for _, requested := range objectSHAs {
+		header, err := reader.ReadString('\n')
+		if err != nil {
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("jul failed to read notes")
+		}
+		header = strings.TrimSpace(header)
+		if header == "" {
+			continue
+		}
+		fields := strings.Fields(header)
+		if len(fields) >= 2 && fields[1] == "missing" {
+			continue
+		}
+		if len(fields) < 3 {
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("jul failed to read notes")
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil || size < 0 {
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("jul failed to read notes")
+		}
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("jul failed to read notes")
+		}
+		if _, err := reader.ReadByte(); err != nil {
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("jul failed to read notes")
+		}
+		results[strings.TrimSpace(requested)] = payload
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if isRepoFailure(stderr.Bytes()) {
+			return nil, ErrRepoRequired
+		}
+		return nil, fmt.Errorf("jul failed to read notes")
+	}
+	return results, nil
 }

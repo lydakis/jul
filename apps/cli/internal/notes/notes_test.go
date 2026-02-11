@@ -47,6 +47,17 @@ func TestNotesRoundTrip(t *testing.T) {
 		if len(entries) != 1 || entries[0].ObjectSHA != commit {
 			t.Fatalf("unexpected entries: %+v", entries)
 		}
+
+		jsonEntries, err := ReadJSONEntries(RefAttestationsCheckpoint)
+		if err != nil {
+			t.Fatalf("ReadJSONEntries failed: %v", err)
+		}
+		if len(jsonEntries) != 1 || jsonEntries[0].ObjectSHA != commit {
+			t.Fatalf("unexpected json entries: %+v", jsonEntries)
+		}
+		if !strings.Contains(string(jsonEntries[0].Payload), `"status":"pass"`) {
+			t.Fatalf("expected payload to contain status, got %s", string(jsonEntries[0].Payload))
+		}
 	})
 }
 
@@ -106,6 +117,14 @@ func TestMissingNotesRefReturnsEmpty(t *testing.T) {
 		}
 		if len(entries) != 0 {
 			t.Fatalf("expected no entries for missing ref, got %+v", entries)
+		}
+
+		jsonEntries, err := ReadJSONEntries(RefSuggestions)
+		if err != nil {
+			t.Fatalf("ReadJSONEntries failed: %v", err)
+		}
+		if len(jsonEntries) != 0 {
+			t.Fatalf("expected no json entries for missing ref, got %+v", jsonEntries)
 		}
 	})
 }

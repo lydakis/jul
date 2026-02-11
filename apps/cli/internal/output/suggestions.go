@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/lydakis/jul/cli/internal/client"
+	"github.com/lydakis/jul/cli/internal/metrics"
 )
 
 type SuggestionsView struct {
@@ -14,6 +15,7 @@ type SuggestionsView struct {
 	CheckpointSHA     string              `json:"checkpoint_sha,omitempty"`
 	CheckpointMessage string              `json:"checkpoint_message,omitempty"`
 	Suggestions       []client.Suggestion `json:"suggestions"`
+	Timings           metrics.Timings     `json:"timings_ms,omitempty"`
 }
 
 func RenderSuggestions(w io.Writer, view SuggestionsView, opts Options) {

@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -70,24 +71,16 @@ func CreateSuggestion(req SuggestionCreate) (client.Suggestion, error) {
 
 func ListSuggestions(changeID, status string, limit int) ([]client.Suggestion, error) {
 	status = normalizeSuggestionStatus(status)
-	entries, err := notes.List(notes.RefSuggestions)
+	if limit > 0 {
+		return listSuggestionsPaged(changeID, status, limit)
+	}
+	entries, err := loadSuggestionEntries()
 	if err != nil {
 		return nil, err
 	}
 	results := make([]client.Suggestion, 0, len(entries))
 	for _, entry := range entries {
-		var sug client.Suggestion
-		found, err := notes.ReadJSON(notes.RefSuggestions, entry.ObjectSHA, &sug)
-		if err != nil {
-			return nil, err
-		}
-		if !found {
-			continue
-		}
-		sug.Status = normalizeSuggestionStatus(sug.Status)
-		if sug.SuggestedCommitSHA == "" {
-			sug.SuggestedCommitSHA = entry.ObjectSHA
-		}
+		sug := entry.Suggestion
 		if changeID != "" && sug.ChangeID != changeID {
 			continue
 		}
@@ -108,21 +101,13 @@ func ListSuggestions(changeID, status string, limit int) ([]client.Suggestion, e
 }
 
 func PendingSuggestionCounts() (map[string]int, error) {
-	entries, err := notes.List(notes.RefSuggestions)
+	entries, err := loadSuggestionEntries()
 	if err != nil {
 		return nil, err
 	}
 	counts := make(map[string]int)
 	for _, entry := range entries {
-		var sug client.Suggestion
-		found, err := notes.ReadJSON(notes.RefSuggestions, entry.ObjectSHA, &sug)
-		if err != nil {
-			return nil, err
-		}
-		if !found {
-			continue
-		}
-		sug.Status = normalizeSuggestionStatus(sug.Status)
+		sug := entry.Suggestion
 		if sug.Status != "pending" {
 			continue
 		}
@@ -144,23 +129,15 @@ func UpdateSuggestionStatus(id, status, resolution string) (client.Suggestion, e
 		return client.Suggestion{}, errors.New("status required")
 	}
 	resolution = strings.TrimSpace(resolution)
-	entries, err := notes.List(notes.RefSuggestions)
+	entries, err := loadSuggestionEntries()
 	if err != nil {
 		return client.Suggestion{}, err
 	}
 	for _, entry := range entries {
-		var sug client.Suggestion
-		found, err := notes.ReadJSON(notes.RefSuggestions, entry.ObjectSHA, &sug)
-		if err != nil {
-			return client.Suggestion{}, err
-		}
-		if !found {
-			continue
-		}
+		sug := entry.Suggestion
 		if sug.SuggestionID != id {
 			continue
 		}
-		sug.Status = normalizeSuggestionStatus(sug.Status)
 		sug.Status = status
 		if resolution != "" {
 			sug.ResolutionMessage = resolution
@@ -169,9 +146,6 @@ func UpdateSuggestionStatus(id, status, resolution string) (client.Suggestion, e
 			sug.ResolvedAt = time.Time{}
 		} else {
 			sug.ResolvedAt = time.Now().UTC()
-		}
-		if sug.SuggestedCommitSHA == "" {
-			sug.SuggestedCommitSHA = entry.ObjectSHA
 		}
 		if err := notes.AddJSON(notes.RefSuggestions, entry.ObjectSHA, sug); err != nil {
 			return client.Suggestion{}, err
@@ -185,25 +159,14 @@ func GetSuggestionByID(id string) (client.Suggestion, bool, error) {
 	if strings.TrimSpace(id) == "" {
 		return client.Suggestion{}, false, errors.New("suggestion id required")
 	}
-	entries, err := notes.List(notes.RefSuggestions)
+	entries, err := loadSuggestionEntries()
 	if err != nil {
 		return client.Suggestion{}, false, err
 	}
 	for _, entry := range entries {
-		var sug client.Suggestion
-		found, err := notes.ReadJSON(notes.RefSuggestions, entry.ObjectSHA, &sug)
-		if err != nil {
-			return client.Suggestion{}, false, err
-		}
-		if !found {
-			continue
-		}
+		sug := entry.Suggestion
 		if sug.SuggestionID != id {
 			continue
-		}
-		sug.Status = normalizeSuggestionStatus(sug.Status)
-		if sug.SuggestedCommitSHA == "" {
-			sug.SuggestedCommitSHA = entry.ObjectSHA
 		}
 		return sug, true, nil
 	}
@@ -219,4 +182,86 @@ func normalizeSuggestionStatus(status string) string {
 	default:
 		return strings.TrimSpace(status)
 	}
+}
+
+type suggestionEntry struct {
+	ObjectSHA  string
+	Suggestion client.Suggestion
+}
+
+func loadSuggestionEntries() ([]suggestionEntry, error) {
+	noteEntries, err := notes.ReadJSONEntries(notes.RefSuggestions)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]suggestionEntry, 0, len(noteEntries))
+	for _, entry := range noteEntries {
+		sug, err := suggestionFromJSONEntry(entry)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, suggestionEntry{
+			ObjectSHA:  entry.ObjectSHA,
+			Suggestion: sug,
+		})
+	}
+	return results, nil
+}
+
+func listSuggestionsPaged(changeID, status string, limit int) ([]client.Suggestion, error) {
+	noteEntries, err := notes.List(notes.RefSuggestions)
+	if err != nil {
+		return nil, err
+	}
+	if len(noteEntries) == 0 {
+		return []client.Suggestion{}, nil
+	}
+
+	chunkSize := limit
+	if chunkSize < 16 {
+		chunkSize = 16
+	}
+	results := make([]client.Suggestion, 0, limit)
+
+	for end := len(noteEntries); end > 0; {
+		start := end - chunkSize
+		if start < 0 {
+			start = 0
+		}
+		chunk := noteEntries[start:end]
+		jsonChunk, err := notes.ReadJSONEntriesFor(notes.RefSuggestions, chunk)
+		if err != nil {
+			return nil, err
+		}
+		for i := len(jsonChunk) - 1; i >= 0; i-- {
+			sug, err := suggestionFromJSONEntry(jsonChunk[i])
+			if err != nil {
+				return nil, err
+			}
+			if changeID != "" && sug.ChangeID != changeID {
+				continue
+			}
+			if status != "" && sug.Status != status {
+				continue
+			}
+			results = append(results, sug)
+			if len(results) >= limit {
+				return results[:limit], nil
+			}
+		}
+		end = start
+	}
+	return results, nil
+}
+
+func suggestionFromJSONEntry(entry notes.JSONEntry) (client.Suggestion, error) {
+	var sug client.Suggestion
+	if err := json.Unmarshal(entry.Payload, &sug); err != nil {
+		return client.Suggestion{}, err
+	}
+	sug.Status = normalizeSuggestionStatus(sug.Status)
+	if sug.SuggestedCommitSHA == "" {
+		sug.SuggestedCommitSHA = entry.ObjectSHA
+	}
+	return sug, nil
 }
