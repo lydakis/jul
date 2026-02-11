@@ -1,4 +1,4 @@
-# Jul
+# Jul (줄)
 
 Jul is an AI-first Git workflow tool. It keeps Git as the source of truth, then layers on:
 
