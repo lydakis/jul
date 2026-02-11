@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/oklog/ulid/v2 v2.1.1
-	modernc.org/sqlite v1.44.2
+	modernc.org/sqlite v1.45.0
 )
 
 require (
