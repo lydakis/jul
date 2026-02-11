@@ -731,7 +731,7 @@ Use IDs like: `PT-SYNC-001`, `PT-CHECKPOINT-002`, `PT-DAEMON-003`.
 - Checks/review disabled or mocked
 - Delta: ΔSmall
 - Run: `jul checkpoint -m "msg"`
-- Assert: within budgets; no extra background work spawned
+- Assert: within budgets; no extra background work spawned when checks/review are disabled (for example `--no-ci --no-review`)
 
 #### PT-CHECKPOINT-002 — Clone-Cold Checkpoint Overhead
 - State: Clone-cold

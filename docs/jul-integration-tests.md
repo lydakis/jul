@@ -375,8 +375,8 @@ Each scenario is specified as:
 ### IT-CP-001 — Checkpoint Creates Durable Commit + Keep-Ref + Updates Workspace + Change Refs
 
 **Covers:** Checkpoint semantics and ref updates.  
-**Setup:** Repo with changes and passing checks.  
-**Steps:** `jul checkpoint -m "feat: x"` (or accept generated message).  
+**Setup:** Repo with changes; run checkpoint in core-only mode (`--no-ci --no-review`) so assertions are deterministic and exclude async runner effects.  
+**Steps:** `jul checkpoint -m "feat: x" --no-ci --no-review` (or equivalent deterministic fixture).  
 **Assertions:**
 - New checkpoint commit exists with Change-Id trailer or mapping.
 - Workspace ref advances to checkpoint.
@@ -387,10 +387,14 @@ Each scenario is specified as:
 
 ### IT-CP-002 — Checkpoint Behavior When Checks Fail (Policy Choice Must Be Stable)
 
-**Covers:** Checkpoint + checks behavior.  
+**Covers:** Default checkpoint + background checks behavior.  
 **Setup:** Failing tests.  
 **Steps:** `jul checkpoint`.  
-**Assertions:** Checkpoint is created immediately and remains durable; CI failure is recorded as a failing attestation asynchronously (for `--watch`, command exit may be non-zero after streaming completion).
+**Assertions:**
+- Checkpoint is created immediately and remains durable before checks finish.
+- Default mode starts CI/review asynchronously (checkpoint command can return while checks are still running).
+- CI failure is recorded as a failing attestation asynchronously.
+- For `--watch`, output streams to completion and command exit may be non-zero after CI finishes.
 
 ### IT-CP-003 — Checkpoint When Workspace Push Is Rejected (Non-FF)
 

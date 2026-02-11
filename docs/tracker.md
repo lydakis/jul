@@ -21,8 +21,8 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-SYNC-AUTORESTACK-001 | Aligned | Clean autorestack creates new checkpoint and updates workspace. |
 | IT-SYNC-AUTORESTACK-002 | Aligned | Conflicts stop autorestack with merge guidance. |
 | IT-SYNC-FAIL-001 | Aligned | Intermittent remote push failures keep local draft durable; retry sync later pushes same draft successfully. |
-| IT-CP-001 | Aligned | Checkpoint refs/anchors/keep refs + new draft. |
-| IT-CP-002 | Aligned | Checkpoint stays durable when CI fails; failing attestation is recorded asynchronously. |
+| IT-CP-001 | Aligned | Core checkpoint refs/anchors/keep refs + new draft (deterministic path with checks/review disabled). |
+| IT-CP-002 | Aligned | Default checkpoint stays durable while CI runs asynchronously; failing attestation is recorded (watch mode covered). |
 | IT-CP-003 | Aligned | Local checkpoint kept; divergence flagged; promote blocked. Regression fixed for malformed `refs/jul/changes//...` push path. |
 | IT-CP-004 | Aligned | Checkpoint flushes canonical trace head and trace tree matches checkpoint tree. |
 | IT-CP-005 | Aligned | Pre-promote checkpoints keep one Change-Id; first post-promote checkpoint starts a new Change-Id. |

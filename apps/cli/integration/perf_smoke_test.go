@@ -165,13 +165,17 @@ func TestPerfSyncLocalTransportSmoke(t *testing.T) {
 	warmUpCommand(t, repo, env, julPath, "sync", "--json")
 
 	samples := make([]time.Duration, 0, perfSyncRuns)
+	snapshotSamples := make([]time.Duration, 0, perfSyncRuns)
+	pushSamples := make([]time.Duration, 0, perfSyncRuns)
 	for i := 0; i < perfSyncRuns; i++ {
 		appendFile(t, repo, "src/file-0001.txt", fmt.Sprintf("\nlocal-transport-%d\n", i))
 		output := runCmdTimed(t, repo, env, julPath, "sync", "--json")
-		if snapshot, ok := parsePhaseTiming(t, output, "snapshot"); !ok || snapshot <= 0 {
+		snapshot, ok := parsePhaseTiming(t, output, "snapshot")
+		if !ok || snapshot <= 0 {
 			t.Fatalf("expected snapshot phase timing in sync output, got %s", output)
 		}
-		if push, ok := parsePhaseTiming(t, output, "push"); !ok || push <= 0 {
+		push, ok := parsePhaseTiming(t, output, "push")
+		if !ok || push <= 0 {
 			t.Fatalf("expected push phase timing in sync output, got %s", output)
 		}
 		totalMs, ok := parseTimings(t, output)
@@ -179,6 +183,8 @@ func TestPerfSyncLocalTransportSmoke(t *testing.T) {
 			t.Fatalf("expected sync timings in json output, got %s", output)
 		}
 		samples = append(samples, time.Duration(totalMs)*time.Millisecond)
+		snapshotSamples = append(snapshotSamples, snapshot)
+		pushSamples = append(pushSamples, push)
 	}
 
 	p50, p95 := percentiles(samples, 0.50, 0.95)
@@ -186,6 +192,15 @@ func TestPerfSyncLocalTransportSmoke(t *testing.T) {
 	t.Logf("PT-SYNC-003 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-SYNC-003", p50, p95, budgetP50, budgetP95)
 	assertPerfRatio(t, "PT-SYNC-003", p50, p95, 3.0)
+
+	// Transport smoke should preserve local snapshot cost and keep local push overhead
+	// in the <=20MB pack addendum bucket from the performance spec.
+	_, snapshotP95 := percentiles(snapshotSamples, 0.50, 0.95)
+	_, snapshotBudgetP95 := perfBudgetSync()
+	assertPerfP95(t, "PT-SYNC-003 snapshot phase", snapshotP95, snapshotBudgetP95)
+	_, pushP95 := percentiles(pushSamples, 0.50, 0.95)
+	addendumBudgetP95 := perfBudgetSyncTransportAddendumP95()
+	assertPerfP95(t, "PT-SYNC-003 transport addendum", pushP95, addendumBudgetP95)
 }
 
 func TestPerfSyncCloneColdLocalTransportSmoke(t *testing.T) {
@@ -198,7 +213,8 @@ func TestPerfSyncCloneColdLocalTransportSmoke(t *testing.T) {
 	remoteDir := filepath.Join(root, "origin.git")
 	runCmd(t, root, nil, "git", "init", "--bare", remoteDir)
 	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
-	runCmd(t, seed, nil, "git", "push", "-u", "origin", "HEAD")
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "HEAD:refs/heads/main")
+	runCmd(t, remoteDir, nil, "git", "--git-dir", remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
 
 	firstSamples := make([]time.Duration, 0, perfSyncCloneRuns)
 	for i := 0; i < perfSyncCloneRuns; i++ {
@@ -277,12 +293,17 @@ func TestPerfCheckpointSmoke(t *testing.T) {
 	}
 	julPath := perfCLI(t)
 	repo, env := setupPerfRepo(t, "perf-checkpoint", 2000, 1024)
+	bgBefore := backgroundArtifactCounts(repo)
 
 	samples := make([]time.Duration, 0, perfCheckpointRuns)
 	for i := 0; i < perfCheckpointRuns; i++ {
 		appendFile(t, repo, "src/file-0002.txt", fmt.Sprintf("\nchange-%d\n", i))
 		_, duration := runTimedJSONCommand(t, repo, env, julPath, "checkpoint", "-m", fmt.Sprintf("perf-%d", i), "--no-ci", "--no-review", "--json")
 		samples = append(samples, duration)
+		bgAfter := backgroundArtifactCounts(repo)
+		if bgAfter != bgBefore {
+			t.Fatalf("PT-CHECKPOINT-001 failed: --no-ci/--no-review spawned background artifacts (before=%+v after=%+v)", bgBefore, bgAfter)
+		}
 	}
 
 	p50, p95 := percentiles(samples, 0.50, 0.95)
@@ -358,7 +379,8 @@ func TestPerfPromoteCloneColdSmoke(t *testing.T) {
 	remoteDir := filepath.Join(root, "origin.git")
 	runCmd(t, root, nil, "git", "init", "--bare", remoteDir)
 	runCmd(t, seed, nil, "git", "remote", "add", "origin", remoteDir)
-	runCmd(t, seed, nil, "git", "push", "-u", "origin", "HEAD")
+	runCmd(t, seed, nil, "git", "push", "-u", "origin", "HEAD:refs/heads/main")
+	runCmd(t, remoteDir, nil, "git", "--git-dir", remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
 
 	samples := make([]time.Duration, 0, perfPromoteRuns)
 	for i := 0; i < perfPromoteRuns; i++ {
@@ -841,6 +863,12 @@ func perfBudgetSyncLocalTransport() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(1100*time.Millisecond, 1150*time.Millisecond)
 }
 
+func perfBudgetSyncTransportAddendumP95() time.Duration {
+	// Local transport addendum budget for pack <=20MB.
+	_, p95 := applyPerfMultiplier(0, 500*time.Millisecond)
+	return p95
+}
+
 func perfBudgetSyncCloneColdLocalP95() time.Duration {
 	_, p95 := applyPerfMultiplier(0, 3500*time.Millisecond)
 	return p95
@@ -1148,13 +1176,44 @@ func parsePhaseTiming(t *testing.T, output string, phase string) (time.Duration,
 	return time.Duration(value) * time.Millisecond, true
 }
 
+type backgroundCounts struct {
+	CIRuns        int
+	CILogs        int
+	ReviewResults int
+	ReviewLogs    int
+}
+
+func backgroundArtifactCounts(repo string) backgroundCounts {
+	return backgroundCounts{
+		CIRuns:        countFiles(filepath.Join(repo, ".jul", "ci", "runs")),
+		CILogs:        countFiles(filepath.Join(repo, ".jul", "ci", "logs")),
+		ReviewResults: countFiles(filepath.Join(repo, ".jul", "review", "results")),
+		ReviewLogs:    countFiles(filepath.Join(repo, ".jul", "review", "logs")),
+	}
+}
+
+func countFiles(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			count++
+		}
+	}
+	return count
+}
+
 func setupPerfRemote(t *testing.T, repo string, env map[string]string, julPath string) string {
 	t.Helper()
 	remoteRoot := t.TempDir()
 	remoteDir := filepath.Join(remoteRoot, "remote.git")
 	runCmd(t, remoteRoot, nil, "git", "init", "--bare", remoteDir)
 	runCmd(t, repo, nil, "git", "remote", "add", "origin", remoteDir)
-	runCmd(t, repo, nil, "git", "push", "-u", "origin", "HEAD")
+	runCmd(t, repo, nil, "git", "push", "-u", "origin", "HEAD:refs/heads/main")
+	runCmd(t, remoteDir, nil, "git", "--git-dir", remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
 	runCmd(t, repo, env, julPath, "remote", "set", "origin")
 	return remoteDir
 }
