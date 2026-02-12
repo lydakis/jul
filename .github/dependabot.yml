@@ -7,7 +7,6 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "github-actions"
 
   - package-ecosystem: "gomod"
     directory: "/apps/cli"
@@ -16,7 +15,6 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "go"
 
   - package-ecosystem: "gomod"
     directory: "/apps/server"
@@ -25,7 +23,6 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "go"
 
   - package-ecosystem: "npm"
     directory: "/apps/web"
@@ -34,4 +31,4 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "npm"
+      - "javascript"
