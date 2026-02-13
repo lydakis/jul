@@ -30,6 +30,8 @@ const (
 	perfPromoteRuns     = 5
 	perfSuggestionsRuns = 10
 	perfDaemonEvents    = 1000
+	perfDaemonIdleRun   = 10 * time.Minute
+	perfDaemonIdleTick  = 500 * time.Millisecond
 
 	perfProgressVisibleDeadline = 250 * time.Millisecond
 )
@@ -472,6 +474,99 @@ func TestPerfSuggestionsSmoke(t *testing.T) {
 	t.Logf("PT-SUGGESTIONS-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
 	assertPerfBudget(t, "PT-SUGGESTIONS-001", p50, p95, budgetP50, budgetP95)
 	assertPerfRatio(t, "PT-SUGGESTIONS-001", p50, p95, 3.0)
+}
+
+func TestPerfDaemonIdleSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	repo, env := setupPerfRepo(t, "perf-daemon-idle", 400, 256)
+
+	daemonCfg := "[sync]\ndebounce_seconds = 1\nmin_interval_seconds = 1\n"
+	if err := os.WriteFile(filepath.Join(repo, ".jul", "config.toml"), []byte(daemonCfg), 0o644); err != nil {
+		t.Fatalf("failed to write daemon config: %v", err)
+	}
+
+	cmd := exec.Command(julPath, "sync", "--daemon")
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(env)
+	var stdout syncBuffer
+	var stderr syncBuffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start sync daemon: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(os.Interrupt)
+		_ = cmd.Wait()
+	}()
+
+	waitForDaemonOutput(t, &stdout, &stderr, "Sync daemon running", 4*time.Second)
+	deviceID := readDeviceIDFromHome(t, env["HOME"])
+	syncRef := fmt.Sprintf("refs/jul/sync/perf/%s/@", strings.TrimSpace(deviceID))
+	if _, ok := waitForRefSHA(repo, env, syncRef, 8*time.Second); !ok {
+		t.Fatalf("timed out waiting for daemon to create sync ref %s", syncRef)
+	}
+	waitForDaemonOutput(t, &stdout, &stderr, "\"event\":\"daemon_sync_done\"", 4*time.Second)
+	time.Sleep(250 * time.Millisecond)
+	idleWindow := perfDaemonIdleWindow()
+
+	beforeRaw := stdout.String() + "\n" + stderr.String()
+	startCountBefore := daemonSyncEventCount(beforeRaw, "daemon_sync_start")
+	if startCountBefore < 1 {
+		t.Fatalf("PT-DAEMON-001 failed: expected at least one daemon sync start, got logs: %s", beforeRaw)
+	}
+	beforeModTimes, err := snapshotFileModTimes(filepath.Join(repo, ".jul"))
+	if err != nil {
+		t.Fatalf("PT-DAEMON-001 failed: %v", err)
+	}
+
+	type rssSample struct {
+		peakBytes int64
+		err       error
+	}
+	rssCh := make(chan rssSample, 1)
+	go func(pid int) {
+		peak, peakErr := peakProcessRSSBytes(pid, idleWindow, perfDaemonIdleTick)
+		rssCh <- rssSample{peakBytes: peak, err: peakErr}
+	}(cmd.Process.Pid)
+	cpu, err := averageProcessCPU(cmd.Process.Pid, idleWindow)
+	if err != nil {
+		t.Fatalf("PT-DAEMON-001 failed: cpu sample error: %v", err)
+	}
+	rss := <-rssCh
+	if rss.err != nil {
+		t.Fatalf("PT-DAEMON-001 failed: rss sample error: %v", rss.err)
+	}
+
+	afterRaw := stdout.String() + "\n" + stderr.String()
+	startCountAfter := daemonSyncEventCount(afterRaw, "daemon_sync_start")
+	if startCountAfter != startCountBefore {
+		t.Fatalf("PT-DAEMON-001 failed: idle daemon should not schedule extra syncs without file changes (%d -> %d)", startCountBefore, startCountAfter)
+	}
+
+	afterModTimes, err := snapshotFileModTimes(filepath.Join(repo, ".jul"))
+	if err != nil {
+		t.Fatalf("PT-DAEMON-001 failed: %v", err)
+	}
+	changed := changedFiles(beforeModTimes, afterModTimes, map[string]struct{}{"sync-daemon.pid": {}})
+	changed = filterDaemonIdleDiskChurn(changed)
+	if len(changed) > 0 {
+		t.Fatalf("PT-DAEMON-001 failed: detected idle .jul disk churn in %v", changed)
+	}
+
+	cpuBudget := perfBudgetDaemonIdleCPU()
+	if cpu > cpuBudget {
+		t.Fatalf("PT-DAEMON-001 failed: idle cpu %.2f%% exceeded budget %.2f%%", cpu, cpuBudget)
+	}
+	memBudget := perfBudgetDaemonIdleRSSBytes()
+	if rss.peakBytes > memBudget {
+		t.Fatalf("PT-DAEMON-001 failed: idle peak RSS %s exceeded budget %s", formatBytes(rss.peakBytes), formatBytes(memBudget))
+	}
+
+	t.Logf("PT-DAEMON-001 idle_window=%s cpu=%.2f%% peak_rss=%s budget_cpu=%.2f%% budget_rss=%s", idleWindow, cpu, formatBytes(rss.peakBytes), cpuBudget, formatBytes(memBudget))
 }
 
 func TestPerfDaemonStormSmoke(t *testing.T) {
@@ -958,6 +1053,24 @@ func perfBudgetSuggestions() (time.Duration, time.Duration) {
 	return applyPerfMultiplier(50*time.Millisecond, 200*time.Millisecond)
 }
 
+func perfBudgetDaemonIdleCPU() float64 {
+	return 0.5 * perfMultiplier()
+}
+
+func perfBudgetDaemonIdleRSSBytes() int64 {
+	base := float64(60 * 1024 * 1024)
+	return int64(base * perfMultiplier())
+}
+
+func formatBytes(value int64) string {
+	if value < 0 {
+		value = 0
+	}
+	const mib = 1024 * 1024
+	whole := float64(value) / float64(mib)
+	return fmt.Sprintf("%.1f MiB", whole)
+}
+
 func applyPerfMultiplier(p50, p95 time.Duration) (time.Duration, time.Duration) {
 	mult := perfMultiplier()
 	return time.Duration(float64(p50) * mult), time.Duration(float64(p95) * mult)
@@ -976,6 +1089,15 @@ func perfMultiplier() float64 {
 		return 1.5
 	}
 	return 1.0
+}
+
+func perfDaemonIdleWindow() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("JUL_PERF_DAEMON_IDLE_WINDOW")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return perfDaemonIdleRun
 }
 
 func perfPath() string {
@@ -1117,6 +1239,29 @@ func daemonSyncAttemptStats(raw string) ([]time.Time, int64, error) {
 	return starts, maxInFlight, nil
 }
 
+func daemonSyncEventCount(raw string, event string) int {
+	event = strings.TrimSpace(event)
+	if event == "" {
+		return 0
+	}
+	lines := strings.Split(raw, "\n")
+	count := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "\"event\":\"daemon_sync_") {
+			continue
+		}
+		var entry daemonSyncLog
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if strings.TrimSpace(entry.Event) == event {
+			count++
+		}
+	}
+	return count
+}
+
 func averageProcessCPU(pid int, window time.Duration) (float64, error) {
 	if pid <= 0 {
 		return 0, fmt.Errorf("invalid pid %d", pid)
@@ -1145,12 +1290,67 @@ func averageProcessCPU(pid int, window time.Duration) (float64, error) {
 	return (used.Seconds() / elapsed.Seconds()) * 100, nil
 }
 
+func peakProcessRSSBytes(pid int, window time.Duration, interval time.Duration) (int64, error) {
+	if pid <= 0 {
+		return 0, fmt.Errorf("invalid pid %d", pid)
+	}
+	if window <= 0 {
+		return 0, fmt.Errorf("invalid rss sample window %s", window)
+	}
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	deadline := time.Now().Add(window)
+	var peak int64
+	for {
+		rss, err := processRSSBytes(pid)
+		if err != nil {
+			return 0, err
+		}
+		if rss > peak {
+			peak = rss
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		sleep := interval
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+	return peak, nil
+}
+
 func processCPUTime(pid int) (time.Duration, error) {
 	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "cputime=").Output()
 	if err != nil {
 		return 0, err
 	}
 	return parseProcessCPUTime(string(out))
+}
+
+func processRSSBytes(pid int) (int64, error) {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "rss=").Output()
+	if err != nil {
+		return 0, err
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("empty rss output")
+	}
+	kb, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid rss value %q: %w", fields[0], err)
+	}
+	if kb < 0 {
+		kb = 0
+	}
+	return kb * 1024, nil
 }
 
 func parseProcessCPUTime(raw string) (time.Duration, error) {
@@ -1266,6 +1466,78 @@ func countFiles(dir string) int {
 		}
 	}
 	return count
+}
+
+func snapshotFileModTimes(root string) (map[string]time.Time, error) {
+	modTimes := map[string]time.Time{}
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			return modTimes, nil
+		}
+		return nil, err
+	}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		modTimes[filepath.ToSlash(rel)] = info.ModTime()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return modTimes, nil
+}
+
+func changedFiles(before map[string]time.Time, after map[string]time.Time, ignore map[string]struct{}) []string {
+	changed := make([]string, 0)
+	keys := map[string]struct{}{}
+	for key := range before {
+		keys[key] = struct{}{}
+	}
+	for key := range after {
+		keys[key] = struct{}{}
+	}
+	for key := range keys {
+		if _, skip := ignore[key]; skip {
+			continue
+		}
+		beforeTime, beforeOK := before[key]
+		afterTime, afterOK := after[key]
+		if beforeOK != afterOK || !beforeTime.Equal(afterTime) {
+			changed = append(changed, key)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+func filterDaemonIdleDiskChurn(paths []string) []string {
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		normalized := filepath.ToSlash(strings.TrimSpace(path))
+		if normalized == "" {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(normalized))
+		if strings.HasSuffix(base, ".log") {
+			continue
+		}
+		filtered = append(filtered, normalized)
+	}
+	sort.Strings(filtered)
+	return filtered
 }
 
 func setupPerfRemote(t *testing.T, repo string, env map[string]string, julPath string) string {

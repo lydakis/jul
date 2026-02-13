@@ -420,6 +420,7 @@ func buildDraftCIStatus(draftSHA string) *output.CIStatusDetails {
 	}
 	if running != nil {
 		details.RunningSHA = running.CommitSHA
+		details.RunningPID = running.PID
 	}
 	return details
 }

@@ -27,6 +27,7 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-CP-004 | Aligned | Checkpoint flushes canonical trace head and trace tree matches checkpoint tree. |
 | IT-CP-005 | Aligned | Pre-promote checkpoints keep one Change-Id; first post-promote checkpoint starts a new Change-Id. |
 | IT-CP-006 | Aligned | `checkpoint --adopt` adopts manual `HEAD` as checkpoint, writes refs/metadata, and preserves commit identity (no rewrite). |
+| IT-CI-001 | Aligned | Rapid successive draft-triggered CI runs coalesce: stale run is cancelled/ignored, only latest draft remains current in status. |
 | IT-CI-002 | Aligned | Attestation note written and synced. |
 | IT-CI-003 | Aligned | Promote policy rejects remote-synced checkpoint attestations unless CI was computed on the current device; rerun action is provided. |
 | IT-CI-004 | Aligned | Restack-inherited attestations are shown as stale and promote policy blocks until fresh CI is rerun on the new SHA. |
@@ -39,6 +40,8 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-OFFLINE-001 | Aligned | Offline history syncs; keep refs + notes match remote. |
 | IT-DAEMON-001 | Aligned | Single-instance + zombie check. |
 | IT-DAEMON-002 | Aligned | SIGTERM exit + child-process cleanup check. |
+| IT-DAEMON-003 | Aligned | Stale daemon PID marker is detected and replaced; daemon starts cleanly. |
+| IT-DAEMON-009 | Aligned | Daemon ignores `.jul/agent-workspace/worktree` churn (no self-triggered sync attempts; sync ref unchanged). |
 | IT-ROBUST-005 | Aligned | `.jul/` deletion tolerated or daemon exits cleanly. |
 | IT-AGENT-006 | Aligned | JSON-only output, `next_actions`, and exit codes asserted. |
 | IT-UNSUPPORTED-001 | Aligned | Submodule warning; sync still produces draft. |
@@ -62,6 +65,7 @@ Status: Perf smoke coverage is opt-in (`JUL_PERF_SMOKE=1`) and records Tier S bu
 | PT-NOTES-001 | Implemented | p50=189ms, p95=192ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
 | PT-PROMOTE-001 | Implemented | p50=596ms, p95=674ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
 | PT-PROMOTE-002 | Implemented | p50=641ms, p95=664ms (budget p95<=8s), stability 5/5 passes |
+| PT-DAEMON-001 | Implemented | idle_window=10m0s, cpu=0.00%, peak_rss=13.2 MiB (budget cpu<=0.50%, rss<=60.0 MiB); no idle sync attempts or non-log `.jul` disk churn |
 | PT-DAEMON-002 | Implemented | transitions=1, settle=3.45s (budget settle<=10s), stability 5/5 passes |
 | PT-SUGGESTIONS-001 | Implemented | p50=37ms, p95=47ms (budget p50<=50ms, p95<=200ms), stability 5/5 passes |
 

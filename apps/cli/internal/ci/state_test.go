@@ -66,6 +66,53 @@ func TestStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMarkRunCanceledByPID(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.name", "Test User")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(cwd)
+	})
+
+	pid := 9876
+	started := time.Now().UTC().Add(-2 * time.Second)
+	run := RunRecord{
+		ID:        "run-1",
+		CommitSHA: "abc123",
+		Status:    "running",
+		Mode:      "draft",
+		StartedAt: started,
+		PID:       pid,
+	}
+	if err := WriteRun(run); err != nil {
+		t.Fatalf("WriteRun failed: %v", err)
+	}
+
+	if err := MarkRunCanceledByPID(pid); err != nil {
+		t.Fatalf("MarkRunCanceledByPID failed: %v", err)
+	}
+
+	got, err := ReadRun("run-1")
+	if err != nil {
+		t.Fatalf("ReadRun failed: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected run to exist")
+	}
+	if got.Status != "canceled" {
+		t.Fatalf("expected canceled status, got %+v", got)
+	}
+	if got.FinishedAt.IsZero() {
+		t.Fatalf("expected canceled run to have finished_at")
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

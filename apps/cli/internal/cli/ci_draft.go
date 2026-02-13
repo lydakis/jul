@@ -69,6 +69,7 @@ func cancelRunningCI(running *cicmd.Running) error {
 	if running == nil || running.PID == 0 {
 		return nil
 	}
+	_ = cicmd.MarkRunCanceledByPID(running.PID)
 	proc, err := os.FindProcess(running.PID)
 	if err == nil {
 		_ = proc.Signal(syscall.SIGTERM)

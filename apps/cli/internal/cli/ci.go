@@ -64,7 +64,7 @@ func newCICommand() Command {
 }
 
 func runCIRun(args []string) int {
-	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr, "", "manual")
+	return runCIRunWithStream(args, nil, os.Stdout, os.Stderr, "", "")
 }
 
 func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut io.Writer, targetSHA string, mode string) int {
@@ -235,13 +235,15 @@ func runCIRunWithStream(args []string, stream io.Writer, out io.Writer, errOut i
 		created = stored
 	}
 
-	_ = cicmd.WriteCompleted(cicmd.Status{
-		CommitSHA:         info.SHA,
-		CompletedAt:       time.Now().UTC(),
-		Result:            result,
-		CoverageLinePct:   coverageLinePtr,
-		CoverageBranchPct: coverageBranchPtr,
-	})
+	if shouldPersistDraftCIResult(mode, info.SHA) {
+		_ = cicmd.WriteCompleted(cicmd.Status{
+			CommitSHA:         info.SHA,
+			CompletedAt:       time.Now().UTC(),
+			Result:            result,
+			CoverageLinePct:   coverageLinePtr,
+			CoverageBranchPct: coverageBranchPtr,
+		})
+	}
 
 	record.Status = result.Status
 	record.FinishedAt = time.Now().UTC()
@@ -651,6 +653,35 @@ func resolveCIMode(mode string) string {
 	return mode
 }
 
+func shouldPersistDraftCIResult(mode string, targetSHA string) bool {
+	mode = strings.TrimSpace(mode)
+	targetSHA = strings.TrimSpace(targetSHA)
+	if targetSHA == "" {
+		return false
+	}
+	if mode == "draft" {
+		return true
+	}
+	currentDraft, err := currentDraftSHA()
+	if err != nil {
+		return true
+	}
+	currentDraft = strings.TrimSpace(currentDraft)
+	if currentDraft == "" {
+		return true
+	}
+	if currentDraft == targetSHA {
+		return true
+	}
+	completed, err := cicmd.ReadCompleted()
+	if err != nil || completed == nil {
+		return true
+	}
+	// Keep draft status stable when a completed result already exists for the
+	// current draft; otherwise persist this run so ci status has a baseline.
+	return strings.TrimSpace(completed.CommitSHA) != currentDraft
+}
+
 func runCIList(args []string) int {
 	fs, jsonOut := newFlagSet("ci list")
 	limit := fs.Int("limit", 10, "Max runs to show")
@@ -767,6 +798,7 @@ func buildCIStatusJSON(status string, current string, completed *cicmd.Status, r
 	}
 	if running != nil {
 		details.RunningSHA = running.CommitSHA
+		details.RunningPID = running.PID
 	}
 	return output.CIStatusJSON{CI: details}
 }

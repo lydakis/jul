@@ -130,6 +130,103 @@ func TestIT_DAEMON_002(t *testing.T) {
 	}
 }
 
+func TestIT_DAEMON_003(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo, true)
+	julPath := buildCLI(t)
+	device := newDeviceEnv(t, "dev1")
+
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+
+	pidPath := filepath.Join(repo, ".jul", "sync-daemon.pid")
+	if err := os.WriteFile(pidPath, []byte("999999\n"), 0o644); err != nil {
+		t.Fatalf("failed to seed stale daemon pid marker: %v", err)
+	}
+
+	cmd := exec.Command(julPath, "sync", "--daemon")
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(device.Env)
+	stdout, stderr := captureOutput(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start daemon with stale pid marker: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Wait()
+	}()
+
+	waitForOutput(t, stdout, stderr, "Sync daemon running")
+	if strings.Contains(stdout.String()+stderr.String(), "already running") {
+		t.Fatalf("expected stale pid marker recovery to start daemon, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	pidData, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatalf("failed to read daemon pid marker after recovery: %v", err)
+	}
+	pidVal, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		t.Fatalf("invalid daemon pid marker %q: %v", string(pidData), err)
+	}
+	if cmd.Process == nil || pidVal != cmd.Process.Pid {
+		t.Fatalf("expected daemon pid marker to be refreshed to %d, got %d", cmd.Process.Pid, pidVal)
+	}
+}
+
+func TestIT_DAEMON_009(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo, true)
+	julPath := buildCLI(t)
+	device := newDeviceEnv(t, "dev1")
+
+	runCmd(t, repo, device.Env, julPath, "init", "demo")
+	writeFile(t, repo, ".jul/config.toml", "[sync]\ndebounce_seconds = 1\nmin_interval_seconds = 1\n")
+
+	cmd := exec.Command(julPath, "sync", "--daemon")
+	cmd.Dir = repo
+	cmd.Env = mergeEnv(device.Env)
+	stdout, stderr := captureOutput(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start daemon: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Wait()
+	}()
+
+	waitForOutput(t, stdout, stderr, "Sync daemon running")
+	waitForOutput(t, stdout, stderr, "\"event\":\"daemon_sync_done\"")
+	time.Sleep(200 * time.Millisecond)
+
+	deviceID := readDeviceID(t, device.Home)
+	syncRef := "refs/jul/sync/tester/" + deviceID + "/@"
+	beforeSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", syncRef))
+	beforeStarts := strings.Count(stdout.String()+"\n"+stderr.String(), "\"event\":\"daemon_sync_start\"")
+	if beforeStarts < 1 {
+		t.Fatalf("expected at least one daemon sync start, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	agentWorktree := filepath.Join(repo, ".jul", "agent-workspace", "worktree")
+	if err := os.MkdirAll(agentWorktree, 0o755); err != nil {
+		t.Fatalf("failed to create .jul/agent-workspace/worktree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentWorktree, "scratch.txt"), []byte("touch-1\n"), 0o644); err != nil {
+		t.Fatalf("failed to write .jul agent-workspace scratch file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentWorktree, "scratch-2.txt"), []byte("touch-2\n"), 0o644); err != nil {
+		t.Fatalf("failed to write .jul agent-workspace scratch file: %v", err)
+	}
+	time.Sleep(2500 * time.Millisecond)
+
+	afterStarts := strings.Count(stdout.String()+"\n"+stderr.String(), "\"event\":\"daemon_sync_start\"")
+	if afterStarts != beforeStarts {
+		t.Fatalf("expected .jul/agent-workspace/worktree churn to be ignored by daemon sync (starts %d -> %d), stdout=%q stderr=%q", beforeStarts, afterStarts, stdout.String(), stderr.String())
+	}
+	afterSHA := strings.TrimSpace(runCmd(t, repo, nil, "git", "rev-parse", syncRef))
+	if afterSHA != beforeSHA {
+		t.Fatalf("expected sync ref unchanged after .jul/agent-workspace/worktree churn, got %s -> %s", beforeSHA, afterSHA)
+	}
+}
+
 func TestIT_ROBUST_005(t *testing.T) {
 	repo := t.TempDir()
 	initRepo(t, repo, true)

@@ -201,6 +201,37 @@ func ClearRunning() error {
 	return nil
 }
 
+func MarkRunCanceledByPID(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	runs, err := ListRuns(0)
+	if err != nil {
+		return err
+	}
+	latestIdx := -1
+	for i := range runs {
+		if runs[i].PID != pid {
+			continue
+		}
+		if strings.TrimSpace(runs[i].Status) != "running" {
+			continue
+		}
+		if latestIdx == -1 || runs[i].StartedAt.After(runs[latestIdx].StartedAt) {
+			latestIdx = i
+		}
+	}
+	if latestIdx == -1 {
+		return nil
+	}
+	run := runs[latestIdx]
+	run.Status = "canceled"
+	if run.FinishedAt.IsZero() {
+		run.FinishedAt = time.Now().UTC()
+	}
+	return WriteRun(run)
+}
+
 func ciPath(name string) (string, error) {
 	root, err := gitutil.RepoTopLevel()
 	if err != nil {

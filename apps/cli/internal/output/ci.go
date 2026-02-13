@@ -36,6 +36,7 @@ type CIStatusDetails struct {
 	CompletedSHA    string    `json:"completed_sha,omitempty"`
 	ResultsCurrent  bool      `json:"results_current"`
 	RunningSHA      string    `json:"running_sha,omitempty"`
+	RunningPID      int       `json:"running_pid,omitempty"`
 	DurationMs      int64     `json:"duration_ms,omitempty"`
 	Results         []CICheck `json:"results,omitempty"`
 }
@@ -131,7 +132,11 @@ func RenderCIStatus(out io.Writer, payload CIStatusJSON, opts Options) {
 				icon = "* "
 			}
 		}
-		fmt.Fprintf(out, "  %sCI running for %s...\n", icon, status.RunningSHA)
+		if status.RunningPID > 0 {
+			fmt.Fprintf(out, "  %sCI running for %s (pid %d)...\n", icon, status.RunningSHA, status.RunningPID)
+		} else {
+			fmt.Fprintf(out, "  %sCI running for %s...\n", icon, status.RunningSHA)
+		}
 	}
 	if len(status.Results) > 0 {
 		fmt.Fprintln(out, "")
