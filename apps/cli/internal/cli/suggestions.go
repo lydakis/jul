@@ -175,6 +175,7 @@ func newSuggestionActionCommand(name, action string) Command {
 		Run: func(args []string) int {
 			fs, jsonOut := newFlagSet(name)
 			message := fs.String("m", "", "Resolution note")
+			args = reorderSuggestionActionArgs(args)
 			_ = fs.Parse(args)
 			id := strings.TrimSpace(fs.Arg(0))
 			if id == "" {
@@ -211,4 +212,39 @@ func newSuggestionActionCommand(name, action string) Command {
 			return 0
 		},
 	}
+}
+
+func reorderSuggestionActionArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	opts := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" {
+			continue
+		}
+		switch {
+		case arg == "--":
+			positionals = append(positionals, args[i+1:]...)
+			i = len(args)
+		case arg == "-m" || arg == "--m":
+			opts = append(opts, arg)
+			if i+1 < len(args) {
+				opts = append(opts, args[i+1])
+				i++
+			}
+		case strings.HasPrefix(arg, "-m=") || strings.HasPrefix(arg, "--m="):
+			opts = append(opts, arg)
+		case strings.HasPrefix(arg, "-"):
+			opts = append(opts, arg)
+		default:
+			positionals = append(positionals, arg)
+		}
+	}
+	out := make([]string, 0, len(opts)+len(positionals))
+	out = append(out, opts...)
+	out = append(out, positionals...)
+	return out
 }

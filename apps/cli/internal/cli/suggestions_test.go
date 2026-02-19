@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/metadata"
 )
 
@@ -86,5 +87,53 @@ func TestSuggestionsPendingRefreshesLiveDraftContext(t *testing.T) {
 	}
 	if len(payload.Suggestions) != 1 {
 		t.Fatalf("expected 1 fresh pending suggestion, got %d (%s)", len(payload.Suggestions), out)
+	}
+}
+
+func TestRejectParsesMessageAfterID(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	writeFilePath(t, repo, "README.md", "base\n")
+	runGitCmd(t, repo, "add", "README.md")
+	runGitCmd(t, repo, "commit", "-m", "base")
+	baseSHA := strings.TrimSpace(runGitCmd(t, repo, "rev-parse", "HEAD"))
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Setenv("HOME", filepath.Join(repo, "home"))
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	sug, err := metadata.CreateSuggestion(metadata.SuggestionCreate{
+		ChangeID:           "I4444444444444444444444444444444444444444",
+		BaseCommitSHA:      baseSHA,
+		SuggestedCommitSHA: baseSHA,
+		CreatedBy:          "tester",
+		Reason:             "manual",
+	})
+	if err != nil {
+		t.Fatalf("CreateSuggestion failed: %v", err)
+	}
+
+	reason := "conflict resolved manually"
+	out := captureStdout(t, func() int {
+		return newSuggestionActionCommand("reject", "reject").Run([]string{
+			"--json",
+			sug.SuggestionID,
+			"-m", reason,
+		})
+	})
+
+	var updated client.Suggestion
+	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+		t.Fatalf("failed to decode reject output: %v\n%s", err, out)
+	}
+	if updated.Status != "rejected" {
+		t.Fatalf("expected rejected status, got %+v", updated)
+	}
+	if strings.TrimSpace(updated.ResolutionMessage) != reason {
+		t.Fatalf("expected resolution message %q, got %+v", reason, updated)
 	}
 }

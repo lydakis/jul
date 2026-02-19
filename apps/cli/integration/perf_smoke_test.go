@@ -26,6 +26,7 @@ const (
 	perfCheckpointRuns  = 10
 	perfCheckpointCold  = 5
 	perfStatusWarmups   = 5
+	perfDiffRuns        = 20
 	perfNotesRuns       = 5
 	perfPromoteRuns     = 5
 	perfSuggestionsRuns = 10
@@ -417,6 +418,36 @@ func TestPerfPromoteCloneColdSmoke(t *testing.T) {
 	t.Logf("PT-PROMOTE-002 p50=%s p95=%s budget95=%s", p50, p95, budgetP95)
 	assertPerfP95(t, "PT-PROMOTE-002", p95, budgetP95)
 	assertPerfRatio(t, "PT-PROMOTE-002", p50, p95, 4.0)
+}
+
+func TestPerfDiffSmoke(t *testing.T) {
+	if os.Getenv("JUL_PERF_SMOKE") != "1" {
+		t.Skip("set JUL_PERF_SMOKE=1 to run perf smoke suite")
+	}
+	julPath := perfCLI(t)
+	repo, env := setupPerfRepo(t, "perf-diff", 2000, 1024)
+
+	runCmdTimed(t, repo, env, julPath, "checkpoint", "-m", "perf diff base", "--no-ci", "--no-review", "--json")
+	for i := 0; i < 200; i++ {
+		appendFile(t, repo, fmt.Sprintf("src/file-%04d.txt", i), fmt.Sprintf("\npt-diff-%d\n", i))
+	}
+	runCmdTimed(t, repo, env, julPath, "sync", "--json")
+
+	for i := 0; i < 3; i++ {
+		_, _ = runTimedJSONCommand(t, repo, env, julPath, "diff", "--json")
+	}
+
+	samples := make([]time.Duration, 0, perfDiffRuns)
+	for i := 0; i < perfDiffRuns; i++ {
+		_, duration := runTimedJSONCommand(t, repo, env, julPath, "diff", "--json")
+		samples = append(samples, duration)
+	}
+
+	p50, p95 := percentiles(samples, 0.50, 0.95)
+	budgetP50, budgetP95 := perfBudgetDiffWarmSmall()
+	t.Logf("PT-DIFF-001 p50=%s p95=%s budget50=%s budget95=%s", p50, p95, budgetP50, budgetP95)
+	assertPerfBudget(t, "PT-DIFF-001", p50, p95, budgetP50, budgetP95)
+	assertPerfRatio(t, "PT-DIFF-001", p50, p95, 4.0)
 }
 
 func TestPerfSuggestionsSmoke(t *testing.T) {
@@ -1047,6 +1078,10 @@ func perfBudgetPromoteWarm() (time.Duration, time.Duration) {
 func perfBudgetPromoteCloneColdP95() time.Duration {
 	_, p95 := applyPerfMultiplier(0, 8*time.Second)
 	return p95
+}
+
+func perfBudgetDiffWarmSmall() (time.Duration, time.Duration) {
+	return applyPerfMultiplier(300*time.Millisecond, 1*time.Second)
 }
 
 func perfBudgetSuggestions() (time.Duration, time.Duration) {

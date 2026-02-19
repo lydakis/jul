@@ -32,6 +32,7 @@ Status: **Aligned** = current test assertions match spec; **Partial** = spec has
 | IT-CI-003 | Aligned | Promote policy rejects remote-synced checkpoint attestations unless CI was computed on the current device; rerun action is provided. |
 | IT-CI-004 | Aligned | Restack-inherited attestations are shown as stale and promote policy blocks until fresh CI is rerun on the new SHA. |
 | IT-CI-005 | Aligned | Coverage gating + `--no-policy` bypass. |
+| IT-SUGG-004 | Aligned | `jul reject <id> -m \"reason\"` persists rejected status and resolution message in suggestion listing and notes metadata. |
 | IT-PROMOTE-REBASE-001 | Aligned | Main advances; base marker + notes; new draft. |
 | IT-PROMOTE-REWRITE-001 | Aligned | Rewrite detected; confirm path succeeds. |
 | IT-MERGE-001 | Aligned | Restack conflict path exercised; merge resolves without conflict markers. |
@@ -65,6 +66,7 @@ Status: Perf smoke coverage is opt-in (`JUL_PERF_SMOKE=1`) and records Tier S bu
 | PT-NOTES-001 | Implemented | p50=189ms, p95=192ms (budget p50<=500ms, p95<=3s), stability 5/5 passes |
 | PT-PROMOTE-001 | Implemented | p50=596ms, p95=674ms (budget p50<=1.5s, p95<=5s), stability 5/5 passes |
 | PT-PROMOTE-002 | Implemented | p50=641ms, p95=664ms (budget p95<=8s), stability 5/5 passes |
+| PT-DIFF-001 | Implemented | p50=96ms, p95=102ms (budget p50<=300ms, p95<=1s), stability 5/5 passes |
 | PT-DAEMON-001 | Implemented | idle_window=10m0s, cpu=0.00%, peak_rss=13.2 MiB (budget cpu<=0.50%, rss<=60.0 MiB); no idle sync attempts or non-log `.jul` disk churn |
 | PT-DAEMON-002 | Implemented | transitions=1, settle=3.45s (budget settle<=10s), stability 5/5 passes |
 | PT-SUGGESTIONS-001 | Implemented | p50=37ms, p95=47ms (budget p50<=50ms, p95<=200ms), stability 5/5 passes |
