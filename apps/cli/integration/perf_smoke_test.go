@@ -432,6 +432,10 @@ func TestPerfDiffSmoke(t *testing.T) {
 		appendFile(t, repo, fmt.Sprintf("src/file-%04d.txt", i), fmt.Sprintf("\npt-diff-%d\n", i))
 	}
 	runCmdTimed(t, repo, env, julPath, "sync", "--json")
+	diffOut := runCmdTimed(t, repo, env, julPath, "diff")
+	if changedFiles := countDiffFiles(diffOut); changedFiles != 200 {
+		t.Fatalf("expected warm diff delta to touch 200 files, got %d", changedFiles)
+	}
 
 	for i := 0; i < 3; i++ {
 		_, _ = runTimedJSONCommand(t, repo, env, julPath, "diff", "--json")
@@ -994,6 +998,16 @@ func parseTimings(t *testing.T, output string) (int64, bool) {
 		total += value
 	}
 	return total, true
+}
+
+func countDiffFiles(diff string) int {
+	count := 0
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "diff --git ") {
+			count++
+		}
+	}
+	return count
 }
 
 func percentiles(samples []time.Duration, p50 float64, p95 float64) (time.Duration, time.Duration) {

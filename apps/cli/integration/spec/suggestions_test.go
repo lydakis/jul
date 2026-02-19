@@ -24,6 +24,24 @@ func TestIT_SUGG_004(t *testing.T) {
 	_, _ = runCmdInput(t, repo, device.Env, "n\n", julPath, "merge", "--json")
 
 	pending := ensurePendingSuggestion(t, repo, device.Env, julPath)
+	if strings.TrimSpace(pending.BaseCommitSHA) == "" {
+		t.Fatalf("expected pending suggestion base sha, got %+v", pending)
+	}
+	runCmd(t, repo, device.Env, julPath, "ci", "run", "--cmd", "true", "--target", pending.BaseCommitSHA, "--json")
+
+	writeFile(t, repo, ".jul/policy.toml", "[promote.main]\nrequire_suggestions_addressed = true\n")
+	blockedOut, blockedErr := runCmdAllowFailure(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
+	if blockedErr == nil {
+		t.Fatalf("expected promote to fail while suggestion is pending")
+	}
+	blocked := decodeErrorJSON(t, blockedOut)
+	if blocked.Code != "promote_policy_failed" {
+		t.Fatalf("expected promote_policy_failed for pending suggestion, got %+v", blocked)
+	}
+	if !strings.Contains(blocked.Message, "pending suggestions must be addressed") {
+		t.Fatalf("expected promote to mention pending suggestions policy, got %+v", blocked)
+	}
+
 	reason := "conflict resolved manually"
 	rejectOut := runCmd(t, repo, device.Env, julPath, "reject", pending.SuggestionID, "-m", reason, "--json")
 	var rejected client.Suggestion
@@ -68,6 +86,19 @@ func TestIT_SUGG_004(t *testing.T) {
 	}
 	if strings.TrimSpace(noted.ResolutionMessage) != reason {
 		t.Fatalf("expected note to keep reject reason %q, got %+v", reason, noted)
+	}
+
+	promoteOut := runCmd(t, repo, device.Env, julPath, "promote", "--to", "main", "--json")
+	var promoted struct {
+		Status    string `json:"status"`
+		Branch    string `json:"branch"`
+		CommitSHA string `json:"commit_sha"`
+	}
+	if err := json.NewDecoder(strings.NewReader(promoteOut)).Decode(&promoted); err != nil {
+		t.Fatalf("failed to decode promote output: %v (%s)", err, promoteOut)
+	}
+	if promoted.Status != "ok" || promoted.Branch != "main" || strings.TrimSpace(promoted.CommitSHA) == "" {
+		t.Fatalf("expected successful promote after rejection, got %+v", promoted)
 	}
 }
 
