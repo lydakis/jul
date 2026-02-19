@@ -220,6 +220,7 @@ func reorderSuggestionActionArgs(args []string) []string {
 	}
 	opts := make([]string, 0, len(args))
 	positionals := make([]string, 0, len(args))
+	sawTerminator := false
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
 		if arg == "" {
@@ -227,6 +228,7 @@ func reorderSuggestionActionArgs(args []string) []string {
 		}
 		switch {
 		case arg == "--":
+			sawTerminator = true
 			positionals = append(positionals, args[i+1:]...)
 			i = len(args)
 		case arg == "-m" || arg == "--m":
@@ -243,8 +245,11 @@ func reorderSuggestionActionArgs(args []string) []string {
 			positionals = append(positionals, arg)
 		}
 	}
-	out := make([]string, 0, len(opts)+len(positionals))
+	out := make([]string, 0, len(opts)+len(positionals)+1)
 	out = append(out, opts...)
+	if sawTerminator {
+		out = append(out, "--")
+	}
 	out = append(out, positionals...)
 	return out
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/lydakis/jul/cli/internal/client"
 	"github.com/lydakis/jul/cli/internal/metadata"
+	"github.com/lydakis/jul/cli/internal/output"
 )
 
 func TestSuggestionsPendingRefreshesLiveDraftContext(t *testing.T) {
@@ -135,5 +136,39 @@ func TestRejectParsesMessageAfterID(t *testing.T) {
 	}
 	if strings.TrimSpace(updated.ResolutionMessage) != reason {
 		t.Fatalf("expected resolution message %q, got %+v", reason, updated)
+	}
+}
+
+func TestRejectPreservesDoubleDashSentinel(t *testing.T) {
+	repo := t.TempDir()
+	runGitCmd(t, repo, "init")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	writeFilePath(t, repo, "README.md", "base\n")
+	runGitCmd(t, repo, "add", "README.md")
+	runGitCmd(t, repo, "commit", "-m", "base")
+
+	cwd, _ := os.Getwd()
+	_ = os.Chdir(repo)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Setenv("HOME", filepath.Join(repo, "home"))
+	t.Setenv("JUL_WORKSPACE", "tester/@")
+
+	out, code := captureStdoutWithCode(t, func() int {
+		return newSuggestionActionCommand("reject", "reject").Run([]string{
+			"--json",
+			"--",
+			"-foo",
+		})
+	})
+	if code == 0 {
+		t.Fatalf("expected reject to fail for unknown suggestion id")
+	}
+	var payload output.ErrorOutput
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("expected json error payload, got %v (%s)", err, out)
+	}
+	if payload.Code != "suggestion_update_failed" {
+		t.Fatalf("expected suggestion_update_failed, got %+v", payload)
 	}
 }
