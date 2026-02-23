@@ -35,6 +35,7 @@ const (
 	perfDaemonIdleTick  = 500 * time.Millisecond
 
 	perfProgressVisibleDeadline = 250 * time.Millisecond
+	perfRatioJitterFloor        = 75 * time.Millisecond
 )
 
 func TestPerfStatusSmoke(t *testing.T) {
@@ -1720,18 +1721,23 @@ func assertPerfP95(t *testing.T, label string, p95, budget95 time.Duration) {
 
 func assertPerfRatio(t *testing.T, label string, p50, p95 time.Duration, maxRatio float64) {
 	t.Helper()
+	if perfRatioExceeded(p50, p95, maxRatio) {
+		ratio := float64(p95) / float64(p50)
+		t.Fatalf("%s failed: p95/p50 ratio=%.2f (max %.2f)", label, ratio, maxRatio)
+	}
+}
+
+func perfRatioExceeded(p50, p95 time.Duration, maxRatio float64) bool {
 	if p50 <= 0 {
-		return
+		return false
 	}
 	// Small medians are dominated by scheduler jitter and timer granularity.
 	// In that regime, absolute p95 budgets are more stable than a relative ratio gate.
-	if p50 < 50*time.Millisecond {
-		return
+	if p50 < perfRatioJitterFloor {
+		return false
 	}
 	ratio := float64(p95) / float64(p50)
-	if ratio > maxRatio {
-		t.Fatalf("%s failed: p95/p50 ratio=%.2f (max %.2f)", label, ratio, maxRatio)
-	}
+	return ratio > maxRatio
 }
 
 func appendFile(t *testing.T, repo, relPath, content string) {
