@@ -22,6 +22,41 @@ jobs:
         with:
           go-version-file: go.work
 
+      - name: Validate signing and notarization secrets
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          missing=0
+          for key in \
+            APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64 \
+            APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD \
+            APP_STORE_CONNECT_API_KEY_P8 \
+            APP_STORE_CONNECT_KEY_ID \
+            APP_STORE_CONNECT_ISSUER_ID
+          do
+            if [[ -z "${!key}" ]]; then
+              echo "Missing required secret: ${key}" >&2
+              missing=1
+            fi
+          done
+          if [[ "${missing}" -ne 0 ]]; then
+            exit 1
+          fi
+
+      - name: Write App Store Connect API key file
+        id: asc_key
+        env:
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: |
+          ASC_KEY_PATH="${RUNNER_TEMP}/app-store-connect-key.p8"
+          printf '%b' "${APP_STORE_CONNECT_API_KEY_P8}" > "${ASC_KEY_PATH}"
+          chmod 600 "${ASC_KEY_PATH}"
+          echo "path=${ASC_KEY_PATH}" >> "${GITHUB_OUTPUT}"
+
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -30,3 +65,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.GORELEASER_TOKEN }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_PATH: ${{ steps.asc_key.outputs.path }}

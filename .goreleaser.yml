@@ -30,6 +30,21 @@ archives:
       - src: build/opencode/{{ .Os }}_{{ .Arch }}/opencode
         dst: libexec/jul/opencode
 
+notarize:
+  macos:
+    - ids:
+        - jul
+      enabled: '{{ isEnvSet "APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64" }}'
+      sign:
+        certificate: "{{ .Env.APPLE_DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}"
+        password: "{{ .Env.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.APP_STORE_CONNECT_ISSUER_ID }}"
+        key_id: "{{ .Env.APP_STORE_CONNECT_KEY_ID }}"
+        key: "{{ .Env.APP_STORE_CONNECT_API_KEY_PATH }}"
+        wait: true
+        timeout: 20m
+
 checksum:
   name_template: "checksums.txt"
 
