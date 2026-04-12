@@ -23,7 +23,7 @@
     "lucide-react": "^0.577.0",
     "next": "16.1.7",
     "react": "19.2.4",
-    "react-dom": "19.2.4",
+    "react-dom": "19.2.5",
     "shiki": "^4.0.2",
     "tailwind-merge": "^3.5.0"
   },
