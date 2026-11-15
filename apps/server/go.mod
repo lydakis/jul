@@ -3,7 +3,7 @@ module github.com/lydakis/jul/server
 go 1.24.0
 
 require (
-	github.com/oklog/ulid/v2 v2.1.1
+	github.com/oklog/ulid/v2 v2.1.2
 	modernc.org/sqlite v1.46.1
 )
 
